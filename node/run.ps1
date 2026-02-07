@@ -1,7 +1,6 @@
 # P2P node launcher - Docker first, else Go
-# Usage: .\run.ps1 [ -port 4002 ] [ -connect /ip4/127.0.0.1/tcp/4001/p2p/<实际PeerID> ]
-#        Replace <实际PeerID> with the PeerID printed by node A (e.g. 12D3KooW...)
-param([string]$connect = "", [int]$port = 4001)
+# Usage: .\run.ps1 [ -port 4002 ] [ -connect <multiaddr> ] [ -publish <topic> <msg> ]
+param([string]$connect = "", [int]$port = 4001, [string]$publishTopic = "", [string]$publishMsg = "")
 $nodeDir = $PSScriptRoot
 if ($connect -and $connect -match '<PeerID>|<\w+>') {
     Write-Host "Error: Replace the placeholder in -connect with the real PeerID from node A." -ForegroundColor Red
@@ -19,6 +18,7 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
     $pm = $port.ToString() + ":" + $port.ToString()
     $ra = @("-port", $port.ToString())
     if ($connect) { $ra += "-connect"; $ra += $connect }
+    if ($publishTopic -and $publishMsg) { $ra += "-publish"; $ra += $publishTopic; $ra += $publishMsg }
     docker run -it --rm -p $pm $img @ra
     exit $LASTEXITCODE
 }
@@ -30,6 +30,7 @@ if ($go) {
     Push-Location $nodeDir
     $ga = @("run", "./cmd/node", "-port", $port.ToString())
     if ($connect) { $ga += "-connect"; $ga += $connect }
+    if ($publishTopic -and $publishMsg) { $ga += "-publish"; $ga += $publishTopic; $ga += $publishMsg }
     & $go $ga
     Pop-Location
     exit $LASTEXITCODE

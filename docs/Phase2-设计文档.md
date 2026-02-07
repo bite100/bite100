@@ -249,7 +249,7 @@ Phase 1 当前为 AMM，无链下订单簿。Phase 2 数据同步先以「可扩
 
 - [x] 新建 `node/` 目录，Go 工程初始化（[node/README.md](../node/README.md)）
 - [x] 集成 libp2p：Host、 listen、connect 两节点互通
-- [ ] 配置文件加载、DHT、GossipSub Topic 订阅
+- [x] 配置文件加载（YAML）、DHT、GossipSub Topic 订阅
 - [x] 节点身份：自动生成密钥，导出 NodeID
 - [x] 验收：两节点启动后可通过 `-connect` 连接并维持连接
 

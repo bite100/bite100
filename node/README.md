@@ -66,9 +66,26 @@ go run ./cmd/node
 - 节点 B 日志出现 `已连接到远程节点，当前连接数: 1`
 - 按 Ctrl+C 可正常退出
 
+### 测试 GossipSub 消息
+
+两节点连通后，可用 `-publish <topic> <message>` 向 topic 发送消息，另一节点会打印收到的内容。
+
+**终端 1（节点 A）**：`.\run.ps1`，记录输出的 PeerID 和地址。
+
+**终端 2（节点 B）**：连接节点 A 并发送一条测试消息：
+
+```powershell
+.\run.ps1 -port 4002 -connect /ip4/127.0.0.1/tcp/4001/p2p/<节点A的PeerID> -publish /p2p-exchange/sync/trades "hello from B"
+```
+
+预期：节点 A 打印 `[/p2p-exchange/sync/trades] 来自 <B的PeerID>: 13 bytes`。
+
 ### 配置
 
-参见 `config.example.yaml`（M2 起将支持从文件加载）。
+- 可选：复制 `config.example.yaml` 为 `config.yaml`，按需修改。
+- 支持项：`node.type`、`node.data_dir`、`node.listen`；`network.bootstrap`、`network.topics`（GossipSub 订阅）。
+- 启动时加 `-config <path>` 指定配置文件；不加则尝试读 `config.yaml`，不存在则用默认（端口 4001，topics `/p2p-exchange/sync/trades` 等）。
+- DHT：若配置了 `network.bootstrap`，启动时会连接并加入 DHT。
 
 ## 项目结构
 
