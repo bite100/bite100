@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BrowserProvider, Contract } from 'ethers'
+import { BrowserProvider, Contract, type Eip1193Provider } from 'ethers'
 import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS } from './config'
 import './App.css'
 
@@ -53,7 +53,7 @@ function App() {
   const connectWallet = useCallback(async () => {
     setError(null)
     try {
-      const ethereum = (window as unknown as { ethereum?: { request: (args: unknown) => Promise<unknown> } }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) {
         setError('请安装 MetaMask 或其他钱包扩展')
         return
@@ -64,8 +64,9 @@ function App() {
         setError('未获取到账户')
         return
       }
-      const chainId = Number((await ethereum.request({ method: 'eth_chainId' })) as string)
-      if (chainId !== CHAIN_ID) {
+      const chainIdRaw = await ethereum.request({ method: 'eth_chainId' })
+      const chainId = typeof chainIdRaw === 'string' ? parseInt(chainIdRaw, 16) : Number(chainIdRaw)
+      if (Number(chainId) !== CHAIN_ID) {
         try {
           await ethereum.request({
             method: 'wallet_switchEthereumChain',
@@ -99,7 +100,7 @@ function App() {
     setError(null)
     setLoading(true)
     try {
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
@@ -132,7 +133,7 @@ function App() {
     setError(null)
     setLoadingDeposit(true)
     try {
-      const ethereum = (window as unknown as { ethereum?: { request: (args: unknown) => Promise<unknown> } }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const signer = await provider.getSigner()
@@ -164,7 +165,7 @@ function App() {
     setError(null)
     setLoadingWithdraw(true)
     try {
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const signer = await provider.getSigner()
@@ -182,7 +183,7 @@ function App() {
 
   const fetchReserves = useCallback(async () => {
     try {
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) return
       const provider = new BrowserProvider(ethereum)
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
@@ -202,7 +203,7 @@ function App() {
       return
     }
     try {
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) return
       const provider = new BrowserProvider(ethereum)
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
@@ -232,7 +233,7 @@ function App() {
     setLoadingSwap(true)
     try {
       const tokenIn = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const signer = await provider.getSigner()
@@ -270,7 +271,7 @@ function App() {
     setError(null)
     setLoadingAddLiq(true)
     try {
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const signer = await provider.getSigner()
@@ -307,7 +308,7 @@ function App() {
     if (!account) return
     setError(null)
     try {
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const tokenAddr = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
@@ -323,7 +324,7 @@ function App() {
     if (!account) return
     setError(null)
     try {
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const token = new Contract(TOKEN0_ADDRESS, ERC20_ABI, provider)
@@ -338,7 +339,7 @@ function App() {
     if (!account) return
     setError(null)
     try {
-      const ethereum = (window as unknown as { ethereum?: unknown }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const token = new Contract(TOKEN1_ADDRESS, ERC20_ABI, provider)
@@ -351,7 +352,7 @@ function App() {
 
   useEffect(() => {
     if (!account) return
-    const ethereum = (window as unknown as { ethereum?: { request: (args: unknown) => Promise<unknown> } }).ethereum
+      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
     if (!ethereum) return
     const provider = new BrowserProvider(ethereum)
     provider.getBalance(account).then((b) => setEthBalance(b ? (Number(b) / 1e18).toFixed(6) : '0'))
