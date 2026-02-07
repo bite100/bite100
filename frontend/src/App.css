@@ -13,6 +13,14 @@
   font-size: 0.875rem;
   margin: -0.5rem 0 0 0;
 }
+.offline-banner {
+  background: #b45309;
+  color: #fff;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  text-align: center;
+}
 .btn {
   padding: 0.75rem 1.25rem;
   border-radius: 8px;
@@ -144,6 +152,20 @@
   font-size: 0.875rem;
   margin: 0;
 }
+.error .retry-btn {
+  margin-left: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.8125rem;
+  min-height: 28px;
+  border: 1px solid rgba(248, 113, 113, 0.6);
+  border-radius: 4px;
+  background: transparent;
+  color: #f87171;
+  cursor: pointer;
+}
+.error .retry-btn:hover {
+  background: rgba(248, 113, 113, 0.15);
+}
 
 /* 治理 */
 .governance-section h3.gov-sub {
@@ -163,35 +185,45 @@
 .proof-input { font-family: ui-monospace, monospace; font-size: 0.8125rem; resize: vertical; }
 .vote-support { display: flex; align-items: center; gap: 0.5rem; color: #a1a1aa; font-size: 0.875rem; cursor: pointer; }
 
-/* 手机端适配：触控区域、字号、间距 */
+/* 手机端适配：触控区域、字号、间距、安全区 */
 @media (max-width: 480px) {
   .app {
     gap: 1.25rem;
   }
   .app h1 {
     font-size: 1.25rem;
+    line-height: 1.3;
+  }
+  .subtitle {
+    font-size: 0.8125rem;
   }
   .btn {
-    min-height: 44px;
+    min-height: 48px;
     padding: 0.75rem 1rem;
     font-size: 1rem;
+    -webkit-tap-highlight-color: transparent;
   }
   .card {
     padding: 1rem;
   }
+  .card .row {
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
   .input,
   .input-row .input {
-    min-height: 44px;
+    min-height: 48px;
     font-size: 16px; /* 避免 iOS 输入框聚焦时自动放大 */
-    padding: 0.75rem;
+    padding: 0.75rem 1rem;
   }
   select.input {
-    min-height: 44px;
+    min-height: 48px;
     font-size: 16px;
+    padding: 0.75rem 1rem;
   }
   .btn-max,
   .btn-quick {
-    min-height: 44px;
+    min-height: 48px;
     min-width: 56px;
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
@@ -204,7 +236,73 @@
     min-width: 0;
   }
   .card .value.mono {
-    font-size: 0.8125rem;
+    font-size: 0.75rem;
     word-break: break-all;
+    flex-basis: 100%;
   }
+  .vault-section h2 {
+    font-size: 0.9375rem;
+  }
+  .hint {
+    font-size: 0.75rem;
+  }
+  .error {
+    font-size: 0.8125rem;
+  }
+}
+
+/* Phase 3.5 订单簿 */
+.orderbook-section .orderbook-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 640px) {
+  .orderbook-section .orderbook-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.orderbook-panel h3,
+.place-order h3,
+.my-orders h3,
+.trades-panel h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  color: #a1a1aa;
+}
+.orderbook-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.orderbook-table th,
+.orderbook-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid #27272a;
+}
+.orderbook-table .bid-price {
+  color: #22c55e;
+}
+.orderbook-table .ask-price {
+  color: #ef4444;
+}
+.orderbook-table .settled {
+  color: #22c55e;
+  font-size: 0.75rem;
+}
+.place-order .row {
+  margin-bottom: 0.25rem;
+}
+.place-order .row button {
+  margin-right: 0.5rem;
+}
+.my-orders,
+.trades-panel {
+  margin-top: 1rem;
+}
+.my-orders .orderbook-table,
+.trades-panel .orderbook-table {
+  margin-top: 0.5rem;
 }

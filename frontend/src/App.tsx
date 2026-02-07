@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback, Component, type ReactNode } from 'rea
 import { Contract } from 'ethers'
 import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS } from './config'
 import { GovernanceSection } from './GovernanceSection'
-import { getEthereum, getProvider, withSigner, formatTokenAmount, shortAddress, isValidAddress, isElectron } from './utils'
+import { ContributionSection } from './ContributionSection'
+import { OrderBookSection } from './OrderBookSection'
+import { getEthereum, getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, isElectron, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL } from './utils'
 import './App.css'
 
 /** 治理模块错误边界：治理区报错时不影响整页 */
@@ -27,23 +29,12 @@ const parseAmount = (s: string) => {
   return BigInt(Math.floor(n * 1e18))
 }
 
-/** 将合约/钱包错误转为用户可读提示 */
-function formatError(e: unknown): string {
-  if (e == null) return '操作失败'
-  const err = e as { code?: number; reason?: string; message?: string; shortMessage?: string; data?: unknown }
-  const msg = err.reason ?? err.shortMessage ?? err.message ?? String(e)
-  if (err.code === 4001 || msg.toLowerCase().includes('user rejected') || msg.toLowerCase().includes('denied')) return '您已拒绝签名或切换网络'
-  if (msg.includes('CALL_EXCEPTION')) {
-    if (msg.includes('insufficient balance')) return '余额不足'
-    if (msg.includes('insufficient allowance')) return '授权额度不足，请先 Approve'
-    if (msg.includes('execution reverted')) {
-      const m = msg.match(/reverted[:\s]+["']?([^"']+)["']?/i) || msg.match(/reason="([^"]+)"/)
-      if (m?.[1]) return m[1]
-    }
-  }
-  if (msg.includes('network') || msg.includes('chain')) return '网络错误，请确认已切换到 Sepolia'
-  if (msg.length > 80) return msg.slice(0, 77) + '...'
-  return msg
+const STORAGE_KEY = 'p2p'
+
+function setStored(key: string, value: string) {
+  try {
+    if (typeof window !== 'undefined') localStorage.setItem(`${STORAGE_KEY}_${key}`, value)
+  } catch {}
 }
 
 function App() {
@@ -51,7 +42,12 @@ function App() {
   const [ethBalance, setEthBalance] = useState<string>('')
   const [vaultBalance, setVaultBalance] = useState<string>('')
   const [walletTokenBalance, setWalletTokenBalance] = useState<string>('')
-  const [tokenAddress, setTokenAddress] = useState<string>('')
+  const [tokenAddress, setTokenAddress] = useState<string>(() => {
+    try {
+      if (typeof window === 'undefined') return ''
+      return localStorage.getItem(`${STORAGE_KEY}_tokenAddress`) ?? ''
+    } catch { return '' }
+  })
   const [depositAmount, setDepositAmount] = useState<string>('')
   const [withdrawAmount, setWithdrawAmount] = useState<string>('')
   const [loading, setLoading] = useState(false)
@@ -59,7 +55,13 @@ function App() {
   const [loadingWithdraw, setLoadingWithdraw] = useState(false)
   const [loadingSwap, setLoadingSwap] = useState(false)
   const [loadingAddLiq, setLoadingAddLiq] = useState(false)
-  const [swapTokenIn, setSwapTokenIn] = useState<'token0' | 'token1'>('token0')
+  const [swapTokenIn, setSwapTokenIn] = useState<'token0' | 'token1'>(() => {
+    try {
+      if (typeof window === 'undefined') return 'token0'
+      const r = localStorage.getItem(`${STORAGE_KEY}_swapTokenIn`)
+      return r === 'token1' ? 'token1' : 'token0'
+    } catch { return 'token0' }
+  })
   const [swapAmount, setSwapAmount] = useState<string>('')
   const [swapAmountOut, setSwapAmountOut] = useState<string>('')
   const [addLiqAmount0, setAddLiqAmount0] = useState<string>('')
@@ -67,6 +69,21 @@ function App() {
   const [reserve0, setReserve0] = useState<string>('')
   const [reserve1, setReserve1] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
+  const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine)
+
+  useEffect(() => { setStored('tokenAddress', tokenAddress) }, [tokenAddress])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onOnline = () => setIsOnline(true)
+    const onOffline = () => setIsOnline(false)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+    }
+  }, [])
+  useEffect(() => { setStored('swapTokenIn', swapTokenIn) }, [swapTokenIn])
 
   const connectWallet = useCallback(async () => {
     setError(null)
@@ -99,8 +116,8 @@ function App() {
             params: [{ chainId: `0x${CHAIN_ID.toString(16)}` }],
           })
         } catch (e) {
-          const chainName = CHAIN_ID === 1 ? 'Ethereum Mainnet' : 'Sepolia'
-          const blockExplorer = CHAIN_ID === 1 ? 'https://etherscan.io' : 'https://sepolia.etherscan.io'
+          const chainName = CHAIN_ID === 1 ? 'Ethereum Mainnet' : CHAIN_ID === 137 ? 'Polygon Mainnet' : 'Sepolia'
+          const blockExplorer = CHAIN_ID === 1 ? 'https://etherscan.io' : CHAIN_ID === 137 ? 'https://polygonscan.com' : 'https://sepolia.etherscan.io'
           await ethereum.request({
             method: 'wallet_addEthereumChain',
             params: [{
@@ -125,6 +142,13 @@ function App() {
 
   const fetchBalances = useCallback(async () => {
     if (!account || !isValidAddress(tokenAddr)) return
+    const cacheKey = CACHE_KEYS.BALANCE + account + tokenAddr
+    const cached = cacheGet<[string, string]>(cacheKey)
+    if (cached) {
+      setVaultBalance(cached[0])
+      setWalletTokenBalance(cached[1])
+      return
+    }
     setError(null)
     setLoading(true)
     try {
@@ -136,8 +160,11 @@ function App() {
         vault.balanceOf(tokenAddr, account),
         token.balanceOf(account),
       ])
-      setVaultBalance(formatTokenAmount(vBal))
-      setWalletTokenBalance(formatTokenAmount(wBal))
+      const vStr = formatTokenAmount(vBal)
+      const wStr = formatTokenAmount(wBal)
+      setVaultBalance(vStr)
+      setWalletTokenBalance(wStr)
+      cacheSet(cacheKey, [vStr, wStr], CACHE_TTL.BALANCE)
     } catch (e) {
       setVaultBalance('')
       setWalletTokenBalance('')
@@ -169,6 +196,7 @@ function App() {
         await txDeposit.wait()
       })
       setDepositAmount('')
+      cacheInvalidate(CACHE_KEYS.BALANCE)
       await fetchBalances()
     } catch (e) {
       setError(formatError(e))
@@ -196,6 +224,7 @@ function App() {
         await tx.wait()
       })
       setWithdrawAmount('')
+      cacheInvalidate(CACHE_KEYS.BALANCE)
       await fetchBalances()
     } catch (e) {
       setError(formatError(e))
@@ -205,13 +234,22 @@ function App() {
   }, [account, tokenAddr, withdrawAmount, fetchBalances])
 
   const fetchReserves = useCallback(async () => {
+    const cached = cacheGet<[string, string]>(CACHE_KEYS.RESERVES)
+    if (cached) {
+      setReserve0(cached[0])
+      setReserve1(cached[1])
+      return
+    }
     try {
       const provider = getProvider()
       if (!provider) return
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
       const [r0, r1] = await Promise.all([amm.reserve0(), amm.reserve1()])
-      setReserve0(formatTokenAmount(r0))
-      setReserve1(formatTokenAmount(r1))
+      const r0Str = formatTokenAmount(r0)
+      const r1Str = formatTokenAmount(r1)
+      setReserve0(r0Str)
+      setReserve1(r1Str)
+      cacheSet(CACHE_KEYS.RESERVES, [r0Str, r1Str], CACHE_TTL.RESERVES)
     } catch {
       setReserve0('0')
       setReserve1('0')
@@ -224,13 +262,21 @@ function App() {
       setSwapAmountOut('')
       return
     }
+    const cacheKey = CACHE_KEYS.SWAP_PREVIEW + swapTokenIn + '_' + swapAmount
+    const cached = cacheGet<string>(cacheKey)
+    if (cached) {
+      setSwapAmountOut(cached)
+      return
+    }
     try {
       const provider = getProvider()
       if (!provider) return
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
       const tokenIn = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
       const out = await amm.getAmountOut(tokenIn, amount)
-      setSwapAmountOut(formatTokenAmount(out))
+      const outStr = formatTokenAmount(out)
+      setSwapAmountOut(outStr)
+      cacheSet(cacheKey, outStr, CACHE_TTL.SWAP_PREVIEW)
     } catch {
       setSwapAmountOut('')
     }
@@ -268,6 +314,8 @@ function App() {
       })
       setSwapAmount('')
       setSwapAmountOut('')
+      cacheInvalidate(CACHE_KEYS.BALANCE)
+      cacheInvalidate(CACHE_KEYS.RESERVES)
       await fetchReserves()
     } catch (e) {
       setError(formatError(e))
@@ -298,6 +346,7 @@ function App() {
       })
       setAddLiqAmount0('')
       setAddLiqAmount1('')
+      cacheInvalidate(CACHE_KEYS.RESERVES)
       await fetchReserves()
     } catch (e) {
       setError(formatError(e))
@@ -364,8 +413,13 @@ function App() {
 
   return (
     <div className="app">
+      {!isOnline && (
+        <div className="offline-banner" role="status">
+          当前处于离线状态，请检查网络后重试
+        </div>
+      )}
       <h1>P2P 交易所</h1>
-      <p className="subtitle">{CHAIN_ID === 1 ? 'Ethereum 主网' : 'Sepolia 测试网'} · 连钱包 · 存提 · Swap · 添加流动性</p>
+      <p className="subtitle">{CHAIN_ID === 1 ? 'Ethereum 主网' : CHAIN_ID === 137 ? 'Polygon 主网' : 'Sepolia 测试网'} · 连钱包 · 存提 · Swap · 添加流动性</p>
 
       <div className="card" style={{ marginBottom: '0.5rem' }}>
         <p className="hint" style={{ margin: 0 }}>当前合约（验证用）</p>
@@ -373,6 +427,8 @@ function App() {
         <div className="row"><span className="label">Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
         <div className="row"><span className="label">Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
       </div>
+
+      <ContributionSection account={account} />
 
       {!account ? (
         <>
@@ -403,7 +459,7 @@ function App() {
         <>
           <div className="card vault-section">
             <h2>代币与 Vault 余额</h2>
-            <p className="hint">输入 ERC20 代币合约地址，或点下方快捷填入</p>
+            <p className="hint">输入 ERC20 代币合约地址，或点下方快捷填入。代币地址与 Swap 方向会保存在本机，刷新后仍保留；清除浏览器/缓存会丢失。</p>
             <div className="input-row">
               <input
                 type="text"
@@ -482,9 +538,22 @@ function App() {
             </button>
           </div>
 
+          <OrderBookSection
+            account={account}
+            getSigner={async () => {
+              try {
+                const p = getProvider()
+                if (!p) return null
+                return await p.getSigner()
+              } catch {
+                return null
+              }
+            }}
+          />
+
           <div className="card vault-section">
             <h2>AMM Swap</h2>
-            <p className="hint">Token A ↔ Token B，0.05% 手续费。池子需有流动性。</p>
+            <p className="hint">Token A ↔ Token B，0.01% 手续费，单笔最高等值 1 USD。池子需有流动性。</p>
             <div className="row">
               <span className="label">池子储备</span>
               <span className="value mono">TKA: {reserve0} · TKB: {reserve1}</span>
@@ -552,10 +621,26 @@ function App() {
               {loadingAddLiq ? '处理中…' : '添加流动性'}
             </button>
           </div>
+
         </>
       )}
 
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="error">
+          {error}
+          <button
+            type="button"
+            className="retry-btn"
+            onClick={() => {
+              setError(null)
+              if (account && isValidAddress(tokenAddr)) fetchBalances()
+              fetchReserves()
+            }}
+          >
+            重试
+          </button>
+        </p>
+      )}
     </div>
   )
 }

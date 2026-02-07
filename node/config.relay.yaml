@@ -12,7 +12,7 @@ network:
     - /p2p-exchange/sync/orderbook
 
 storage:
-  retention_months: 6
+  retention_months: 0   # 0 = 两周
 
 chain:
   rpc_url: ""

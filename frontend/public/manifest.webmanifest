@@ -1,0 +1,14 @@
+{
+  "name": "P2P 交易所",
+  "short_name": "P2P",
+  "description": "P2P 去中心化交易所 · 存提 · Swap · 治理",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f12",
+  "theme_color": "#0f0f12",
+  "orientation": "portrait-primary",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

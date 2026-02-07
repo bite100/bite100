@@ -51,6 +51,6 @@ contract AMMPoolTest is Test {
 
         assertGt(out, 0);
         assertEq(token1.balanceOf(trader), 1000e18 + out);
-        assertEq(token0.balanceOf(address(feeDistributor)), 100e18 * 5 / 10000);
+        assertEq(token0.balanceOf(address(feeDistributor)), 100e18 * 1 / 10000); // 0.01%
     }
 }

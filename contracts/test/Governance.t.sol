@@ -51,7 +51,7 @@ contract GovernanceTest is Test {
             1 // activeCount
         );
 
-        assertEq(settlement.feeBps(), 5);
+        assertEq(settlement.feeBps(), 1);
 
         // Alice votes yes
         bytes32[] memory proof = _singleAddressProof(alice);

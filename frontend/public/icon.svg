@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" fill="none">
+  <rect width="192" height="192" rx="32" fill="#0f0f12"/>
+  <rect x="36" y="56" width="48" height="80" rx="8" fill="#3b82f6"/>
+  <rect x="108" y="56" width="48" height="80" rx="8" fill="#3b82f6" opacity="0.7"/>
+  <text x="96" y="118" text-anchor="middle" fill="#e4e4e7" font-family="system-ui,sans-serif" font-size="24" font-weight="600">P2P</text>
+</svg>

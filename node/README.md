@@ -88,9 +88,9 @@ go run ./cmd/node
 - **拉取方（无数据）**：使用 `-sync-from <PeerID>` 向热点请求并下载，数据写入本地（storage 节点写主 DB，relay 写 `data_dir_downloads/`）。
 - **下载完成后**：拉取方自动注册 SyncTrades 并保持运行，作为热点供其他节点下载，形成 P2P 分发网。
 
-**存储节点（初始热点）**：`config.yaml` 中 `node.type: storage`，会初始化本地 SQLite，并启动保留期定时清理。**电脑端** 6 个月、**手机端** 1 个月。
+**存储节点（初始热点）**：`config.yaml` 中 `node.type: storage`，会初始化本地 SQLite，并启动保留期定时清理。**默认两周**（`storage.retention_months` 为 0 时，>0 为月数）。
 
-**SyncTrades 协议**：存储节点注册 `/p2p-exchange/sync/trades/1.0.0`，按 `since`/`until`/`limit` 返回本节点已保留范围内的数据（电脑端最多 6 个月，手机端最多 1 个月）。
+**SyncTrades 协议**：存储节点注册 `/p2p-exchange/sync/trades/1.0.0`，按 `since`/`until`/`limit` 返回本节点已保留范围内的数据（默认两周）。
 
 **M2 验收（存储节点写数据 → 另一节点拉取一致）**：
 
@@ -117,7 +117,8 @@ go run ./cmd/node
 
 ### M3：中继与贡献证明
 
-- **中继节点**（`node.type: relay`）：订阅配置中的 topics，收到消息时统计转发字节数（bytes relayed）。
+- **中继节点**（`node.type: relay`）：订阅配置中的 topics，收到消息时统计转发字节数（**bytesRelayed**），并写入周期贡献证明。
+- **中继指标**：收到每条 Gossip 消息累加字节数；证明内 `metrics.bytesRelayed` 为**本周期增量**（每周期证明写入后推进快照，下一周期为累计差），供链上 ContributorReward 提交及经济模型 15% 中继分配使用。
 - **指标**：全部节点采集 uptime；存储节点额外采集 storage（已用/总容量，总容量当前可为 0）；中继节点额外采集 bytes relayed。
 - **贡献证明**：按配置周期（默认 7 天，可配 `metrics.proof_period_days`）在周期结束后生成带签名的证明 JSON，写入 `metrics.proof_output_dir`（默认 `data_dir/proofs`）。证明结构含 `nodeId`、`nodeType`、`period`、`metrics`（uptime、storage、bytesRelayed 等）、`signature`、`timestamp`。
 
@@ -136,9 +137,12 @@ go run ./cmd/submitproof -proof ./data/proofs/proof_2025-02-01_2025-02-08.json -
 ### 配置
 
 - 可选：复制 `config.example.yaml` 为 `config.yaml`，按需修改。
-- 支持项：`node.type`（storage|relay）、`node.data_dir`、`node.listen`；`network.bootstrap`、`network.topics`；`storage.retention_months`（电脑端 6、手机端 1）；`metrics.proof_period_days`、`metrics.proof_output_dir`（M3）；`chain.*`（可选）。
+- **Phase 3.1**：Gossip 主题 `/p2p-exchange/order/new`、`/order/cancel`、`/trade/executed`、`/sync/orderbook`；存储节点订阅后持久化订单（orders 表）、成交（trades）、订单簿快照，并按保留期清理（默认两周）。
+- **Phase 3.2**：撮合节点（`node.type: match`）订阅 order/new、order/cancel，维护内存订单簿，Price-Time 撮合，广播 /trade/executed；需在 `match.pairs` 中配置交易对与链上代币（token0/token1）以便成交含结算字段。链上结算需 Settlement owner 调用 `settleTrade`（可用 cast 或单独 settler）。
+- **Phase 3.3**：中继节点限流与信誉（抗 Sybil 基础）。`relay.rate_limit_bytes_per_sec_per_peer` / `rate_limit_msgs_per_sec_per_peer` 非 0 时启用按 peer 限流，超限丢弃并记违规；所有中继节点记录每 peer 的转发量与违规次数（信誉），供后续降权或踢出。主题划分沿用 `network.topics`，可按需按 pair 拆子主题。
+- 支持项：`node.type`（storage|relay|match）、`node.data_dir`、`node.listen`；`network.bootstrap`、`network.topics`；`relay.rate_limit_*`（Phase 3.3）；`storage.retention_months`；`match.pairs`；`metrics.proof_period_days`、`metrics.proof_output_dir`；`chain.*`（可选）。
 - 启动时加 `-config <path>` 指定配置文件。
-- DHT：若配置了 `network.bootstrap`，启动时会连接并加入 DHT。
+- **节点发现**：`network.bootstrap` 填写稳定节点的 multiaddr（如 `/ip4/公网IP/tcp/4001/p2p/<PeerID>`），启动时会连接并加入 DHT；无 Bootstrap 时也可用 `-connect <multiaddr>` 直连。多区域/多运营商连通性说明见 [节点发现与 Bootstrap](../docs/节点发现与Bootstrap.md)。
 
 ## 项目结构
 
@@ -150,8 +154,11 @@ node/
 ├── internal/
 │   ├── config/      # 配置加载
 │   ├── p2p/         # libp2p host, DHT, GossipSub
-│   ├── storage/     # SQLite 成交表、订单簿快照、两年保留
-│   ├── sync/        # SyncTrades 协议
+│   ├── storage/     # SQLite 成交表、订单表（Phase 3.1）、订单簿快照、保留期（默认两周）
+│   ├── sync/        # SyncTrades 协议、Gossip 订单/成交解析与持久化（Phase 3.1）
+│   ├── match/       # 撮合引擎（Phase 3.2）：订单簿、Price-Time 撮合
+│   ├── settlement/  # 链上结算占位（Phase 3.2）：需 Settlement owner 调用 settleTrade
+│   ├── relay/       # 中继限流与信誉（Phase 3.3）：按 peer 限流、违规记录
 │   ├── metrics/     # uptime、storage、bytes relayed、贡献证明
 │   ├── reward/      # 贡献证明链上提交（ECDSA 签名与 calldata）
 │   └── chain/       # 可选：链上 Swap 事件拉取
@@ -163,4 +170,5 @@ node/
 ## 参考
 
 - [Phase2 设计文档](../docs/Phase2-设计文档.md)
+- [节点发现与 Bootstrap](../docs/节点发现与Bootstrap.md)：Bootstrap 配置、DHT、多区域连通性
 - [go-libp2p](https://github.com/libp2p/go-libp2p)

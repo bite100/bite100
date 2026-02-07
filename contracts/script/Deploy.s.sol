@@ -86,17 +86,17 @@ contract Deploy is Script {
         _logDeployments(address(vault), address(feeDistributor), address(settlement), address(token0), address(token1), address(pool));
     }
 
-    /// @notice 更新 Sepolia 上已有 Settlement、AMMPool 的费率为 0.05%；需 owner 私钥
+    /// @notice 更新 Sepolia 上已有 Settlement、AMMPool 的费率为 0.01%；需 owner 私钥；可选调用 setFeeCap(token, 1e6) 设置 1 USD 上限（6 位小数稳定币）
     function runSetFeeBpsSepolia() external {
         address settlementAddr = vm.envOr("SETTLEMENT_ADDRESS", address(0xDa9f738Cc8bF4a312473f1AAfF4929b367e22C85));
         address ammPoolAddr = vm.envOr("AMMPOOL_ADDRESS", address(0x85F18604a8e3ca3C87A1373e4110Ed5C337677d4));
         uint256 pk = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(pk);
-        Settlement(settlementAddr).setFeeBps(5);
-        AMMPool(ammPoolAddr).setFeeBps(5);
+        Settlement(settlementAddr).setFeeBps(1);
+        AMMPool(ammPoolAddr).setFeeBps(1);
         vm.stopBroadcast();
-        console.log("Settlement feeBps set to 5 (0.05%)");
-        console.log("AMMPool feeBps set to 5 (0.05%)");
+        console.log("Settlement feeBps set to 1 (0.01%)");
+        console.log("AMMPool feeBps set to 1 (0.01%)");
     }
 
     /// @notice 部署 Governance 并绑定目标合约

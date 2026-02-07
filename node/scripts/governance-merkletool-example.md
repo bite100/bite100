@@ -27,9 +27,9 @@ forge script script/Deploy.s.sol:Deploy --sig "runTokenRegistryAndChainConfig()"
 
 ---
 
-## 二、生成「最近 4 周活跃」地址列表
+## 二、生成「最近 2 周活跃」地址列表
 
-链下从 ContributorReward 的 `ProofSubmitted` 事件或自有数据库收集：过去 4 周内曾成功 `submitProof` 的**去重地址**，每行一个，保存为文本文件，例如 `active-addresses.txt`：
+链下从 ContributorReward 的 `ProofSubmitted` 事件或自有数据库收集：过去 2 周内曾成功 `submitProof` 的**去重地址**，每行一个，保存为文本文件，例如 `active-addresses.txt`：
 
 ```
 0x1234567890123456789012345678901234567890

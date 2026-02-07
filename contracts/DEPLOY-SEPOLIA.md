@@ -122,7 +122,7 @@ forge script script/Deploy.s.sol:Deploy --sig "runTokenRegistryAndChainConfig()"
 
 ## 六.1、创建提案与投票流程（Governance）
 
-1. **链下生成活跃集**：从 ContributorReward 的 `ProofSubmitted` 或自有数据收集「最近 4 周有贡献」的去重地址，每行一个写入 `active-addresses.txt`。
+1. **链下生成活跃集**：从 ContributorReward 的 `ProofSubmitted` 或自有数据收集「最近 2 周有贡献」的去重地址，每行一个写入 `active-addresses.txt`。
 2. **生成默克尔 root 与 proof**（使用 node 仓库的 merkletool）：
    ```bash
    cd node

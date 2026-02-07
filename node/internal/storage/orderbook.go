@@ -91,7 +91,7 @@ func (db *DB) ListSnapshots(pair string, since, until int64, limit int) ([]*Orde
 	return out, rows.Err()
 }
 
-// DeleteSnapshotsBefore 删除指定时间之前的快照，用于两年保留清理
+// DeleteSnapshotsBefore 删除指定时间之前的快照，用于保留期清理（默认两周）
 func (db *DB) DeleteSnapshotsBefore(beforeUnix int64) (int64, error) {
 	res, err := db.sql.Exec("DELETE FROM orderbook_snapshots WHERE snapshot_at < ?", beforeUnix)
 	if err != nil {

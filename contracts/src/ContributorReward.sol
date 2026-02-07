@@ -18,7 +18,20 @@ contract ContributorReward {
     uint256 public constant CAP_STORAGE_GB = 1000;
     /// 贡献分计算上限（字节），1e12 ≈ 1TB 转发量
     uint256 public constant CAP_BYTES_RELAYED = 1e12;
+    /// 撮合贡献：笔数上限（归一化后参与 40% 权重）
+    uint256 public constant CAP_TRADES_MATCHED = 1e6;
+    /// 撮合贡献：成交量上限（最小单位，如 wei）
+    uint256 public constant CAP_VOLUME_MATCHED = 1e24;
     uint256 private constant SCALE = 1e18;
+    /// 分配权重（与概念文档一致：撮合 40%、存储 25%、中继 15%）
+    uint256 private constant WEIGHT_MATCH = 40;
+    uint256 private constant WEIGHT_STORAGE = 25;
+    uint256 private constant WEIGHT_RELAY = 15;
+    /// 周期结束超过此时长（秒）后禁止领取，未领取不再发放
+    uint256 public constant CLAIM_DEADLINE_SECONDS = 14 days;
+
+    /// periodId => 该周期结束时间（Unix 秒，UTC 周期结束日 23:59:59）；0 表示未设置，不校验截止（兼容旧数据）
+    mapping(bytes32 => uint256) public periodEndTimestamp;
 
     /// periodId => 该周期总贡献分
     mapping(bytes32 => uint256) public periodTotalScore;
@@ -31,6 +44,7 @@ contract ContributorReward {
 
     event ProofSubmitted(bytes32 indexed periodId, address indexed account, uint256 score);
     event PeriodRewardSet(bytes32 indexed periodId, address indexed token, uint256 amount);
+    event PeriodEndTimestampSet(bytes32 indexed periodId, uint256 endTimestamp);
     event RewardClaimed(bytes32 indexed periodId, address indexed account, address indexed token, uint256 amount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event ReserveBpsSet(uint16 oldBps, uint16 newBps);
@@ -55,8 +69,8 @@ contract ContributorReward {
         return keccak256(abi.encodePacked(period));
     }
 
-    /// @notice 提交贡献证明；msg.sender 为领奖地址，签名需由该地址对应私钥生成
-    /// @param signature 65 字节 ECDSA：r(32) || s(32) || v(1)，对 keccak256(abi.encodePacked(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType)) 的签名
+    /// @notice 提交贡献证明（兼容旧版：无撮合字段，digest 不含 tradesMatched/volumeMatched）
+    /// @param signature 65 字节 ECDSA：对 keccak256(abi.encodePacked(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType)) 的签名
     function submitProof(
         string calldata period,
         uint256 uptime,
@@ -69,15 +83,50 @@ contract ContributorReward {
         require(bytes(period).length > 0, "ContributorReward: empty period");
         require(uptime <= SCALE, "ContributorReward: uptime > 1e18");
         require(signature.length == 65, "ContributorReward: bad signature length");
-
         bytes32 digest = keccak256(abi.encodePacked(
             period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType
         ));
+        _verifyAndApplyScore(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, 0, 0, nodeType, signature, digest);
+    }
+
+    /// @notice 提交贡献证明（扩展版：含撮合 tradesMatched/volumeMatched，nodeType=2 为撮合）
+    /// @param signature 65 字节 ECDSA：对 keccak256(abi.encodePacked(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType)) 的签名
+    function submitProofEx(
+        string calldata period,
+        uint256 uptime,
+        uint256 storageUsedGB,
+        uint256 storageTotalGB,
+        uint256 bytesRelayed,
+        uint256 tradesMatched,
+        uint256 volumeMatched,
+        uint8 nodeType,
+        bytes calldata signature
+    ) external {
+        require(bytes(period).length > 0, "ContributorReward: empty period");
+        require(uptime <= SCALE, "ContributorReward: uptime > 1e18");
+        require(signature.length == 65, "ContributorReward: bad signature length");
+        bytes32 digest = keccak256(abi.encodePacked(
+            period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType
+        ));
+        _verifyAndApplyScore(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType, signature, digest);
+    }
+
+    function _verifyAndApplyScore(
+        string calldata period,
+        uint256 uptime,
+        uint256 storageUsedGB,
+        uint256 storageTotalGB,
+        uint256 bytesRelayed,
+        uint256 tradesMatched,
+        uint256 volumeMatched,
+        uint8 nodeType,
+        bytes calldata signature,
+        bytes32 digest
+    ) internal {
         bytes32 r;
         bytes32 s;
         uint8 v;
         assembly {
-            // bytes calldata: .offset points to data start
             let ptr := signature.offset
             r := calldataload(ptr)
             s := calldataload(add(ptr, 32))
@@ -90,7 +139,7 @@ contract ContributorReward {
 
         bytes32 pid = _periodId(period);
         uint256 oldScore = contributionScore[pid][msg.sender];
-        uint256 newScore = _computeScore(uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType);
+        uint256 newScore = _computeScore(uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType);
 
         if (oldScore > 0) {
             periodTotalScore[pid] -= oldScore;
@@ -101,28 +150,49 @@ contract ContributorReward {
         emit ProofSubmitted(pid, msg.sender, newScore);
     }
 
+    /// @dev 贡献分：按 nodeType 应用 40/25/15 权重（撮合 40%、存储 25%、中继 15%）
     function _computeScore(
         uint256 uptime,
         uint256 storageUsedGB,
         uint256 /* storageTotalGB */,
         uint256 bytesRelayed,
+        uint256 tradesMatched,
+        uint256 volumeMatched,
         uint8 nodeType
     ) internal pure returns (uint256) {
-        // relay: uptime + bytesRelayed 项；storage: uptime + storage 项
-        uint256 storagePart = 0;
-        uint256 relayPart = 0;
-        if (nodeType == 1) {
-            if (CAP_STORAGE_GB > 0 && storageUsedGB > 0) {
-                storagePart = storageUsedGB * SCALE / CAP_STORAGE_GB;
-                if (storagePart > SCALE) storagePart = SCALE;
+        uint256 base = uptime;
+        if (nodeType == 2) {
+            // 撮合：matchPart 由笔数+成交量归一化，权重 40
+            uint256 matchPart = 0;
+            if (CAP_TRADES_MATCHED > 0 && tradesMatched > 0) {
+                uint256 t = tradesMatched * SCALE / CAP_TRADES_MATCHED;
+                if (t > SCALE) t = SCALE;
+                matchPart += t / 2; // 50% 笔数
             }
-        } else {
-            if (CAP_BYTES_RELAYED > 0 && bytesRelayed > 0) {
-                relayPart = bytesRelayed * SCALE / CAP_BYTES_RELAYED;
-                if (relayPart > SCALE) relayPart = SCALE;
+            if (CAP_VOLUME_MATCHED > 0 && volumeMatched > 0) {
+                uint256 v = volumeMatched * SCALE / CAP_VOLUME_MATCHED;
+                if (v > SCALE) v = SCALE;
+                matchPart += v / 2; // 50% 成交量
             }
+            if (matchPart > SCALE) matchPart = SCALE;
+            return (base + matchPart) * WEIGHT_MATCH;
         }
-        return uptime + storagePart + relayPart;
+        if (nodeType == 1) {
+            // 存储：权重 25
+            if (CAP_STORAGE_GB > 0 && storageUsedGB > 0) {
+                uint256 storagePart = storageUsedGB * SCALE / CAP_STORAGE_GB;
+                if (storagePart > SCALE) storagePart = SCALE;
+                base += storagePart;
+            }
+            return base * WEIGHT_STORAGE;
+        }
+        // 中继 nodeType == 0：权重 15
+        if (CAP_BYTES_RELAYED > 0 && bytesRelayed > 0) {
+            uint256 relayPart = bytesRelayed * SCALE / CAP_BYTES_RELAYED;
+            if (relayPart > SCALE) relayPart = SCALE;
+            base += relayPart;
+        }
+        return base * WEIGHT_RELAY;
     }
 
     /// @notice Owner 注入某周期某代币的奖励池（需先 approve 本合约）
@@ -135,9 +205,19 @@ contract ContributorReward {
         emit PeriodRewardSet(pid, token, amount);
     }
 
-    /// @notice 领取某周期某代币的应得奖励
+    /// @notice 设置某周期结束时间（Unix 秒）；周期结束超过 14 天后禁止领取，未领取不再发放
+    function setPeriodEndTimestamp(bytes32 periodId, uint256 endTimestamp) external onlyOwner {
+        periodEndTimestamp[periodId] = endTimestamp;
+        emit PeriodEndTimestampSet(periodId, endTimestamp);
+    }
+
+    /// @notice 领取某周期某代币的应得奖励；若该周期已设置结束时间且超过结束+14天则禁止领取
     function claimReward(string calldata period, address token) external {
         bytes32 pid = _periodId(period);
+        uint256 endTs = periodEndTimestamp[pid];
+        if (endTs != 0) {
+            require(block.timestamp <= endTs + CLAIM_DEADLINE_SECONDS, "ContributorReward: claim deadline passed");
+        }
         uint256 total = periodTotalScore[pid];
         require(total > 0, "ContributorReward: no total score");
         uint256 myScore = contributionScore[pid][msg.sender];
@@ -152,9 +232,11 @@ contract ContributorReward {
         emit RewardClaimed(pid, msg.sender, token, amount);
     }
 
-    /// @notice 查询某账户在某周期某代币上可领取金额
+    /// @notice 查询某账户在某周期某代币上可领取金额；若已过领取截止则返回 0
     function claimable(string calldata period, address token, address account) external view returns (uint256) {
         bytes32 pid = _periodId(period);
+        uint256 endTs = periodEndTimestamp[pid];
+        if (endTs != 0 && block.timestamp > endTs + CLAIM_DEADLINE_SECONDS) return 0;
         uint256 total = periodTotalScore[pid];
         if (total == 0) return 0;
         uint256 myScore = contributionScore[pid][account];

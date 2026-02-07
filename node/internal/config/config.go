@@ -12,7 +12,32 @@ type Config struct {
 	Network NetworkConfig `yaml:"network"`
 	Storage StorageConfig `yaml:"storage"`
 	Chain   ChainConfig   `yaml:"chain"`
+	Match   MatchConfig   `yaml:"match"`
+	Relay   RelayConfig   `yaml:"relay"`
 	Metrics MetricsConfig `yaml:"metrics"`
+	API     APIConfig     `yaml:"api"`
+}
+
+// APIConfig HTTP API（Phase 3.5 前端：订单簿、下单/撤单、成交）
+type APIConfig struct {
+	Listen string `yaml:"listen"` // 如 ":8080"，空则不开 API
+}
+
+// RelayConfig 中继节点限流与抗 Sybil（Phase 3.3）
+type RelayConfig struct {
+	RateLimitBytesPerSecPerPeer uint64 `yaml:"rate_limit_bytes_per_sec_per_peer"` // 每 peer 每秒字节上限，0=不限制
+	RateLimitMsgsPerSecPerPeer  uint64 `yaml:"rate_limit_msgs_per_sec_per_peer"`  // 每 peer 每秒消息数上限，0=不限制
+}
+
+// MatchConfig 撮合节点：交易对与链上代币（Phase 3.2）
+type MatchConfig struct {
+	Pairs map[string]PairTokens `yaml:"pairs"` // pair -> token0(base), token1(quote)
+}
+
+// PairTokens 交易对对应的链上代币地址
+type PairTokens struct {
+	Token0 string `yaml:"token0"`
+	Token1 string `yaml:"token1"`
 }
 
 // MetricsConfig 贡献指标与证明
@@ -22,9 +47,9 @@ type MetricsConfig struct {
 }
 
 // StorageConfig 仅存储节点
-// 电脑端节点填 retention_months: 6，手机端节点填 1；超期数据删除，手机端需更久数据时向电脑端节点拉取
+// 数据保留统一两周；retention_months<=0 表示两周（14 天），>0 表示月数（兼容旧配置）
 type StorageConfig struct {
-	RetentionMonths int `yaml:"retention_months"` // 本节点保留月数：电脑端 6、手机端 1，默认 6
+	RetentionMonths int `yaml:"retention_months"` // 保留：0 或未填=两周（14天），>0=月数
 }
 
 // ChainConfig 链 RPC（可选，用于拉取历史成交）
@@ -37,7 +62,7 @@ type ChainConfig struct {
 }
 
 type NodeConfig struct {
-	Type    string   `yaml:"type"`     // storage | relay
+	Type    string   `yaml:"type"`     // storage | relay | match
 	DataDir string   `yaml:"data_dir"` // 数据目录
 	Listen  []string `yaml:"listen"`   // 监听地址，如 /ip4/0.0.0.0/tcp/4001
 }
@@ -67,8 +92,9 @@ func Load(path string) (*Config, error) {
 	if c.Node.DataDir == "" {
 		c.Node.DataDir = "./data"
 	}
-	if c.Storage.RetentionMonths <= 0 {
-		c.Storage.RetentionMonths = 6
+	// retention_months <= 0 表示统一两周（14 天）；>0 表示保留月数
+	if c.Storage.RetentionMonths < 0 {
+		c.Storage.RetentionMonths = 0
 	}
 	if c.Metrics.ProofPeriodDays <= 0 {
 		c.Metrics.ProofPeriodDays = 7
@@ -90,7 +116,9 @@ func Default() *Config {
 			Bootstrap: []string{},
 			Topics:    []string{"/p2p-exchange/sync/trades", "/p2p-exchange/sync/orderbook"},
 		},
-		Storage: StorageConfig{RetentionMonths: 6},
+		Storage: StorageConfig{RetentionMonths: 0}, // 0 = 两周
+		Match:   MatchConfig{Pairs: map[string]PairTokens{}},
+		Relay:   RelayConfig{}, // 0 = 不限流
 		Metrics: MetricsConfig{ProofPeriodDays: 7, ProofOutputDir: "./data/proofs"},
 	}
 }

@@ -42,3 +42,56 @@ export function isValidAddress(addr: string): boolean {
   const s = addr?.trim() ?? ''
   return s.startsWith('0x') && s.length === 42
 }
+
+/** 将合约/钱包错误转为用户可读提示（统一用于 App、Governance、Contribution、OrderBook） */
+export function formatError(e: unknown): string {
+  if (e == null) return '操作失败'
+  const err = e as { code?: number; reason?: string; message?: string; shortMessage?: string; data?: unknown }
+  const msg = (err.reason ?? err.shortMessage ?? err.message ?? String(e)).toLowerCase()
+  if (err.code === 4001 || msg.includes('user rejected') || msg.includes('denied')) return '您已拒绝签名或切换网络'
+  if (msg.includes('fetch failed') || msg.includes('failed to fetch') || msg.includes('econnrefused') || msg.includes('etimedout') || msg.includes('network error') || msg.includes('load failed'))
+    return (typeof navigator !== 'undefined' && !navigator.onLine ? '网络异常，当前似乎离线，请检查网络后重试。' : '网络异常，请检查网络后重试；若网络不稳定可稍后重试。')
+  if (msg.includes('network') || msg.includes('chain')) return '网络错误，请确认已切换到正确网络（Sepolia / 主网 / Polygon）'
+  const raw = (err.reason ?? err.shortMessage ?? (e as { message?: string }).message ?? String(e)) as string
+  if (raw.includes('Governance: not in active set')) return '当前地址不在活跃集内，无法投票'
+  if (raw.includes('Governance: already voted')) return '您已投过票'
+  if (raw.includes('Governance: voting ended')) return '投票已结束'
+  if (raw.includes('Governance: not passed')) return '赞成票未超过半数，无法执行'
+  if (raw.includes('CALL_EXCEPTION')) {
+    if (raw.includes('insufficient balance')) return '余额不足'
+    if (raw.includes('insufficient allowance')) return '授权额度不足，请先 Approve'
+    if (raw.includes('execution reverted')) {
+      const m = raw.match(/reverted[:\s]+["']?([^"']+)["']?/i) || raw.match(/reason="([^"]+)"/)
+      if (m?.[1]) return m[1]
+    }
+  }
+  if (raw.length > 80) return raw.slice(0, 77) + '...'
+  return raw
+}
+
+/** 简单内存缓存（带 TTL），用于链上只读数据，减少 RPC 请求 */
+const cacheStore: Record<string, { value: unknown; expires: number }> = {}
+
+export function cacheGet<T>(key: string): T | null {
+  const entry = cacheStore[key]
+  if (!entry || Date.now() > entry.expires) return null
+  return entry.value as T
+}
+
+export function cacheSet(key: string, value: unknown, ttlMs: number) {
+  cacheStore[key] = { value, expires: Date.now() + ttlMs }
+}
+
+export function cacheInvalidate(keyPrefix: string) {
+  for (const k of Object.keys(cacheStore)) {
+    if (k.startsWith(keyPrefix)) delete cacheStore[k]
+  }
+}
+
+/** 缓存 key 前缀与 TTL（毫秒） */
+export const CACHE_KEYS = {
+  BALANCE: 'p2p_balance_',
+  RESERVES: 'p2p_reserves',
+  SWAP_PREVIEW: 'p2p_swap_',
+} as const
+export const CACHE_TTL = { BALANCE: 20000, RESERVES: 15000, SWAP_PREVIEW: 10000 }

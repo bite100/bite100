@@ -1,23 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Contract, Interface } from 'ethers'
 import { GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, GOVERNANCE_ABI } from './config'
-import { getProvider, shortAddress, withSigner as withSignerUtil } from './utils'
+import { getProvider, shortAddress, withSigner as withSignerUtil, formatError } from './utils'
 
 const ZERO = '0x0000000000000000000000000000000000000000'
 const isGovDeployed = () =>
   typeof GOVERNANCE_ADDRESS === 'string' && GOVERNANCE_ADDRESS.toLowerCase() !== ZERO
-
-function formatError(e: unknown): string {
-  if (e == null) return '操作失败'
-  const err = e as { reason?: string; message?: string; shortMessage?: string }
-  const msg = err.reason ?? err.shortMessage ?? err.message ?? String(e)
-  if (msg.includes('Governance: not in active set')) return '当前地址不在活跃集内，无法投票'
-  if (msg.includes('Governance: already voted')) return '您已投过票'
-  if (msg.includes('Governance: voting ended')) return '投票已结束'
-  if (msg.includes('Governance: not passed')) return '赞成票未超过半数，无法执行'
-  if (msg.length > 80) return msg.slice(0, 77) + '...'
-  return msg
-}
 
 type ProposalInfo = {
   target: string

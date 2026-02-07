@@ -1,4 +1,4 @@
-// 治理提案默克尔树工具：从「最近 4 周活跃地址」列表生成 root 与 proof，供 createProposal / vote 使用
+// 治理提案默克尔树工具：从「最近 2 周活跃地址」列表生成 root 与 proof，供 createProposal / vote 使用
 // 叶子与合约一致：leaf = keccak256(abi.encodePacked(addr))，即 keccak256(20字节地址)
 package main
 

@@ -42,23 +42,27 @@
 | TokenRegistry | `0x77AF51BC13eE8b83274255f4a9077D3E9498c556` |
 | ChainConfig | `0x7639fc976361752c8d9cb82a41bc5D0F423D5169` |
 
-- 区块浏览器：[Sepolia Etherscan](https://sepolia.etherscan.io)
-- 链 ID：11155111
-- 部署与更新步骤见 [docs/部署与使用说明.md](docs/部署与使用说明.md)
+- **RPC**：`https://ethereum-sepolia.publicnode.com`（可设 `SEPOLIA_RPC_URL` 覆盖）
+- **链 ID**：11155111
+- **区块浏览器**：[Sepolia Etherscan](https://sepolia.etherscan.io)
+- **合约地址、RPC 与前端构建**：详见 [docs/部署与使用说明.md](docs/部署与使用说明.md)（含快速复现步骤、前端 `npm run dev` / `npm run build`）。
+- **Settlement**：支持交易所代付 gas（`setRelayer`、`settleTrade` 八参数），见 [API-接口说明 §2.3](docs/API-接口说明.md#23-settlement交易结算)。
+
+**主网**：Ethereum 主网见 [docs/主网部署指南.md](docs/主网部署指南.md)；Polygon 主网（gas 更低）见 [docs/Polygon部署指南.md](docs/Polygon部署指南.md)。部署后将合约地址填入 `frontend/src/config.ts` 的 `MAINNET` 或 `POLYGON`，再执行 `npm run build:mainnet` 或 `npm run build:polygon` 构建对应前端。
 
 ---
 
 ## 前端入口
 
-### 本地运行
+### 本地运行与构建
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev          # 默认连接 Sepolia，浏览器打开 http://localhost:5173
 ```
 
-浏览器打开 **http://localhost:5173**。
+**按网络构建**：`npm run build`（Sepolia） / `npm run build:mainnet`（主网） / `npm run build:polygon`（Polygon）；产出在 `frontend/dist/`。
 
 ### 在线访问（HTTPS）
 
@@ -74,7 +78,7 @@ npm run dev
 
 1. **同一 WiFi**：电脑运行 `npm run dev` 后，终端会显示 `Network: http://<IP>:5173/`。手机浏览器输入该地址（如 `http://10.22.8.88:5173`）即可。
 2. **公网**：前端部署到 Vercel 等后，手机直接打开该 https 链接；使用 MetaMask App 内浏览器或 WalletConnect 连接钱包。
-3. 页面已做移动端适配（触控区域、安全区、输入框字号等），手机浏览器可直接使用。
+3. **手机版**：页面已做移动端适配（触控区域 ≥48px、安全区、输入框 16px 防缩放等）。支持 PWA：在手机浏览器中可「添加到主屏幕」，以独立窗口打开使用。
 
 ---
 

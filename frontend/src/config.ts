@@ -1,11 +1,27 @@
-const isMainnet = import.meta.env.VITE_NETWORK === 'mainnet'
+const network = import.meta.env.VITE_NETWORK ?? 'sepolia' // sepolia | mainnet | polygon
+/** 节点 API 根地址（Phase 3.5 订单簿/下单/撤单/成交），空则订单簿功能不可用 */
+export const NODE_API_URL = (import.meta.env.VITE_NODE_API_URL ?? '').replace(/\/$/, '')
 
-// 网络配置（VITE_NETWORK=mainnet 时为主网）
-export const CHAIN_ID = isMainnet ? 1 : 11155111
-export const RPC_URL = isMainnet ? 'https://ethereum.publicnode.com' : 'https://ethereum-sepolia.publicnode.com'
+// 网络配置
+export const CHAIN_ID = network === 'mainnet' ? 1 : network === 'polygon' ? 137 : 11155111
+export const RPC_URL =
+  network === 'mainnet' ? 'https://ethereum.publicnode.com'
+  : network === 'polygon' ? 'https://polygon-rpc.com'
+  : 'https://ethereum-sepolia.publicnode.com'
 
-// 合约地址（主网：部署后运行 deploy-mainnet.ps1，将输出地址填入下方 MAINNET；Sepolia：已部署）
+// 合约地址（主网/Polygon：部署后把脚本输出填入下方；Sepolia：已部署）
 const MAINNET = {
+  VAULT: '0x0000000000000000000000000000000000000000',
+  SETTLEMENT: '0x0000000000000000000000000000000000000000',
+  TOKEN0: '0x0000000000000000000000000000000000000000',
+  TOKEN1: '0x0000000000000000000000000000000000000000',
+  AMM_POOL: '0x0000000000000000000000000000000000000000',
+  CONTRIBUTOR_REWARD: '0x0000000000000000000000000000000000000000',
+  GOVERNANCE: '0x0000000000000000000000000000000000000000',
+  TOKEN_REGISTRY: '0x0000000000000000000000000000000000000000',
+  CHAIN_CONFIG: '0x0000000000000000000000000000000000000000',
+}
+const POLYGON = {
   VAULT: '0x0000000000000000000000000000000000000000',
   SETTLEMENT: '0x0000000000000000000000000000000000000000',
   TOKEN0: '0x0000000000000000000000000000000000000000',
@@ -27,7 +43,7 @@ const SEPOLIA = {
   TOKEN_REGISTRY: '0x77AF51BC13eE8b83274255f4a9077D3E9498c556',
   CHAIN_CONFIG: '0x7639fc976361752c8d9cb82a41bc5D0F423D5169',
 }
-const addr = isMainnet ? MAINNET : SEPOLIA
+const addr = network === 'mainnet' ? MAINNET : network === 'polygon' ? POLYGON : SEPOLIA
 export const VAULT_ADDRESS = addr.VAULT as const
 export const SETTLEMENT_ADDRESS = addr.SETTLEMENT as const
 export const TOKEN0_ADDRESS = addr.TOKEN0 as const
@@ -69,4 +85,12 @@ export const GOVERNANCE_ABI = [
   'event ProposalCreated(uint256 indexed proposalId, address target, uint256 activeCount)',
   'event Voted(uint256 indexed proposalId, address indexed voter, bool support)',
   'event ProposalExecuted(uint256 indexed proposalId)',
+] as const
+
+export const CONTRIBUTOR_REWARD_ABI = [
+  'function getContributionScore(string calldata period, address account) view returns (uint256)',
+  'function getPeriodTotalScore(string calldata period) view returns (uint256)',
+  'function claimable(string calldata period, address token, address account) view returns (uint256)',
+  'function claimed(bytes32 periodId, address token, address account) view returns (uint256)',
+  'function claimReward(string calldata period, address token)',
 ] as const

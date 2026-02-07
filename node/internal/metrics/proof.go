@@ -16,10 +16,12 @@ import (
 
 // ProofMetrics 贡献证明中的指标
 type ProofMetrics struct {
-	Uptime         float64 `json:"uptime"`          // [0,1] 周期内在线比例
-	StorageUsedGB  float64 `json:"storageUsedGB,omitempty"`
-	StorageTotalGB float64 `json:"storageTotalGB,omitempty"`
-	BytesRelayed   uint64  `json:"bytesRelayed,omitempty"`
+	Uptime          float64 `json:"uptime"`                    // [0,1] 周期内在线比例
+	StorageUsedGB   float64 `json:"storageUsedGB,omitempty"`
+	StorageTotalGB  float64 `json:"storageTotalGB,omitempty"`
+	BytesRelayed    uint64  `json:"bytesRelayed,omitempty"`
+	TradesMatched   uint64  `json:"tradesMatched,omitempty"`   // 撮合节点：周期内撮合成交笔数
+	VolumeMatched   uint64  `json:"volumeMatched,omitempty"`   // 撮合节点：周期内撮合成交量（最小单位）
 }
 
 // ContributionProof 贡献证明（与 Phase2 设计文档一致）
@@ -33,6 +35,7 @@ type ContributionProof struct {
 }
 
 // GenerateProof 生成带签名的贡献证明；privKey 为节点私钥（可从 host.Peerstore().PrivKey(host.ID()) 获取）
+// 撮合节点请传 nodeType "match"，并填 tradesMatched、volumeMatched。
 func GenerateProof(
 	nodeID peer.ID,
 	nodeType string,
@@ -40,6 +43,7 @@ func GenerateProof(
 	uptimeFraction float64,
 	storageUsedGB, storageTotalGB float64,
 	bytesRelayed uint64,
+	tradesMatched, volumeMatched uint64,
 	privKey crypto.PrivKey,
 ) (*ContributionProof, error) {
 	now := time.Now().Unix()
@@ -50,6 +54,10 @@ func GenerateProof(
 	}
 	if nodeType == "relay" {
 		m.BytesRelayed = bytesRelayed
+	}
+	if nodeType == "match" {
+		m.TradesMatched = tradesMatched
+		m.VolumeMatched = volumeMatched
 	}
 	payload := map[string]interface{}{
 		"period":  period,
@@ -73,11 +81,19 @@ func GenerateProof(
 	}, nil
 }
 
-// PeriodRange 计算周期字符串，如 "2025-02-01_2025-02-07"（上周）
+// PeriodRange 计算「已结束」周期字符串，如 "2025-02-01_2025-02-08"（用于证明：该周期已结束可出证明）
 func PeriodRange(periodDays int) string {
 	now := time.Now().UTC()
 	end := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	start := end.AddDate(0, 0, -periodDays)
+	return start.Format("2006-01-02") + "_" + end.Format("2006-01-02")
+}
+
+// CurrentRunningPeriod 计算当前进行中周期字符串，如 "2025-02-08_2025-02-15"（用于撮合引擎按周期累计统计）
+func CurrentRunningPeriod(periodDays int) string {
+	now := time.Now().UTC()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, periodDays)
 	return start.Format("2006-01-02") + "_" + end.Format("2006-01-02")
 }
 

@@ -70,11 +70,12 @@ function withdraw(address token, uint256 amount)
 
 | 方法 | 类型 | 说明 |
 |------|------|------|
-| `settleTrade(maker, taker, tokenIn, tokenOut, amountIn, amountOut)` | write | 结算链下撮合成交（仅 owner） |
+| `settleTrade(maker, taker, tokenIn, tokenOut, amountIn, amountOut, gasReimburseIn, gasReimburseOut)` | write | 结算链下撮合成交。仅 owner 可调用；当后两参为 0 时仅 owner。当启用代付 gas 时仅 owner 或 `relayer` 可调用，且从卖方/买方均摊扣除后转给调用方。 |
+| `setRelayer(address)` | write | 设置交易所/中继地址（代付 gas 时接收均摊的 gas 费）；0 表示不启用（仅 owner） |
 
-**事件**：`TradeSettled`
+**事件**：`TradeSettled`、`TradeSettledWithGasReimburse`（含 gas 代付时）、`RelayerSet`
 
-**说明**：Phase 1 当前以 AMM 为主，Settlement 用于未来链下订单簿撮合后的结算；前端 DApp 直连 AMMPool 做 Swap。
+**说明**：Phase 1 当前以 AMM 为主，Settlement 用于未来链下订单簿撮合后的结算；前端 DApp 直连 AMMPool 做 Swap。当买卖双方无原生代币付 gas 时，可由交易所（relayer）代付；gas 费卖方买方均摊，交易费与 gas 费扣完后再转给买家/卖家。
 
 ### 2.4 FeeDistributor（手续费分配）
 
@@ -101,7 +102,7 @@ function claimable(address token, address account) view returns (uint256)
 | `reserve0()` | view | 池中 token0 储备量 |
 | `reserve1()` | view | 池中 token1 储备量 |
 | `getAmountOut(address tokenIn, uint256 amountIn)` | view | 预览 Swap 输出量 |
-| `swap(address tokenIn, uint256 amountIn)` | write | 执行 Swap（0.05% 手续费） |
+| `swap(address tokenIn, uint256 amountIn)` | write | 执行 Swap（0.01% 手续费，最高 1 USD） |
 | `addLiquidity(uint256 amount0, uint256 amount1)` | write | 添加流动性 |
 
 **事件**：`Swap`, `AddLiquidity`, `RemoveLiquidity`
@@ -117,36 +118,39 @@ function swap(address tokenIn, uint256 amountIn) returns (uint256)
 function addLiquidity(uint256 amount0, uint256 amount1)
 ```
 
-**手续费**：`feeBps = 5`（0.05%），从 swap 输入中扣除后转入 FeeDistributor。**可通过治理投票调整**（`setFeeBps` 经治理合约执行，如限 1～100 bps）。
+**手续费**：`feeBps = 1`（0.01%），从 swap 输入中扣除后转入 FeeDistributor；每笔最高等值 1 美元（`feeCapPerToken`，0 表示不设上限）。**可通过治理投票调整**（`setFeeBps`、`setFeeCap` 经治理合约执行）。
 
 #### 交易费率对照币安
 
 | 项目 | 本协议（当前） | 币安现货 |
 |------|----------------|----------|
-| AMM / 即时成交 | **0.05%**（单边，swap 从输入扣） | Taker 约 **0.04%～0.1%**（吃单） |
-| 挂单 / Maker | 暂无链下订单簿 | Maker 约 **0.08%～0.1%**（挂单） |
-| 说明 | 链上 AMM 单池，feeBps 可治理投票调整 | 阶梯 + BNB 抵扣等可再降；VIP 更低 |
+| AMM / 即时成交 | **0.01%**（单边，swap 从输入扣，最高 1 USD） | Taker 约 **0.04%～0.1%**（吃单） |
+| 挂单 / Maker | **0.01%**（买卖双方各自代币，各边最高 1 USD） | Maker 约 **0.08%～0.1%**（挂单） |
+| 说明 | 链上 AMM 单池、链下订单簿结算，feeBps / feeCap 可治理投票调整 | 阶梯 + BNB 抵扣等可再降；VIP 更低 |
 
 ### 2.6 ContributorReward（贡献奖励，Phase 2 M4）
 
-按周期收集贡献证明，按贡献分占比分配该周期奖励池。详见 [贡献奖励接口](./贡献奖励接口.md)。
+按周期收集贡献证明，按贡献分占比分配该周期奖励池。**领取截止**：Owner 可为周期设置结束时间（`setPeriodEndTimestamp`），周期结束超过 **14 天**后禁止领取，未领取不再发放；`claimable` 过期返回 0，`claimReward` 过期 revert。详见 [贡献奖励接口](./贡献奖励接口.md)。
 
 | 方法 | 类型 | 说明 |
 |------|------|------|
 | `submitProof(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType, signature)` | write | 提交贡献证明（msg.sender 为领奖地址，signature 为 ECDSA 65 字节） |
 | `setPeriodReward(period, token, amount)` | write | Owner 注入某周期某代币奖励池 |
-| `claimReward(period, token)` | write | 领取某周期某代币应得奖励 |
-| `claimable(period, token, account)` | view | 查询可领取金额 |
+| `setPeriodEndTimestamp(periodId, endTimestamp)` | write | Owner 设置某周期结束时间（Unix 秒）；设置后超过 endTimestamp+14 天禁止领取 |
+| `claimReward(period, token)` | write | 领取某周期某代币应得奖励（若已设结束时间且过期则 revert） |
+| `claimable(period, token, account)` | view | 查询可领取金额（过期返回 0） |
 | `getContributionScore(period, account)` | view | 查询某周期贡献分 |
 | `getPeriodTotalScore(period)` | view | 查询某周期总贡献分 |
+| `periodEndTimestamp(periodId)` | view | 某周期结束时间（0 表示未设置，不校验截止） |
+| `CLAIM_DEADLINE_SECONDS` | constant | 14 days |
 
-**事件**：`ProofSubmitted`, `PeriodRewardSet`, `RewardClaimed`
+**事件**：`ProofSubmitted`, `PeriodRewardSet`, `PeriodEndTimestampSet`, `RewardClaimed`
 
 **节点端提交**：使用 `go run ./cmd/submitproof -proof <JSON> -contract <addr> -rpc <url> -key <EVM 私钥>` 或环境变量 `REWARD_ETH_PRIVATE_KEY`。
 
 ### 2.7 Governance（治理）
 
-按「最近 4 周有贡献」的地址活跃集投票，同意超过 50% 即通过。详见 [贡献奖励接口](./贡献奖励接口.md)、[治理部署与提案执行指南](./治理部署与提案执行指南.md)。
+按「最近 2 周有贡献」的地址活跃集投票，同意超过 50% 即通过。详见 [贡献奖励接口](./贡献奖励接口.md)、[治理部署与提案执行指南](./治理部署与提案执行指南.md)。
 
 | 方法 | 类型 | 说明 |
 |------|------|------|

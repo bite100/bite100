@@ -31,7 +31,7 @@ type SyncTradesResponse struct {
 }
 
 // Serve 注册 SyncTrades 协议服务端（存储节点调用）
-// retentionMonths 为本节点保留月数（电脑端 6、手机端 1），只返回本节点已保留范围内的数据
+// retentionMonths 为本节点保留期（<=0 表示两周，>0 表示月数），只返回本节点已保留范围内的数据
 func Serve(h host.Host, store *storage.DB, retentionMonths int) {
 	h.SetStreamHandler(ProtocolID, func(s network.Stream) {
 		defer s.Close()
@@ -46,7 +46,7 @@ func Serve(h host.Host, store *storage.DB, retentionMonths int) {
 		}
 		now := time.Now().Unix()
 		since, until := storage.TradesWithinRetention(req.Since, req.Until, now, retentionMonths)
-		trades, err := store.ListTrades(since, until, req.Limit)
+		trades, err := store.ListTrades(since, until, req.Limit, "")
 		if err != nil {
 			log.Printf("[SyncTrades] 查询失败: %v", err)
 			return
@@ -66,7 +66,7 @@ func Serve(h host.Host, store *storage.DB, retentionMonths int) {
 }
 
 // Request 向指定 peer 请求历史成交（客户端调用）
-// 手机端需超过 1 个月数据时，应向电脑端节点（保留 6 个月）发起请求
+// 手机端需超过 1 个月数据时，应向电脑端节点（最多 6 个月）发起请求
 func Request(ctx context.Context, h host.Host, peerID peer.ID, since, until int64, limit int) ([]*storage.Trade, error) {
 	if limit <= 0 {
 		limit = 1000

@@ -7,25 +7,31 @@ import (
 	"time"
 )
 
-// Trade 成交记录（与 Phase2 设计文档一致）
+// Trade 成交记录（与 Phase2/Phase3 设计一致；含结算用 maker/taker/tokenIn/Out/amountIn/Out）
 type Trade struct {
-	TradeID      string  `json:"tradeId"`
-	Pair         string  `json:"pair"`
-	TakerOrderID string  `json:"takerOrderId"`
-	MakerOrderID string  `json:"makerOrderId"`
-	Price        string  `json:"price"`
-	Amount       string  `json:"amount"`
-	Fee          string  `json:"fee,omitempty"`
-	Timestamp    int64   `json:"timestamp"`
-	TxHash       string  `json:"txHash,omitempty"`
+	TradeID      string `json:"tradeId"`
+	Pair         string `json:"pair"`
+	TakerOrderID string `json:"takerOrderId"`
+	MakerOrderID string `json:"makerOrderId"`
+	Maker        string `json:"maker,omitempty"`   // 结算用
+	Taker        string `json:"taker,omitempty"`   // 结算用
+	TokenIn      string `json:"tokenIn,omitempty"` // maker 卖出
+	TokenOut     string `json:"tokenOut,omitempty"`
+	AmountIn     string `json:"amountIn,omitempty"`
+	AmountOut    string `json:"amountOut,omitempty"`
+	Price        string `json:"price"`
+	Amount       string `json:"amount"`
+	Fee          string `json:"fee,omitempty"`
+	Timestamp    int64  `json:"timestamp"`
+	TxHash       string `json:"txHash,omitempty"`
 }
 
 // InsertTrade 插入成交记录
 func (db *DB) InsertTrade(t *Trade) error {
 	_, err := db.sql.Exec(
-		`INSERT OR REPLACE INTO trades (trade_id, pair, taker_order_id, maker_order_id, price, amount, fee, timestamp, tx_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.TradeID, t.Pair, t.TakerOrderID, t.MakerOrderID, t.Price, t.Amount, t.Fee, t.Timestamp, t.TxHash,
+		`INSERT OR REPLACE INTO trades (trade_id, pair, taker_order_id, maker_order_id, maker, taker, token_in, token_out, amount_in, amount_out, price, amount, fee, timestamp, tx_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.TradeID, t.Pair, t.TakerOrderID, t.MakerOrderID, t.Maker, t.Taker, t.TokenIn, t.TokenOut, t.AmountIn, t.AmountOut, t.Price, t.Amount, t.Fee, t.Timestamp, t.TxHash,
 	)
 	return err
 }
@@ -38,15 +44,15 @@ func (db *DB) InsertTrades(trades []*Trade) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(
-		`INSERT OR REPLACE INTO trades (trade_id, pair, taker_order_id, maker_order_id, price, amount, fee, timestamp, tx_hash)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO trades (trade_id, pair, taker_order_id, maker_order_id, maker, taker, token_in, token_out, amount_in, amount_out, price, amount, fee, timestamp, tx_hash)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, t := range trades {
-		_, err := stmt.Exec(t.TradeID, t.Pair, t.TakerOrderID, t.MakerOrderID, t.Price, t.Amount, t.Fee, t.Timestamp, t.TxHash)
+		_, err := stmt.Exec(t.TradeID, t.Pair, t.TakerOrderID, t.MakerOrderID, t.Maker, t.Taker, t.TokenIn, t.TokenOut, t.AmountIn, t.AmountOut, t.Price, t.Amount, t.Fee, t.Timestamp, t.TxHash)
 		if err != nil {
 			return err
 		}
@@ -54,16 +60,21 @@ func (db *DB) InsertTrades(trades []*Trade) error {
 	return tx.Commit()
 }
 
-// ListTrades 按时间范围查询成交，用于 SyncTrades 协议（since/until 为 unix 秒）
-func (db *DB) ListTrades(since, until int64, limit int) ([]*Trade, error) {
+// ListTrades 按时间范围查询成交，用于 SyncTrades 协议（since/until 为 unix 秒）；pair 为空表示不限交易对
+func (db *DB) ListTrades(since, until int64, limit int, pair string) ([]*Trade, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
-	rows, err := db.sql.Query(
-		`SELECT trade_id, pair, taker_order_id, maker_order_id, price, amount, fee, timestamp, tx_hash
-		 FROM trades WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC LIMIT ?`,
-		since, until, limit,
-	)
+	query := `SELECT trade_id, pair, taker_order_id, maker_order_id, maker, taker, token_in, token_out, amount_in, amount_out, price, amount, fee, timestamp, tx_hash
+		 FROM trades WHERE timestamp >= ? AND timestamp <= ?`
+	args := []interface{}{since, until}
+	if pair != "" {
+		query += ` AND pair = ?`
+		args = append(args, pair)
+	}
+	query += ` ORDER BY timestamp DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := db.sql.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -71,12 +82,18 @@ func (db *DB) ListTrades(since, until int64, limit int) ([]*Trade, error) {
 	var out []*Trade
 	for rows.Next() {
 		var t Trade
-		var taker, maker, fee, txHash sql.NullString
-		if err := rows.Scan(&t.TradeID, &t.Pair, &taker, &maker, &t.Price, &t.Amount, &fee, &t.Timestamp, &txHash); err != nil {
+		var takerOid, makerOid, makerAddr, takerAddr, tokenIn, tokenOut, amountIn, amountOut, fee, txHash sql.NullString
+		if err := rows.Scan(&t.TradeID, &t.Pair, &takerOid, &makerOid, &makerAddr, &takerAddr, &tokenIn, &tokenOut, &amountIn, &amountOut, &t.Price, &t.Amount, &fee, &t.Timestamp, &txHash); err != nil {
 			return nil, err
 		}
-		t.TakerOrderID = taker.String
-		t.MakerOrderID = maker.String
+		t.TakerOrderID = takerOid.String
+		t.MakerOrderID = makerOid.String
+		t.Maker = makerAddr.String
+		t.Taker = takerAddr.String
+		t.TokenIn = tokenIn.String
+		t.TokenOut = tokenOut.String
+		t.AmountIn = amountIn.String
+		t.AmountOut = amountOut.String
 		t.Fee = fee.String
 		t.TxHash = txHash.String
 		out = append(out, &t)
@@ -84,7 +101,7 @@ func (db *DB) ListTrades(since, until int64, limit int) ([]*Trade, error) {
 	return out, rows.Err()
 }
 
-// DeleteTradesBefore 删除指定时间之前的记录，用于两年保留清理
+// DeleteTradesBefore 删除指定时间之前的记录，用于保留期清理（默认两周）
 func (db *DB) DeleteTradesBefore(beforeUnix int64) (int64, error) {
 	res, err := db.sql.Exec("DELETE FROM trades WHERE timestamp < ?", beforeUnix)
 	if err != nil {
@@ -93,9 +110,14 @@ func (db *DB) DeleteTradesBefore(beforeUnix int64) (int64, error) {
 	return res.RowsAffected()
 }
 
-// TradesWithinRetention 按保留月数裁剪时间范围，超出则裁剪为 now-retentionMonths
+// TradesWithinRetention 按保留期裁剪时间范围；retentionMonths<=0 表示两周（RetentionDaysTwoWeeks），>0 表示月数
 func TradesWithinRetention(since, until, now int64, retentionMonths int) (effectiveSince, effectiveUntil int64) {
-	retentionSec := int64(retentionMonths) * 30 * 24 * 3600 // 约 30 天/月
+	var retentionSec int64
+	if retentionMonths <= 0 {
+		retentionSec = int64(RetentionDaysTwoWeeks) * 24 * 3600
+	} else {
+		retentionSec = int64(retentionMonths) * 30 * 24 * 3600
+	}
 	cutoff := now - retentionSec
 	effectiveSince = since
 	if since < cutoff {

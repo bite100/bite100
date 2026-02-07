@@ -90,4 +90,49 @@ contract ContributorRewardTest is Test {
         assertEq(token.balanceOf(alice), 80e18);
         assertEq(token.balanceOf(address(reward)), 20e18, "reserve 20% stays in contract");
     }
+
+    /// @notice 周期结束超过 14 天后禁止领取；setPeriodEndTimestamp 后过期 claim  revert，claimable 返回 0
+    function test_ClaimDeadlinePassed() public {
+        string memory period = "2025-02-01_2025-02-07";
+        bytes32 digest = keccak256(abi.encodePacked(
+            period, uint256(1e18), uint256(0), uint256(0), uint256(0), uint8(0)
+        ));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(aliceKey, digest);
+        vm.prank(alice);
+        reward.submitProof(period, 1e18, 0, 0, 0, 0, abi.encodePacked(r, s, v));
+
+        token.approve(address(reward), 100e18);
+        reward.setPeriodReward(period, address(token), 100e18);
+
+        bytes32 pid = keccak256(abi.encodePacked(period));
+        // 周期结束日 2025-02-07 23:59:59 UTC
+        uint256 periodEnd = 1738972799; // 2025-02-07 23:59:59 UTC
+        reward.setPeriodEndTimestamp(pid, periodEnd);
+
+        vm.warp(periodEnd + 1); // 刚结束，未过 14 天
+        assertGt(reward.claimable(period, address(token), alice), 0);
+        vm.prank(alice);
+        reward.claimReward(period, address(token));
+        assertGt(token.balanceOf(alice), 0);
+
+        // 再设一个周期，不领取，时间越过 deadline
+        string memory period2 = "2025-01-25_2025-01-31";
+        bytes32 digest2 = keccak256(abi.encodePacked(
+            period2, uint256(1e18), uint256(0), uint256(0), uint256(0), uint8(0)
+        ));
+        (uint8 v2, bytes32 r2, bytes32 s2) = vm.sign(aliceKey, digest2);
+        vm.prank(alice);
+        reward.submitProof(period2, 1e18, 0, 0, 0, 0, abi.encodePacked(r2, s2, v2));
+        token.approve(address(reward), 100e18);
+        reward.setPeriodReward(period2, address(token), 100e18);
+        bytes32 pid2 = keccak256(abi.encodePacked(period2));
+        uint256 period2End = 1738367999; // 2025-01-31 23:59:59 UTC
+        reward.setPeriodEndTimestamp(pid2, period2End);
+
+        vm.warp(period2End + 14 days + 1); // 超过 14 天
+        assertEq(reward.claimable(period2, address(token), alice), 0);
+        vm.prank(alice);
+        vm.expectRevert("ContributorReward: claim deadline passed");
+        reward.claimReward(period2, address(token));
+    }
 }

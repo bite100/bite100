@@ -8,16 +8,32 @@ node:
 
 network:
   bootstrap: []   # Bootstrap 节点，如: ["/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW..."]
-  topics:         # GossipSub 订阅的 topic（为空则默认 /p2p-exchange/sync/trades）
+  topics:         # GossipSub 订阅的 topic（为空则默认含 Phase 3.1 订单/成交主题）；Phase 3.3 可按 peer 限流
     - /p2p-exchange/sync/trades
     - /p2p-exchange/sync/orderbook
+    - /p2p-exchange/order/new
+    - /p2p-exchange/order/cancel
+    - /p2p-exchange/trade/executed
+
+relay:            # 仅中继节点（Phase 3.3）：限流与信誉，抗 Sybil 基础
+  rate_limit_bytes_per_sec_per_peer: 0   # 每 peer 每秒字节上限，0=不限制
+  rate_limit_msgs_per_sec_per_peer: 0    # 每 peer 每秒消息数上限，0=不限制
 
 storage:          # 仅存储节点
-  retention_months: 6   # 本节点保留月数：电脑端填 6、手机端填 1，超期删除；手机端需更久数据时向电脑端节点拉取
+  retention_months: 0   # 0 = 统一两周，>0 = 保留月数（超期自动删除）
+
+match:            # 仅撮合节点（Phase 3.2）：交易对与链上代币，用于结算
+  pairs:
+    TKA/TKB:
+      token0: ""   # base 代币合约地址（如 Sepolia TKA）
+      token1: ""   # quote 代币合约地址（如 Sepolia TKB）
 
 metrics:          # 贡献指标与证明（M3）
   proof_period_days: 7  # 证明周期（天）；验收 24h 可设为 1
   proof_output_dir: "" # 证明落盘目录，默认 data_dir/proofs
+
+api:              # Phase 3.5 前端：订单簿、下单/撤单、成交（空则不开 HTTP API）
+  listen: ""      # 如 ":8080" 开启后前端可配置 NODE_API 连接
 
 chain:            # 可选：从链上拉取历史成交
   rpc_url: ""         # 如 https://sepolia.infura.io/v3/...
