@@ -1,0 +1,9 @@
+# P2P 节点配置示例（Phase 2 M1）
+node:
+  type: relay   # storage | relay
+  data_dir: ./data
+  listen:
+    - /ip4/0.0.0.0/tcp/4001
+
+network:
+  bootstrap: []  # 如: ["/ip4/1.2.3.4/tcp/4001/p2p/Qm..."]

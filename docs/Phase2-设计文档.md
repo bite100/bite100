@@ -247,11 +247,11 @@ Phase 1 当前为 AMM，无链下订单簿。Phase 2 数据同步先以「可扩
 
 ### M1：节点骨架与 P2P 连通（约 4–6 周）
 
-- [ ] 新建 `node/` 仓库或目录，Go/Rust 工程初始化。
-- [ ] 集成 libp2p：Host、DHT、Bootstrap 连接、基本 GossipSub Topic 订阅。
-- [ ] 配置文件与 CLI：节点类型、Bootstrap、数据目录、链 RPC。
-- [ ] 节点身份：生成/加载密钥，导出 NodeID。
-- [ ] 验收：两节点启动后可互相发现并维持连接。
+- [x] 新建 `node/` 目录，Go 工程初始化（[node/README.md](../node/README.md)）
+- [x] 集成 libp2p：Host、 listen、connect 两节点互通
+- [ ] 配置文件加载、DHT、GossipSub Topic 订阅
+- [x] 节点身份：自动生成密钥，导出 NodeID
+- [x] 验收：两节点启动后可通过 `-connect` 连接并维持连接
 
 ### M2：存储节点与数据层（约 4–6 周）
 

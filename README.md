@@ -2,9 +2,10 @@
 
 基于区块链与 P2P 资源的去中心化交易所项目。Phase 1 已完成：智能合约部署于 Sepolia，Web 前端支持连钱包、存提、Swap、添加流动性。
 
-- 概念与架构：[docs/概念设计文档.md](docs/概念设计文档.md) · [docs/技术架构说明.md](docs/技术架构说明.md)
+- 概念与架构：[docs/概念设计文档.md](docs/概念设计文档.md) · [docs/技术架构说明.md](docs/技术架构说明.md) · [docs/API-接口说明.md](docs/API-接口说明.md)
 - 合约开发与部署：[contracts/README.md](contracts/README.md)
 - 前端：[frontend/README.md](frontend/README.md)
+- P2P 节点：[node/README.md](node/README.md)（Docker 或 Go 运行，无需额外安装）
 
 ---
 
@@ -60,6 +61,8 @@ npm run dev
 P2P/
 ├── contracts/     # 智能合约（Foundry）
 ├── frontend/      # Web 前端（React + Vite + ethers）
-├── docs/          # 概念设计、技术架构
+├── node/          # P2P 节点（Go + libp2p，Docker 可运行）
+├── docs/          # 概念设计、技术架构、API
+├── docker-compose.yml
 └── README.md
 ```

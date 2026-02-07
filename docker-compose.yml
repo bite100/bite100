@@ -1,0 +1,11 @@
+# P2P 项目 - 节点一键运行（无需安装 Go）
+# 用法: docker compose up node
+
+services:
+  node:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    ports:
+      - "4001:4001"
+    # 节点 A 监听；节点 B 可另起容器加 -connect 参数连接

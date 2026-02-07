@@ -1,0 +1,6 @@
+node.exe
+node
+*.exe
+.git
+README.md
+*.md

@@ -1,0 +1,41 @@
+# 构建节点并发布 Release 附件（可选）
+name: Build node
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Build node
+        run: |
+          cd node
+          go mod tidy
+          go build -o p2p-node ./cmd/node
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2p-node-linux
+          path: node/p2p-node
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: Build node
+        run: |
+          cd node
+          go mod tidy
+          go build -o p2p-node.exe ./cmd/node
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: p2p-node-windows
+          path: node/p2p-node.exe
