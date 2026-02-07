@@ -137,9 +137,9 @@ export function GovernanceSection({ account }: { account: string | null }) {
 
   const handleCreate = useCallback(async () => {
     if (!account || !isGovDeployed()) return
-    const root = createMerkleRoot.trim()
-    if (!root.startsWith('0x') || root.length !== 66) {
-      setError('merkleRoot 需为 32 字节 hex（0x + 64 字符）')
+    const root = createMerkleRoot.trim().toLowerCase()
+    if (!/^0x[0-9a-f]{64}$/.test(root)) {
+      setError('merkleRoot 需为 32 字节 hex（0x + 64 位十六进制）')
       return
     }
     const activeCount = parseInt(createActiveCount, 10)

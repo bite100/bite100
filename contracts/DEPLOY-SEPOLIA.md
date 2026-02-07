@@ -141,6 +141,8 @@ forge script script/Deploy.s.sol:Deploy --sig "runTokenRegistryAndChainConfig()"
 
 **一键部署**：运行 `scripts/deploy-governance.ps1` 可依次部署 ContributorReward（若未部署）、Governance、TokenRegistry、ChainConfig。
 
+**若链上 Settlement/AMMPool 为旧版（无 governance）**：运行 `scripts/redeploy-settlement-amm.ps1` 重新部署并绑定；完成后更新 `frontend/src/config.ts` 与 `docs/API-接口说明.md` 中的 Settlement、AMMPool 地址。详见 [docs/部署与使用说明.md](../docs/部署与使用说明.md)。
+
 ## 七、仅部署 ContributorReward（贡献奖励合约）
 
 若 Sepolia 上已有 Vault / FeeDistributor 等，只需部署 ContributorReward：

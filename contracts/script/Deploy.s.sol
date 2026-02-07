@@ -152,6 +152,33 @@ contract Deploy is Script {
         console.log("ContributorReward", address(contributorReward));
     }
 
+    /// @notice 重新部署 Settlement 与 AMMPool（当前源码含 governance），并绑定 Governance
+    /// 依赖现有：VAULT_ADDRESS, FEE_DISTRIBUTOR_ADDRESS, TOKEN0_ADDRESS, TOKEN1_ADDRESS, GOVERNANCE_ADDRESS
+    /// PRIVATE_KEY 需为 Vault owner（与 Settlement/AMMPool 部署者一致）
+    function runRedeploySettlementAndAmmPool() external {
+        address vaultAddr = vm.envAddress("VAULT_ADDRESS");
+        address feeDistributorAddr = vm.envAddress("FEE_DISTRIBUTOR_ADDRESS");
+        address token0Addr = vm.envAddress("TOKEN0_ADDRESS");
+        address token1Addr = vm.envAddress("TOKEN1_ADDRESS");
+        address govAddr = vm.envAddress("GOVERNANCE_ADDRESS");
+
+        uint256 pk = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(pk);
+
+        Settlement settlement = new Settlement(vaultAddr, feeDistributorAddr);
+        console.log("Settlement", address(settlement));
+
+        AMMPool ammPool = new AMMPool(token0Addr, token1Addr, feeDistributorAddr);
+        console.log("AMMPool", address(ammPool));
+
+        Vault(vaultAddr).setSettlement(address(settlement));
+        settlement.setGovernance(govAddr);
+        ammPool.setGovernance(govAddr);
+
+        vm.stopBroadcast();
+        console.log("Vault.setSettlement + setGovernance done.");
+    }
+
     function _logDeployments(
         address vault,
         address feeDistributor,

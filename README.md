@@ -3,6 +3,7 @@
 基于区块链与 P2P 资源的去中心化交易所项目。Phase 1 已完成：智能合约部署于 Sepolia，Web 前端支持连钱包、存提、Swap、添加流动性。
 
 - 概念与架构：[docs/概念设计文档.md](docs/概念设计文档.md) · [docs/技术架构说明.md](docs/技术架构说明.md) · [docs/API-接口说明.md](docs/API-接口说明.md)
+- **部署与使用**：[docs/部署与使用说明.md](docs/部署与使用说明.md)（环境、部署顺序、治理、前端）
 - 合约开发与部署：[contracts/README.md](contracts/README.md)
 - 前端：[frontend/README.md](frontend/README.md)
 - P2P 节点：[node/README.md](node/README.md)（Docker 或 Go 运行，无需额外安装）
@@ -31,13 +32,18 @@
 |------|------|
 | Vault | `0xbe3962Eaf7103d05665279469FFE3573352ec70C` |
 | FeeDistributor | `0xeF4BFB58541270De18Af9216EB0Cd8EC07a2547F` |
-| Settlement | `0xDa9f738Cc8bF4a312473f1AAfF4929b367e22C85` |
+| Settlement | `0x493Da680973F6c222c89eeC02922E91F1D9404a0` |
 | Token A (TKA) | `0x678195277dc8F84F787A4694DF42F3489eA757bf` |
 | Token B (TKB) | `0x9Be241a0bF1C2827194333B57278d1676494333a` |
-| AMMPool | `0x85F18604a8e3ca3C87A1373e4110Ed5C337677d4` |
+| AMMPool | `0x8d392e6b270238c3a05dDB719795eE31ad7c72AF` |
+| ContributorReward | `0x851019107c4F3150D90f1629f6A646eBC1B1E286` |
+| Governance | `0x8F107ffaB0FC42E623AA69Bd10d8ad4cfbcE87BB` |
+| TokenRegistry | `0x77AF51BC13eE8b83274255f4a9077D3E9498c556` |
+| ChainConfig | `0x7639fc976361752c8d9cb82a41bc5D0F423D5169` |
 
 - 区块浏览器：[Sepolia Etherscan](https://sepolia.etherscan.io)
 - 链 ID：11155111
+- 部署与更新步骤见 [docs/部署与使用说明.md](docs/部署与使用说明.md)
 
 ---
 

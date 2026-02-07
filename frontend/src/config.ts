@@ -4,16 +4,16 @@ export const RPC_URL = 'https://ethereum-sepolia.publicnode.com'
 
 // 已部署合约（Sepolia，含 Mock + AMM）
 export const VAULT_ADDRESS = '0xbe3962Eaf7103d05665279469FFE3573352ec70C' as const
-export const SETTLEMENT_ADDRESS = '0xDa9f738Cc8bF4a312473f1AAfF4929b367e22C85' as const
+export const SETTLEMENT_ADDRESS = '0x493Da680973F6c222c89eeC02922E91F1D9404a0' as const
 export const TOKEN0_ADDRESS = '0x678195277dc8F84F787A4694DF42F3489eA757bf' as const // Test Token A
 export const TOKEN1_ADDRESS = '0x9Be241a0bF1C2827194333B57278d1676494333a' as const // Test Token B
-export const AMM_POOL_ADDRESS = '0x85F18604a8e3ca3C87A1373e4110Ed5C337677d4' as const
+export const AMM_POOL_ADDRESS = '0x8d392e6b270238c3a05dDB719795eE31ad7c72AF' as const
 
 // 治理与配置（部署后填入：运行 contracts/scripts/deploy-governance.ps1 后按终端提示替换 GOVERNANCE_ADDRESS）
-export const CONTRIBUTOR_REWARD_ADDRESS = '0x0d833c05E366e1D9D9c4eb6BBE356d9D49C4F8C7' as const
-export const GOVERNANCE_ADDRESS = '0x0000000000000000000000000000000000000000' as const
-export const TOKEN_REGISTRY_ADDRESS = '0x0000000000000000000000000000000000000000' as const
-export const CHAIN_CONFIG_ADDRESS = '0x0000000000000000000000000000000000000000' as const
+export const CONTRIBUTOR_REWARD_ADDRESS = '0x851019107c4F3150D90f1629f6A646eBC1B1E286' as const
+export const GOVERNANCE_ADDRESS = '0x8F107ffaB0FC42E623AA69Bd10d8ad4cfbcE87BB' as const
+export const TOKEN_REGISTRY_ADDRESS = '0x77AF51BC13eE8b83274255f4a9077D3E9498c556' as const
+export const CHAIN_CONFIG_ADDRESS = '0x7639fc976361752c8d9cb82a41bc5D0F423D5169' as const
 
 export const VAULT_ABI = [
   'function balanceOf(address token, address user) view returns (uint256)',

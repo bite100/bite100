@@ -3,9 +3,10 @@
 # 2. 部署 TokenRegistry、ChainConfig，设置 GOVERNANCE_ADDRESS
 #
 # 用法：
-#   1. 确保 contracts/.env 有 PRIVATE_KEY（owner 私钥）
-#   2. 设置环境变量或修改下方地址
-#   3. 运行: .\deploy-governance.ps1
+#   1. 确保 contracts/.env 有 PRIVATE_KEY（部署 ContributorReward 的钱包即可）
+#   2. 若 ContributorReward 已部署：$env:CONTRIBUTOR_REWARD_ADDRESS = "0x851019107c4F3150D90f1629f6A646eBC1B1E286"
+#   3. 若非 Settlement/AMMPool 的 owner，设：$env:SKIP_SETTLEMENT_AMM = "1"
+#   4. 运行: .\scripts\deploy-governance.ps1
 
 $ErrorActionPreference = "Stop"
 
@@ -24,9 +25,11 @@ if (Test-Path "$contractsDir\.env") {
     }
 }
 
-# Sepolia 已部署地址（见 README）
-$rpc = if ($env:SEPOLIA_RPC_URL) { $env:SEPOLIA_RPC_URL } else { "https://ethereum-sepolia.publicnode.com" }
-$env:SEPOLIA_RPC_URL = $rpc   # foundry.toml rpc_endpoints 会读取
+# Sepolia 已部署地址（见 README）；必须显式设 RPC，否则 forge 报 --fork-url 缺失
+$rpc = "https://ethereum-sepolia.publicnode.com"
+if ($env:SEPOLIA_RPC_URL -and $env:SEPOLIA_RPC_URL.Trim()) { $rpc = $env:SEPOLIA_RPC_URL.Trim() }
+$env:SEPOLIA_RPC_URL = $rpc
+Write-Host "RPC: $rpc"
 $settlement = if ($env:SETTLEMENT_ADDRESS) { $env:SETTLEMENT_ADDRESS } else { "0xDa9f738Cc8bF4a312473f1AAfF4929b367e22C85" }
 $ammPool    = if ($env:AMMPOOL_ADDRESS)    { $env:AMMPOOL_ADDRESS }    else { "0x85F18604a8e3ca3C87A1373e4110Ed5C337677d4" }
 
@@ -38,7 +41,7 @@ Set-Location $contractsDir
 # Step 0: 若未设置 ContributorReward，先部署
 if (-not $contributorReward) {
     Write-Host "=== 部署 ContributorReward ===" -ForegroundColor Cyan
-    $out0 = forge script script/Deploy.s.sol:Deploy --sig "runContributorReward()" --rpc-url $rpc --broadcast 2>&1 | Out-String
+    $out0 = forge script script/Deploy.s.sol:Deploy --sig "runContributorReward()" --rpc-url "$rpc" --broadcast 2>&1 | Out-String
     Write-Host $out0
     if ($out0 -match "ContributorReward\s+(0x[a-fA-F0-9]{40})") { $contributorReward = $Matches[1] }
     if (-not $contributorReward) {
@@ -54,11 +57,18 @@ if (-not $contributorReward) {
 }
 
 # Step 1: 部署 Governance 并绑定
-Write-Host "`n=== 部署 Governance 并绑定 ===" -ForegroundColor Cyan
-$env:SETTLEMENT_ADDRESS = $settlement
-$env:AMMPOOL_ADDRESS = $ammPool
+# 若 PRIVATE_KEY 非 Settlement/AMMPool 的 owner，设 SKIP_SETTLEMENT_AMM=1 仅绑定 ContributorReward
+$skipSettlementAmm = $env:SKIP_SETTLEMENT_AMM -eq "1" -or $env:SKIP_SETTLEMENT_AMM -eq "true"
+if ($skipSettlementAmm) {
+    Write-Host "SKIP_SETTLEMENT_AMM=1：跳过 Settlement/AMMPool 绑定，仅绑定 ContributorReward" -ForegroundColor Yellow
+    Remove-Item Env:SETTLEMENT_ADDRESS -ErrorAction SilentlyContinue
+    Remove-Item Env:AMMPOOL_ADDRESS -ErrorAction SilentlyContinue
+} else {
+    $env:SETTLEMENT_ADDRESS = $settlement
+    $env:AMMPOOL_ADDRESS = $ammPool
+}
 $env:CONTRIBUTOR_REWARD_ADDRESS = $contributorReward
-$out1 = forge script script/Deploy.s.sol:Deploy --sig "runGovernance()" --rpc-url $rpc --broadcast 2>&1 | Out-String
+$out1 = forge script script/Deploy.s.sol:Deploy --sig "runGovernance()" --rpc-url "$rpc" --broadcast 2>&1 | Out-String
 Write-Host $out1
 if ($out1 -match "Governance\s+(0x[a-fA-F0-9]{40})") { $govAddr = $Matches[1] }
 if (-not $govAddr) {
@@ -75,12 +85,17 @@ Write-Host "Governance: $govAddr"
 # Step 2: 部署 TokenRegistry、ChainConfig
 Write-Host "`n=== 部署 TokenRegistry、ChainConfig ===" -ForegroundColor Cyan
 $env:GOVERNANCE_ADDRESS = $govAddr
-forge script script/Deploy.s.sol:Deploy --sig "runTokenRegistryAndChainConfig()" --rpc-url $rpc --broadcast
+forge script script/Deploy.s.sol:Deploy --sig "runTokenRegistryAndChainConfig()" --rpc-url "$rpc" --broadcast
 
 Write-Host "`n=== 完成 ===" -ForegroundColor Green
 Write-Host "Governance:        $govAddr"
-Write-Host "Settlement:        $settlement (已绑定)"
-Write-Host "AMMPool:           $ammPool (已绑定)"
+if ($skipSettlementAmm) {
+    Write-Host "Settlement:        未绑定（SKIP_SETTLEMENT_AMM）"
+    Write-Host "AMMPool:           未绑定（SKIP_SETTLEMENT_AMM）"
+} else {
+    Write-Host "Settlement:        $settlement (已绑定)"
+    Write-Host "AMMPool:           $ammPool (已绑定)"
+}
 Write-Host "ContributorReward: $contributorReward (已绑定)"
 Write-Host ""
 Write-Host "【必做】将 Governance 地址填入前端配置：" -ForegroundColor Yellow

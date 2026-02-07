@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
 import { BrowserProvider, Contract, type Eip1193Provider } from 'ethers'
-import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS } from './config'
+import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { getEthereum, formatTokenAmount, shortAddress, isValidAddress } from './utils'
 import './App.css'
@@ -369,6 +369,13 @@ function App() {
     <div className="app">
       <h1>P2P 交易所</h1>
       <p className="subtitle">Sepolia 测试网 · 连钱包 · 存提 · Swap · 添加流动性</p>
+
+      <div className="card" style={{ marginBottom: '0.5rem' }}>
+        <p className="hint" style={{ margin: 0 }}>当前合约（验证用）</p>
+        <div className="row"><span className="label">AMM 池</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{AMM_POOL_ADDRESS}</span></div>
+        <div className="row"><span className="label">Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
+        <div className="row"><span className="label">Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
+      </div>
 
       {!account ? (
         <button className="btn primary" onClick={connectWallet}>
