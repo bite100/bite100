@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, Component, type ReactNode } from 'rea
 import { Contract } from 'ethers'
 import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS } from './config'
 import { GovernanceSection } from './GovernanceSection'
-import { getEthereum, getProvider, withSigner, formatTokenAmount, shortAddress, isValidAddress } from './utils'
+import { getEthereum, getProvider, withSigner, formatTokenAmount, shortAddress, isValidAddress, isElectron } from './utils'
 import './App.css'
 
 /** 治理模块错误边界：治理区报错时不影响整页 */
@@ -73,12 +73,16 @@ function App() {
     try {
       const ethereum = getEthereum()
       if (!ethereum) {
-        setError('请安装 MetaMask 或其他钱包扩展')
+        setError(isElectron()
+          ? '桌面版需先在 Chrome 或 Edge 中安装 MetaMask。若已安装仍无法连接，请使用浏览器打开 https://p2p-p2p.github.io/p2p/'
+          : '请安装 MetaMask 或其他钱包扩展')
         return
       }
       const provider = getProvider()
       if (!provider) {
-        setError('请安装 MetaMask 或其他钱包扩展')
+        setError(isElectron()
+          ? '桌面版需先在 Chrome 或 Edge 中安装 MetaMask。若已安装仍无法连接，请使用浏览器打开 https://p2p-p2p.github.io/p2p/'
+          : '请安装 MetaMask 或其他钱包扩展')
         return
       }
       const accounts = (await ethereum.request({ method: 'eth_requestAccounts' })) as string[]
@@ -95,14 +99,16 @@ function App() {
             params: [{ chainId: `0x${CHAIN_ID.toString(16)}` }],
           })
         } catch (e) {
+          const chainName = CHAIN_ID === 1 ? 'Ethereum Mainnet' : 'Sepolia'
+          const blockExplorer = CHAIN_ID === 1 ? 'https://etherscan.io' : 'https://sepolia.etherscan.io'
           await ethereum.request({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: `0x${CHAIN_ID.toString(16)}`,
-              chainName: 'Sepolia',
+              chainName,
               nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
               rpcUrls: [RPC_URL],
-              blockExplorerUrls: ['https://sepolia.etherscan.io'],
+              blockExplorerUrls: [blockExplorer],
             }],
           })
         }
@@ -359,7 +365,7 @@ function App() {
   return (
     <div className="app">
       <h1>P2P 交易所</h1>
-      <p className="subtitle">Sepolia 测试网 · 连钱包 · 存提 · Swap · 添加流动性</p>
+      <p className="subtitle">{CHAIN_ID === 1 ? 'Ethereum 主网' : 'Sepolia 测试网'} · 连钱包 · 存提 · Swap · 添加流动性</p>
 
       <div className="card" style={{ marginBottom: '0.5rem' }}>
         <p className="hint" style={{ margin: 0 }}>当前合约（验证用）</p>
@@ -369,9 +375,17 @@ function App() {
       </div>
 
       {!account ? (
-        <button className="btn primary" onClick={connectWallet}>
-          连接钱包
-        </button>
+        <>
+          <button className="btn primary" onClick={connectWallet}>
+            连接钱包
+          </button>
+          {isElectron() && (
+            <p className="hint" style={{ marginTop: '0.5rem' }}>
+              桌面版需先在 Chrome 或 Edge 中安装 MetaMask，本应用会自动加载。若无法连接，请使用浏览器打开{' '}
+              <a href="https://p2p-p2p.github.io/p2p/" target="_blank" rel="noopener noreferrer">p2p-p2p.github.io/p2p</a>。
+            </p>
+          )}
+        </>
       ) : (
         <div className="card">
           <div className="row">

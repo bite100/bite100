@@ -6,6 +6,11 @@ export function getEthereum(): Eip1193Provider | null {
   return WIN?.ethereum ?? null
 }
 
+/** 是否在 Electron 桌面版内运行（无浏览器扩展） */
+export function isElectron(): boolean {
+  return typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron')
+}
+
 export function getProvider(): BrowserProvider | null {
   const ethereum = getEthereum()
   if (!ethereum) return null

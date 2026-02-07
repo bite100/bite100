@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:mainnet": "tsc -b && cross-env VITE_NETWORK=mainnet vite build",
     "build:electron": "tsc -b && cross-env VITE_BASE=./ vite build",
     "preview": "vite preview",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",

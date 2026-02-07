@@ -4,6 +4,7 @@
 
 - 概念与架构：[docs/概念设计文档.md](docs/概念设计文档.md) · [docs/技术架构说明.md](docs/技术架构说明.md) · [docs/API-接口说明.md](docs/API-接口说明.md)
 - **部署与使用**：[docs/部署与使用说明.md](docs/部署与使用说明.md)（环境、部署顺序、治理、前端）
+- **主网部署**：[docs/主网部署指南.md](docs/主网部署指南.md)（Ethereum mainnet）
 - 合约开发与部署：[contracts/README.md](contracts/README.md)
 - 前端：[frontend/README.md](frontend/README.md)
 - P2P 节点：[node/README.md](node/README.md)（Docker 或 Go 运行，无需额外安装）

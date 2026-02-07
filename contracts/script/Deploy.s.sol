@@ -179,6 +179,54 @@ contract Deploy is Script {
         console.log("Vault.setSettlement + setGovernance done.");
     }
 
+    /// @notice 主网一键部署：核心 + AMM（真实代币）+ 治理
+    /// 需设置：PRIVATE_KEY, TOKEN0_ADDRESS, TOKEN1_ADDRESS（主网真实 ERC20，如 USDT/USDC）
+    /// 可选：FEE_RECIPIENT, MAINNET_RPC_URL
+    function runMainnetFull() external {
+        address token0Addr = vm.envAddress("TOKEN0_ADDRESS");
+        address token1Addr = vm.envAddress("TOKEN1_ADDRESS");
+        uint256 pk = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(pk);
+
+        vm.startBroadcast(pk);
+
+        Vault vault = new Vault();
+        FeeDistributor feeDistributor = new FeeDistributor();
+        Settlement settlement = new Settlement(address(vault), address(feeDistributor));
+        vault.setSettlement(address(settlement));
+
+        address feeRecipient = vm.envOr("FEE_RECIPIENT", deployer);
+        address[] memory accounts = new address[](1);
+        accounts[0] = feeRecipient;
+        uint16[] memory shareBps = new uint16[](1);
+        shareBps[0] = 10000;
+        feeDistributor.setRecipients(accounts, shareBps);
+
+        AMMPool ammPool = new AMMPool(token0Addr, token1Addr, address(feeDistributor));
+        ContributorReward contributorReward = new ContributorReward();
+        Governance gov = new Governance();
+
+        settlement.setGovernance(address(gov));
+        ammPool.setGovernance(address(gov));
+        contributorReward.setGovernance(address(gov));
+
+        TokenRegistry tokenRegistry = new TokenRegistry();
+        ChainConfig chainConfig = new ChainConfig();
+        tokenRegistry.setGovernance(address(gov));
+        chainConfig.setGovernance(address(gov));
+
+        vm.stopBroadcast();
+
+        console.log("Vault", address(vault));
+        console.log("FeeDistributor", address(feeDistributor));
+        console.log("Settlement", address(settlement));
+        console.log("AMMPool", address(ammPool));
+        console.log("ContributorReward", address(contributorReward));
+        console.log("Governance", address(gov));
+        console.log("TokenRegistry", address(tokenRegistry));
+        console.log("ChainConfig", address(chainConfig));
+    }
+
     function _logDeployments(
         address vault,
         address feeDistributor,
