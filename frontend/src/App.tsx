@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
-import { BrowserProvider, Contract, type Eip1193Provider } from 'ethers'
+import { BrowserProvider, Contract } from 'ethers'
 import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { getEthereum, formatTokenAmount, shortAddress, isValidAddress } from './utils'
