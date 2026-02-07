@@ -1,0 +1,192 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.app h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0;
+}
+.subtitle {
+  color: #a1a1aa;
+  font-size: 0.875rem;
+  margin: -0.5rem 0 0 0;
+}
+.btn {
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: opacity 0.2s;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: #3b82f6;
+  color: #fff;
+}
+.btn.primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.btn.secondary {
+  background: #27272a;
+  color: #e4e4e7;
+  border: 1px solid #3f3f46;
+}
+.btn.secondary:hover:not(:disabled) {
+  background: #3f3f46;
+}
+.card {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 12px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.card .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.card .label {
+  color: #a1a1aa;
+  font-size: 0.875rem;
+}
+.card .value {
+  font-weight: 500;
+}
+.card .value.mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.875rem;
+}
+.vault-section h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem 0;
+}
+.hint {
+  color: #71717a;
+  font-size: 0.8125rem;
+  margin: 0;
+}
+.input {
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #3f3f46;
+  background: #0f0f12;
+  color: #e4e4e7;
+  font-size: 0.875rem;
+}
+.input::placeholder {
+  color: #71717a;
+}
+.input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.input-row .input {
+  flex: 1;
+}
+.btn-max {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  border-radius: 6px;
+  border: 1px solid #3f3f46;
+  background: #27272a;
+  color: #a1a1aa;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-max:hover {
+  background: #3f3f46;
+  color: #e4e4e7;
+}
+.quick-tokens {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.btn-quick {
+  padding: 0.4rem 0.65rem;
+  font-size: 0.8125rem;
+  border-radius: 6px;
+  border: 1px solid #3f3f46;
+  background: #27272a;
+  color: #a1a1aa;
+  cursor: pointer;
+}
+.btn-quick:hover {
+  background: #3f3f46;
+  color: #e4e4e7;
+}
+.balances {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #27272a;
+}
+.result {
+  padding: 0.25rem 0;
+}
+.error {
+  color: #f87171;
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+/* 手机端适配：触控区域、字号、间距 */
+@media (max-width: 480px) {
+  .app {
+    gap: 1.25rem;
+  }
+  .app h1 {
+    font-size: 1.25rem;
+  }
+  .btn {
+    min-height: 44px;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+  }
+  .card {
+    padding: 1rem;
+  }
+  .input,
+  .input-row .input {
+    min-height: 44px;
+    font-size: 16px; /* 避免 iOS 输入框聚焦时自动放大 */
+    padding: 0.75rem;
+  }
+  select.input {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .btn-max,
+  .btn-quick {
+    min-height: 44px;
+    min-width: 56px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+  }
+  .quick-tokens {
+    gap: 0.5rem;
+  }
+  .btn-quick {
+    flex: 1;
+    min-width: 0;
+  }
+  .card .value.mono {
+    font-size: 0.8125rem;
+    word-break: break-all;
+  }
+}

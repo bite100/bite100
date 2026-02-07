@@ -1,0 +1,19 @@
+# 环境与密钥
+.env
+.env.*
+!.env.example
+
+# 依赖与构建
+node_modules/
+frontend/dist/
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# 部署产物（可选保留则移除下一行）
+contracts/deployments-*.json
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log
