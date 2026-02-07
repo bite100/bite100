@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, Component, type ReactNode } from 'rea
 import { BrowserProvider, Contract } from 'ethers'
 import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS } from './config'
 import { GovernanceSection } from './GovernanceSection'
-import { getEthereum, formatTokenAmount, shortAddress, isValidAddress } from './utils'
+import { getEthereum, getProvider, withSigner, formatTokenAmount, shortAddress, isValidAddress } from './utils'
 import './App.css'
 
 /** 治理模块错误边界：治理区报错时不影响整页 */
@@ -118,9 +118,8 @@ function App() {
     setError(null)
     setLoading(true)
     try {
-      const ethereum = getEthereum()
-      if (!ethereum) throw new Error('未检测到钱包')
-      const provider = new BrowserProvider(ethereum)
+      const provider = getProvider()
+      if (!provider) throw new Error('未检测到钱包')
       const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
       const token = new Contract(tokenAddr, ERC20_ABI, provider)
       const [vBal, wBal] = await Promise.all([
@@ -151,16 +150,14 @@ function App() {
     setError(null)
     setLoadingDeposit(true)
     try {
-      const ethereum = getEthereum()
-      if (!ethereum) throw new Error('未检测到钱包')
-      const provider = new BrowserProvider(ethereum)
-      const signer = await provider.getSigner()
-      const token = new Contract(tokenAddr, ERC20_ABI, signer)
-      const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, signer)
-      const txApprove = await token.approve(VAULT_ADDRESS, amount)
-      await txApprove.wait()
-      const txDeposit = await vault.deposit(tokenAddr, amount)
-      await txDeposit.wait()
+      await withSigner(async (signer) => {
+        const token = new Contract(tokenAddr, ERC20_ABI, signer)
+        const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, signer)
+        const txApprove = await token.approve(VAULT_ADDRESS, amount)
+        await txApprove.wait()
+        const txDeposit = await vault.deposit(tokenAddr, amount)
+        await txDeposit.wait()
+      })
       setDepositAmount('')
       await fetchBalances()
     } catch (e) {
@@ -183,13 +180,11 @@ function App() {
     setError(null)
     setLoadingWithdraw(true)
     try {
-      const ethereum = getEthereum()
-      if (!ethereum) throw new Error('未检测到钱包')
-      const provider = new BrowserProvider(ethereum)
-      const signer = await provider.getSigner()
-      const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, signer)
-      const tx = await vault.withdraw(tokenAddr, amount)
-      await tx.wait()
+      await withSigner(async (signer) => {
+        const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, signer)
+        const tx = await vault.withdraw(tokenAddr, amount)
+        await tx.wait()
+      })
       setWithdrawAmount('')
       await fetchBalances()
     } catch (e) {
@@ -201,9 +196,8 @@ function App() {
 
   const fetchReserves = useCallback(async () => {
     try {
-      const ethereum = getEthereum()
-      if (!ethereum) return
-      const provider = new BrowserProvider(ethereum)
+      const provider = getProvider()
+      if (!provider) return
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
       const [r0, r1] = await Promise.all([amm.reserve0(), amm.reserve1()])
       setReserve0(formatTokenAmount(r0))
@@ -221,9 +215,8 @@ function App() {
       return
     }
     try {
-      const ethereum = getEthereum()
-      if (!ethereum) return
-      const provider = new BrowserProvider(ethereum)
+      const provider = getProvider()
+      if (!provider) return
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
       const tokenIn = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
       const out = await amm.getAmountOut(tokenIn, amount)
@@ -251,20 +244,18 @@ function App() {
     setLoadingSwap(true)
     try {
       const tokenIn = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
-      const ethereum = getEthereum()
-      if (!ethereum) throw new Error('未检测到钱包')
-      const provider = new BrowserProvider(ethereum)
-      const signer = await provider.getSigner()
-      const token = new Contract(tokenIn, ERC20_ABI, signer)
-      const bal = await token.balanceOf(account!)
-      if (bal < amount) throw new Error(`余额不足，钱包仅有 ${formatTokenAmount(bal)}`)
-      const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, signer)
-      const allowance = await token.allowance(account!, AMM_POOL_ADDRESS)
-      if (allowance < amount) {
-        await (await token.approve(AMM_POOL_ADDRESS, 0n)).wait()
-        await (await token.approve(AMM_POOL_ADDRESS, amount)).wait()
-      }
-      await (await amm.swap(tokenIn, amount)).wait()
+      await withSigner(async (signer) => {
+        const token = new Contract(tokenIn, ERC20_ABI, signer)
+        const bal = await token.balanceOf(account!)
+        if (bal < amount) throw new Error(`余额不足，钱包仅有 ${formatTokenAmount(bal)}`)
+        const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, signer)
+        const allowance = await token.allowance(account!, AMM_POOL_ADDRESS)
+        if (allowance < amount) {
+          await (await token.approve(AMM_POOL_ADDRESS, 0n)).wait()
+          await (await token.approve(AMM_POOL_ADDRESS, amount)).wait()
+        }
+        await (await amm.swap(tokenIn, amount)).wait()
+      })
       setSwapAmount('')
       setSwapAmountOut('')
       await fetchReserves()
@@ -285,18 +276,16 @@ function App() {
     setError(null)
     setLoadingAddLiq(true)
     try {
-      const ethereum = getEthereum()
-      if (!ethereum) throw new Error('未检测到钱包')
-      const provider = new BrowserProvider(ethereum)
-      const signer = await provider.getSigner()
-      const token0C = new Contract(TOKEN0_ADDRESS, ERC20_ABI, signer)
-      const token1C = new Contract(TOKEN1_ADDRESS, ERC20_ABI, signer)
-      const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, signer)
-      await Promise.all([
-        token0C.approve(AMM_POOL_ADDRESS, amt0),
-        token1C.approve(AMM_POOL_ADDRESS, amt1),
-      ]).then((txs) => Promise.all(txs.map((tx) => tx.wait())))
-      await (await amm.addLiquidity(amt0, amt1)).wait()
+      await withSigner(async (signer) => {
+        const token0C = new Contract(TOKEN0_ADDRESS, ERC20_ABI, signer)
+        const token1C = new Contract(TOKEN1_ADDRESS, ERC20_ABI, signer)
+        const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, signer)
+        await Promise.all([
+          token0C.approve(AMM_POOL_ADDRESS, amt0),
+          token1C.approve(AMM_POOL_ADDRESS, amt1),
+        ]).then((txs) => Promise.all(txs.map((tx) => tx.wait())))
+        await (await amm.addLiquidity(amt0, amt1)).wait()
+      })
       setAddLiqAmount0('')
       setAddLiqAmount1('')
       await fetchReserves()
@@ -318,9 +307,8 @@ function App() {
   }, [vaultBalance])
 
   const fetchTokenBalance = useCallback(async (tokenAddress: string): Promise<string> => {
-    const ethereum = getEthereum()
-    if (!ethereum || !account) return '0'
-    const provider = new BrowserProvider(ethereum)
+    const provider = getProvider()
+    if (!provider || !account) return '0'
     const token = new Contract(tokenAddress, ERC20_ABI, provider)
     const bal = await token.balanceOf(account)
     return formatTokenAmount(bal)

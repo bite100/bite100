@@ -107,7 +107,6 @@ contract AMMPool {
     /// @notice 预览 swap 输出（不含实际转账）
     function getAmountOut(address tokenIn, uint256 amountIn) external view returns (uint256 amountOut) {
         if (amountIn == 0) return 0;
-        address tOut = tokenIn == token0 ? token1 : token0;
         if (tokenIn != token0 && tokenIn != token1) return 0;
         uint256 rIn = tokenIn == token0 ? reserve0() : reserve1();
         uint256 rOut = tokenIn == token0 ? reserve1() : reserve0();

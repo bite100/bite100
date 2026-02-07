@@ -104,7 +104,7 @@ contract ContributorReward {
     function _computeScore(
         uint256 uptime,
         uint256 storageUsedGB,
-        uint256 storageTotalGB,
+        uint256 /* storageTotalGB */,
         uint256 bytesRelayed,
         uint8 nodeType
     ) internal pure returns (uint256) {

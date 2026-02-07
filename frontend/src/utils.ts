@@ -1,9 +1,23 @@
-import type { Eip1193Provider } from 'ethers'
+import { BrowserProvider, type Eip1193Provider, type Signer } from 'ethers'
 
 const WIN = typeof window !== 'undefined' ? (window as unknown as { ethereum?: Eip1193Provider }) : null
 
 export function getEthereum(): Eip1193Provider | null {
   return WIN?.ethereum ?? null
+}
+
+export function getProvider(): BrowserProvider | null {
+  const ethereum = getEthereum()
+  if (!ethereum) return null
+  return new BrowserProvider(ethereum)
+}
+
+/** 获取 signer 并执行回调，未检测到钱包时抛错 */
+export async function withSigner<T>(fn: (signer: Signer) => Promise<T>): Promise<T> {
+  const provider = getProvider()
+  if (!provider) throw new Error('未检测到钱包')
+  const signer = await provider.getSigner()
+  return fn(signer)
 }
 
 /** 将 bigint 转为保留 6 位小数的字符串 */
