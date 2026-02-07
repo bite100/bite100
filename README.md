@@ -44,7 +44,7 @@ npm run dev
 - **Netlify**：同上或拖拽 `frontend/dist` 到 [Netlify Drop](https://app.netlify.com/drop)
 - **GitHub Pages**：在仓库 **Settings → Pages** 里将 **Source** 选为 **GitHub Actions**，之后每次推送到 `main`/`master` 都会自动部署。详细步骤见 **[PUSH-AND-DEPLOY.md](PUSH-AND-DEPLOY.md)**。部署后地址为：`https://<你的用户名>.github.io/<仓库名>/`
 
-**在线地址**：https://P2P-P2P.github.io/p2p/
+**在线地址**：https://p2p-p2p.github.io/p2p/
 
 ### 手机访问
 
