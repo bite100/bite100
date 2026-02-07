@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
-import { BrowserProvider, Contract } from 'ethers'
+import { Contract } from 'ethers'
 import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { getEthereum, getProvider, withSigner, formatTokenAmount, shortAddress, isValidAddress } from './utils'
@@ -76,7 +76,11 @@ function App() {
         setError('请安装 MetaMask 或其他钱包扩展')
         return
       }
-      const provider = new BrowserProvider(ethereum)
+      const provider = getProvider()
+      if (!provider) {
+        setError('请安装 MetaMask 或其他钱包扩展')
+        return
+      }
       const accounts = (await ethereum.request({ method: 'eth_requestAccounts' })) as string[]
       if (!accounts.length) {
         setError('未获取到账户')
@@ -347,9 +351,8 @@ function App() {
 
   useEffect(() => {
     if (!account) return
-    const ethereum = getEthereum()
-    if (!ethereum) return
-    const provider = new BrowserProvider(ethereum)
+    const provider = getProvider()
+    if (!provider) return
     provider.getBalance(account).then((b) => setEthBalance(formatTokenAmount(b)))
   }, [account])
 

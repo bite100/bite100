@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BrowserProvider, Contract, Interface } from 'ethers'
+import { Contract, Interface } from 'ethers'
 import { GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, GOVERNANCE_ABI } from './config'
-import { getEthereum, shortAddress } from './utils'
+import { getProvider, shortAddress, withSigner as withSignerUtil } from './utils'
 
 const ZERO = '0x0000000000000000000000000000000000000000'
 const isGovDeployed = () =>
@@ -49,12 +49,11 @@ export function GovernanceSection({ account }: { account: string | null }) {
 
   const fetchProposals = useCallback(async () => {
     if (!isGovDeployed()) return
-    const ethereum = getEthereum()
-    if (!ethereum) return
+    const provider = getProvider()
+    if (!provider) return
     setError(null)
     setLoading(true)
     try {
-      const provider = new BrowserProvider(ethereum)
       const gov = new Contract(GOVERNANCE_ADDRESS, GOVERNANCE_ABI, provider)
       const count = await gov.proposalCount()
       const list: ProposalInfo[] = []
@@ -91,12 +90,10 @@ export function GovernanceSection({ account }: { account: string | null }) {
   }, [account, fetchProposals])
 
   const withSigner = useCallback(async <T,>(fn: (gov: Contract) => Promise<T>): Promise<T> => {
-    const ethereum = getEthereum()
-    if (!ethereum) throw new Error('未检测到钱包')
-    const provider = new BrowserProvider(ethereum)
-    const signer = await provider.getSigner()
-    const gov = new Contract(GOVERNANCE_ADDRESS, GOVERNANCE_ABI, signer)
-    return fn(gov)
+    return withSignerUtil((signer) => {
+      const gov = new Contract(GOVERNANCE_ADDRESS, GOVERNANCE_ABI, signer)
+      return fn(gov)
+    })
   }, [])
 
   const handleVote = useCallback(async () => {
