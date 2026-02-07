@@ -85,9 +85,80 @@ forge script script/Deploy.s.sol:Deploy --sig "runWithAmmAndMocks()" --rpc-url $
 
 ---
 
-## 四、合约验证（可选）
+## 四、更新 Sepolia 上已有合约费率为 0.05%
 
-在 `.env` 中配置对应网络的 API Key 后，在部署命令末尾加 `--verify`：
+对已部署的 Settlement、AMMPool 调用 `setFeeBps(5)`（需 owner 私钥）：
+
+```powershell
+cd d:\P2P\contracts
+# 确保 .env 中有 PRIVATE_KEY（部署者）
+$rpc = if ($env:SEPOLIA_RPC_URL) { $env:SEPOLIA_RPC_URL } else { "https://ethereum-sepolia.publicnode.com" }
+forge script script/Deploy.s.sol:Deploy --sig "runSetFeeBpsSepolia()" --rpc-url $rpc --broadcast
+```
+
+若地址不同，可设置 `SETTLEMENT_ADDRESS`、`AMMPOOL_ADDRESS` 环境变量。
+
+## 五、部署治理合约（Governance）
+
+部署 Governance 并绑定 Settlement、AMMPool、ContributorReward，使治理投票可调整 feeBps、freeFlowBps、reserveBps：
+
+```powershell
+$env:SETTLEMENT_ADDRESS = "0x..."   # 已部署的 Settlement 地址
+$env:AMMPOOL_ADDRESS = "0x..."     # 已部署的 AMMPool 地址
+$env:CONTRIBUTOR_REWARD_ADDRESS = "0x..."  # 已部署的 ContributorReward 地址
+forge script script/Deploy.s.sol:Deploy --sig "runGovernance()" --rpc-url $rpc --broadcast
+```
+
+需使用各目标合约的 owner 私钥（`PRIVATE_KEY`）。
+
+## 六、部署上币与流通链配置（TokenRegistry、ChainConfig）
+
+部署后由 Governance 通过提案调用 `addToken`/`removeToken`、`addChain`/`removeChain`：
+
+```powershell
+$env:GOVERNANCE_ADDRESS = "0x..."   # 已部署的 Governance 地址
+forge script script/Deploy.s.sol:Deploy --sig "runTokenRegistryAndChainConfig()" --rpc-url $rpc --broadcast
+```
+
+## 六.1、创建提案与投票流程（Governance）
+
+1. **链下生成活跃集**：从 ContributorReward 的 `ProofSubmitted` 或自有数据收集「最近 4 周有贡献」的去重地址，每行一个写入 `active-addresses.txt`。
+2. **生成默克尔 root 与 proof**（使用 node 仓库的 merkletool）：
+   ```bash
+   cd node
+   go run ./cmd/merkletool -list active-addresses.txt
+   # 得到 merkleRoot、activeCount
+   go run ./cmd/merkletool -list active-addresses.txt -proof-for 0x<某投票者地址>
+   # 得到该地址的 proof 数组
+   ```
+3. **创建提案**：调用 `Governance.createProposal(target, callData, merkleRoot, activeCount)`。例如改费率：target = Settlement 地址，callData = `abi.encodeWithSelector(Settlement.setFeeBps.selector, 8)`；上币：target = TokenRegistry，callData = `abi.encodeWithSelector(TokenRegistry.addToken.selector, tokenAddress)`。
+4. **投票**：活跃集内地址调用 `vote(proposalId, support, proof)`，proof 由上一步 `-proof-for` 得到。通过条件：`yesCount > activeCount / 2`。
+5. **执行**：投票期（7 天）结束后，任何人调用 `execute(proposalId)`。同一 (target, callData) 执行后有 **7 天冷却期** 才能再创建相同提案。
+
+更详细说明与示例见：
+- [node/scripts/governance-merkletool-example.md](../node/scripts/governance-merkletool-example.md)（merkletool 用法）
+- [scripts/create-proposal-example.md](scripts/create-proposal-example.md)（cast 创建提案/投票/执行）
+
+**一键部署**：运行 `scripts/deploy-governance.ps1` 可依次部署 ContributorReward（若未部署）、Governance、TokenRegistry、ChainConfig。
+
+## 七、仅部署 ContributorReward（贡献奖励合约）
+
+若 Sepolia 上已有 Vault / FeeDistributor 等，只需部署 ContributorReward：
+
+```powershell
+cd d:\P2P\contracts
+# 确保 .env 中有 PRIVATE_KEY
+$rpc = if ($env:SEPOLIA_RPC_URL) { $env:SEPOLIA_RPC_URL } else { "https://ethereum-sepolia.publicnode.com" }
+forge script script/Deploy.s.sol:Deploy --sig "runContributorReward()" --rpc-url $rpc --broadcast
+```
+
+部署成功后终端会输出 `ContributorReward <地址>`，将该地址补充到 [API-接口说明](../docs/API-接口说明.md) 的合约地址表中。
+
+---
+
+## 八、合约验证（可选）
+
+在 `.env` 中配置对应网络的 API Key（如 `ETHERSCAN_API_KEY`）后，在部署命令末尾加 `--verify`：
 
 - Base Sepolia：`BASESCAN_API_KEY`
 - Arbitrum Sepolia：`ARBISCAN_API_KEY`

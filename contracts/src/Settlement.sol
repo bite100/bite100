@@ -11,8 +11,9 @@ contract Settlement {
     Vault public vault;
     FeeDistributor public feeDistributor;
     address public owner;
+    address public governance;
 
-    uint16 public feeBps = 30; // 0.3% = 30 bps
+    uint16 public feeBps = 5; // 0.05%
     address public feeToken; // 手续费收取的代币（如 USDT）
 
     event TradeSettled(
@@ -26,9 +27,15 @@ contract Settlement {
     );
     event FeeBpsSet(uint16 oldBps, uint16 newBps);
     event FeeTokenSet(address indexed token);
+    event GovernanceSet(address indexed governance);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Settlement: not owner");
+        _;
+    }
+
+    modifier onlyOwnerOrGovernance() {
+        require(msg.sender == owner || (governance != address(0) && msg.sender == governance), "Settlement: not auth");
         _;
     }
 
@@ -39,12 +46,17 @@ contract Settlement {
         owner = msg.sender;
     }
 
-    /// @notice 设置手续费率（万分比）
-    function setFeeBps(uint16 _feeBps) external onlyOwner {
+    /// @notice 设置手续费率（万分比）；owner 或 governance 可调用
+    function setFeeBps(uint16 _feeBps) external onlyOwnerOrGovernance {
         require(_feeBps <= 1000, "Settlement: fee too high"); // max 10%
         uint16 old = feeBps;
         feeBps = _feeBps;
         emit FeeBpsSet(old, _feeBps);
+    }
+
+    function setGovernance(address _governance) external onlyOwner {
+        governance = _governance;
+        emit GovernanceSet(_governance);
     }
 
     /// @notice 设置手续费收取代币

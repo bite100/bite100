@@ -1,10 +1,8 @@
-// P2P 节点 - Phase 2 M1：YAML 配置、DHT、GossipSub
-// 用法：
-//   go run ./cmd/node [-config config.yaml] [-port N] [-connect <multiaddr>]
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -12,133 +10,245 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
 
+	"github.com/P2P-P2P/p2p/node/internal/chain"
 	"github.com/P2P-P2P/p2p/node/internal/config"
+	"github.com/P2P-P2P/p2p/node/internal/metrics"
 	"github.com/P2P-P2P/p2p/node/internal/p2p"
+	"github.com/P2P-P2P/p2p/node/internal/storage"
+	"github.com/P2P-P2P/p2p/node/internal/sync"
 )
 
-const defaultPort = 4001
-const defaultConfigPath = "config.yaml"
-
 func main() {
-	cfgPath := defaultConfigPath
-	var connectAddr, publishTopic, publishMsg string
-	port := defaultPort
-	for i := 1; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "-config":
-			if i+1 < len(os.Args) {
-				cfgPath = os.Args[i+1]
-				i++
-			}
-		case "-connect":
-			if i+1 < len(os.Args) {
-				connectAddr = os.Args[i+1]
-				i++
-			}
-		case "-port":
-			if i+1 < len(os.Args) {
-				fmt.Sscanf(os.Args[i+1], "%d", &port)
-				i++
-			}
-		case "-publish":
-			if i+2 < len(os.Args) {
-				publishTopic = os.Args[i+1]
-				publishMsg = os.Args[i+2]
-				i += 2
-			}
+	port := flag.Int("port", 0, "覆盖监听端口，如 4002")
+	connectAddr := flag.String("connect", "", "连接 Bootstrap 节点 multiaddr，如 /ip4/127.0.0.1/tcp/4001/p2p/12D3KooW...")
+	configPath := flag.String("config", "config.yaml", "配置文件路径")
+	publishTopic := flag.String("publish-topic", "", "发送测试消息的 topic（需配合 -publish-msg）")
+	publishMsg := flag.String("publish-msg", "", "发送的测试消息内容")
+	syncFrom := flag.String("sync-from", "", "从指定 PeerID 拉取历史成交")
+	seedTrades := flag.Bool("seed-trades", false, "插入 5 条测试成交（仅 storage 节点）")
+	m2AcceptanceLocal := flag.Bool("m2-acceptance-local", false, "M2 本地验收模式（预留）")
+	flag.Parse()
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("加载配置: %v", err)
+	}
+
+	// 端口覆盖
+	listenAddrs := cfg.Node.Listen
+	if *port > 0 {
+		listenAddrs = []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *port)}
+		if *m2AcceptanceLocal {
+			listenAddrs = []string{fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", *port)}
 		}
 	}
 
-	cfg, err := config.Load(cfgPath)
+	h, err := p2p.NewHost(listenAddrs, cfg.Node.DataDir)
 	if err != nil {
-		log.Fatalf("加载配置 %s: %v", cfgPath, err)
+		log.Fatalf("创建节点: %v", err)
 	}
-
-	// CLI -port 覆盖配置中的第一个 tcp 端口
-	listenAddrs := make([]string, 0, len(cfg.Node.Listen))
-	for _, a := range cfg.Node.Listen {
-		listenAddrs = append(listenAddrs, a)
-	}
-	if len(listenAddrs) == 0 {
-		listenAddrs = []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)}
-	} else if port != defaultPort {
-		// 用 -port 替换第一个 listen 的端口
-		listenAddrs[0] = fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)
-	}
+	defer h.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h, err := p2p.NewHost(listenAddrs)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer h.Close()
-
-	h.Network().Notify(&network.NotifyBundle{
-		ConnectedF: func(n network.Network, c network.Conn) {
-			log.Printf("已连接对等节点: %s", c.RemotePeer())
-		},
-		DisconnectedF: func(n network.Network, c network.Conn) {
-			log.Printf("对等节点断开: %s", c.RemotePeer())
-		},
-	})
-
-	log.Printf("节点启动 | 类型=%s | PeerID=%s", cfg.Node.Type, h.ID())
-	for _, addr := range h.Addrs() {
-		log.Printf("  监听: %s/p2p/%s", addr, h.ID())
+	// DHT 与 Bootstrap
+	if _, err := p2p.StartDHT(ctx, h, cfg.Network.Bootstrap); err != nil {
+		log.Printf("DHT 启动: %v（可继续运行）", err)
 	}
 
-	// DHT + Bootstrap
-	kad, err := p2p.StartDHT(ctx, h, cfg.Network.Bootstrap)
+	// GossipSub
+	ps, err := p2p.NewGossipSub(ctx, h)
 	if err != nil {
-		log.Printf("DHT 启动警告: %v（继续运行）", err)
-	} else if kad != nil {
-		defer kad.Close()
-		log.Println("DHT 已启动")
+		log.Fatalf("GossipSub: %v", err)
 	}
 
-	// GossipSub + 订阅
-	var ps *pubsub.PubSub
-	ps, err = p2p.NewGossipSub(ctx, h)
-	if err != nil {
-		log.Printf("GossipSub 启动失败: %v", err)
-	} else {
-		topics := cfg.Network.Topics
-		if len(topics) == 0 {
-			topics = []string{"/p2p-exchange/sync/trades"}
+	// 贡献采集器
+	collector := metrics.NewCollector()
+
+	// 订阅 topics，中继节点统计 bytes relayed
+	topics := cfg.Network.Topics
+	if len(topics) == 0 {
+		topics = []string{"/p2p-exchange/sync/trades", "/p2p-exchange/sync/orderbook"}
+	}
+	var onMessage func(topic string, from peer.ID, data []byte)
+	if cfg.Node.Type == "relay" {
+		onMessage = func(topic string, _ peer.ID, data []byte) {
+			collector.AddBytesRelayed(len(data))
 		}
-		for _, t := range topics {
-			if err := p2p.SubscribeAndLog(ctx, ps, t); err != nil {
-				log.Printf("订阅 %s: %v", t, err)
+	}
+	for _, t := range topics {
+		if err := p2p.SubscribeWithHandler(ctx, ps, t, onMessage); err != nil {
+			log.Printf("订阅 %s: %v", t, err)
+		}
+	}
+
+	// 监听地址
+	addrInfo := fmt.Sprintf("%s/p2p/%s", h.Addrs()[0], h.ID())
+	log.Printf("节点启动 | PeerID: %s\n  监听: %s", h.ID(), addrInfo)
+
+	// -connect
+	if *connectAddr != "" {
+		if err := p2p.ConnectToPeer(ctx, h, *connectAddr); err != nil {
+			log.Printf("连接 %s: %v", *connectAddr, err)
+		} else {
+			log.Printf("已连接到远程节点，当前连接数: %d", len(h.Network().Peers()))
+		}
+	}
+
+	var store *storage.DB
+	if cfg.Node.Type == "storage" {
+		store, err = storage.Open(cfg.Node.DataDir)
+		if err != nil {
+			log.Fatalf("打开数据库: %v", err)
+		}
+		defer store.Close()
+
+		// 保留期清理
+		go store.RunRetention(ctx, cfg.Storage.RetentionMonths)
+
+		// SyncTrades 协议（存储节点）
+		sync.Serve(h, store, cfg.Storage.RetentionMonths)
+
+		// -seed-trades
+		if *seedTrades {
+			if _, err := store.SeedTestTrades(5); err != nil {
+				log.Printf("seed trades: %v", err)
 			}
 		}
-	}
 
-	// -connect：连接指定节点
-	if connectAddr != "" {
-		if err := p2p.ConnectToPeer(ctx, h, connectAddr); err != nil {
-			log.Fatalf("连接失败: %v", err)
+		// 链上拉取
+		if cfg.Chain.RPCURL != "" && cfg.Chain.AMMPool != "" {
+			go func() {
+				n, err := chain.FetchRecentSwapTrades(ctx, cfg.Chain.RPCURL, cfg.Chain.AMMPool, cfg.Chain.Token0, cfg.Chain.Token1, store)
+				if err != nil {
+					log.Printf("[chain] 拉取 Swap 事件: %v", err)
+				} else if n > 0 {
+					log.Printf("[chain] 已拉取 %d 条 Swap 成交", n)
+				}
+			}()
 		}
-		log.Printf("已连接到远程节点，当前连接数: %d", len(h.Network().Peers()))
 	}
 
-	// -publish：向 topic 发送消息（用于测试 GossipSub）
-	if publishTopic != "" && publishMsg != "" && ps != nil {
-		if err := ps.Publish(publishTopic, []byte(publishMsg)); err != nil {
-			log.Printf("发布失败: %v", err)
+	// -sync-from：拉取并保存
+	if *syncFrom != "" {
+		peerID, err := peer.Decode(*syncFrom)
+		if err != nil {
+			log.Fatalf("无效 PeerID %s: %v", *syncFrom, err)
+		}
+		downloadStore := store
+		downloadDir := cfg.Node.DataDir
+		if cfg.Node.Type == "relay" {
+			// relay 写入 data_dir/downloads
+			downloadDir = cfg.Node.DataDir + "/downloads"
+			downloadStore, err = storage.Open(downloadDir)
+			if err != nil {
+				log.Fatalf("打开下载库: %v", err)
+			}
+			defer downloadStore.Close()
+		}
+		now := time.Now().Unix()
+		since := now - 365*24*3600 // 一年内
+		trades, err := sync.Request(ctx, h, peerID, since, now, 1000)
+		if err != nil {
+			log.Fatalf("拉取失败: %v", err)
+		}
+		log.Printf("从 %s 拉取到 %d 条成交", peerID, len(trades))
+		if len(trades) > 0 {
+			if err := downloadStore.InsertTrades(trades); err != nil {
+				log.Fatalf("保存成交: %v", err)
+			}
+			log.Printf("已下载并保存 %d 条成交至本地", len(trades))
+			// 拉取完成后注册 SyncTrades，供其他节点拉取
+			sync.Serve(h, downloadStore, cfg.Storage.RetentionMonths)
+		}
+	}
+
+	// -publish
+	if *publishTopic != "" && *publishMsg != "" {
+		topic, err := ps.Join(*publishTopic)
+		if err != nil {
+			log.Printf("加入 topic %s: %v", *publishTopic, err)
+		} else if err := topic.Publish(ctx, []byte(*publishMsg)); err != nil {
+			log.Printf("发布消息: %v", err)
 		} else {
-			log.Printf("已发送到 %s: %s", publishTopic, publishMsg)
+			log.Printf("已发布到 %s: %s", *publishTopic, *publishMsg)
 		}
 	}
 
+	// 贡献证明：周期检查
+	go runProofCheck(ctx, h, cfg, collector, store)
+
+	// 等待退出
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
-	log.Println("正在退出...")
-	cancel()
-	time.Sleep(500 * time.Millisecond)
+	log.Println("节点退出")
+}
+
+func runProofCheck(ctx context.Context, h host.Host, cfg *config.Config, collector *metrics.Collector, _ *storage.DB) {
+	periodDays := cfg.Metrics.ProofPeriodDays
+	if periodDays <= 0 {
+		periodDays = 7
+	}
+	outputDir := cfg.Metrics.ProofOutputDir
+	if outputDir == "" {
+		outputDir = cfg.Node.DataDir + "/proofs"
+	}
+	checkInterval := 10 * time.Minute
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			periodStr := metrics.PeriodRange(periodDays)
+			if metrics.ProofFileExists(outputDir, periodStr) {
+				continue
+			}
+			periodEnd, err := metrics.PeriodEndTime(periodStr)
+			if err != nil {
+				continue
+			}
+			if time.Now().UTC().Before(periodEnd) {
+				continue
+			}
+			periodSec := metrics.PeriodSeconds(periodDays)
+			uptimeFrac := collector.UptimeFraction(periodSec)
+			usedGB, totalGB := float64(0), float64(0)
+			if cfg.Node.Type == "storage" {
+				used, total := metrics.StorageUsage(cfg.Node.DataDir)
+				usedGB = float64(used) / (1024 * 1024 * 1024)
+				if total > 0 {
+					totalGB = float64(total) / (1024 * 1024 * 1024)
+				}
+			}
+			bytesRelayed := uint64(0)
+			if cfg.Node.Type == "relay" {
+				bytesRelayed = collector.BytesRelayedTotal()
+			}
+			privKey := h.Peerstore().PrivKey(h.ID())
+			if privKey == nil {
+				log.Printf("[证明] 无法获取私钥")
+				continue
+			}
+			proof, err := metrics.GenerateProof(
+				h.ID(), cfg.Node.Type, periodStr,
+				uptimeFrac, usedGB, totalGB, bytesRelayed,
+				privKey,
+			)
+			if err != nil {
+				log.Printf("[证明] 生成失败: %v", err)
+				continue
+			}
+			if _, err := metrics.WriteProofToFile(proof, outputDir); err != nil {
+				log.Printf("[证明] 写入失败: %v", err)
+			}
+		}
+	}
 }

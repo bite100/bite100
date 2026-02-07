@@ -54,9 +54,9 @@ contracts/
 | 合约 | 职责 |
 |------|------|
 | **Vault** | 用户 deposit/withdraw，仅 Settlement 可 transferOut 用于结算 |
-| **Settlement** | 由 owner 调用 settleTrade，从 Vault 划转并扣 0.3% 至 FeeDistributor |
+| **Settlement** | 由 owner 调用 settleTrade，从 Vault 划转并扣 0.05% 至 FeeDistributor |
 | **FeeDistributor** | 接收手续费，设置 recipients 与比例，claim 领取 |
-| **AMMPool** | 单池 AMM，addLiquidity/swap，0.3% 手续费至 FeeDistributor |
+| **AMMPool** | 单池 AMM，addLiquidity/swap，0.05% 手续费至 FeeDistributor |
 
 ## 构建与测试
 

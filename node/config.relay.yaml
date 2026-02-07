@@ -1,0 +1,22 @@
+# 仅用于 -sync-from 的拉取方（节点 B），不启 storage
+node:
+  type: relay
+  data_dir: ./data
+  listen:
+    - /ip4/0.0.0.0/tcp/4001
+
+network:
+  bootstrap: []
+  topics:
+    - /p2p-exchange/sync/trades
+    - /p2p-exchange/sync/orderbook
+
+storage:
+  retention_months: 6
+
+chain:
+  rpc_url: ""
+  chain_id: 11155111
+  amm_pool: ""
+  token0: ""
+  token1: ""

@@ -48,13 +48,13 @@ contract SettlementTest is Test {
     function test_SettleTrade() public {
         // maker 卖 100 tokenA 买 tokenB，taker 卖 tokenB 买 tokenA，1:1 比例
         uint256 amountIn = 100e18;
-        uint256 amountOut = 100e18; // 0.3% fee = 0.3e18, maker gets 99.7e18
+        uint256 amountOut = 100e18; // 0.05% fee = 0.05e18, maker gets 99.95e18
         settlement.settleTrade(maker, taker, address(tokenA), address(tokenB), amountIn, amountOut);
 
         assertEq(vault.balanceOf(address(tokenA), maker), 400e18);
-        assertEq(vault.balanceOf(address(tokenB), maker), 99.7e18);
+        assertEq(vault.balanceOf(address(tokenB), maker), 99.95e18);
         assertEq(vault.balanceOf(address(tokenA), taker), 100e18);
         assertEq(vault.balanceOf(address(tokenB), taker), 400e18);
-        assertEq(tokenB.balanceOf(address(feeDistributor)), 0.3e18);
+        assertEq(tokenB.balanceOf(address(feeDistributor)), 0.05e18);
     }
 }

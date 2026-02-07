@@ -5,21 +5,28 @@ import "./interfaces/IERC20.sol";
 import "./FeeDistributor.sol";
 
 /// @title AMMPool 简易 AMM 交易池
-/// @notice x*y=k 恒定乘积，0.3% 手续费至 FeeDistributor
+/// @notice x*y=k 恒定乘积，0.05% 手续费至 FeeDistributor
 contract AMMPool {
     address public token0;
     address public token1;
     address public feeDistributor;
     address public owner;
+    address public governance;
 
-    uint16 public feeBps = 30; // 0.3%
+    uint16 public feeBps = 5; // 0.05%
 
     event AddLiquidity(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event RemoveLiquidity(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event Swap(address indexed sender, address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut, uint256 fee);
+    event GovernanceSet(address indexed governance);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "AMMPool: not owner");
+        _;
+    }
+
+    modifier onlyOwnerOrGovernance() {
+        require(msg.sender == owner || (governance != address(0) && msg.sender == governance), "AMMPool: not auth");
         _;
     }
 
@@ -35,7 +42,12 @@ contract AMMPool {
         feeDistributor = _feeDistributor;
     }
 
-    function setFeeBps(uint16 _feeBps) external onlyOwner {
+    function setGovernance(address _governance) external onlyOwner {
+        governance = _governance;
+        emit GovernanceSet(_governance);
+    }
+
+    function setFeeBps(uint16 _feeBps) external onlyOwnerOrGovernance {
         require(_feeBps <= 1000, "AMMPool: fee too high");
         feeBps = _feeBps;
     }
@@ -66,7 +78,7 @@ contract AMMPool {
         emit RemoveLiquidity(msg.sender, amount0, amount1, amount0 + amount1);
     }
 
-    /// @notice 交换：转入 tokenIn 数量 amountIn，获得 tokenOut（扣 0.3% 手续费）
+    /// @notice 交换：转入 tokenIn 数量 amountIn，获得 tokenOut（扣 0.05% 手续费）
     function swap(address tokenIn, uint256 amountIn) external returns (uint256 amountOut) {
         require(amountIn > 0, "AMMPool: zero amount");
         address tokenOut = tokenIn == token0 ? token1 : token0;

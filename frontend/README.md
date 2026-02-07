@@ -37,3 +37,7 @@ npm run dev
 - Vault: `0xC3A92a4D07C6133Ea09CFA359C819070C6030D1f`
 
 配置见 `src/config.ts`。
+
+## 治理
+
+部署 Governance 后，将地址填入 `src/config.ts` 的 `GOVERNANCE_ADDRESS`，前端会显示治理卡片：查看提案、投票、执行、创建提案（改 Settlement 费率）。活跃集与 proof 由 `node/cmd/merkletool` 生成。

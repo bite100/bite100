@@ -1,7 +1,25 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
 import { BrowserProvider, Contract, type Eip1193Provider } from 'ethers'
 import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS } from './config'
+import { GovernanceSection } from './GovernanceSection'
+import { getEthereum, formatTokenAmount, shortAddress, isValidAddress } from './utils'
 import './App.css'
+
+/** 治理模块错误边界：治理区报错时不影响整页 */
+class GovernanceErrorBoundary extends Component<{ account: string | null; children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false }
+  static getDerivedStateFromError = () => ({ hasError: true })
+  componentDidCatch() {}
+  render() {
+    if (this.state.hasError) return (
+      <div className="card vault-section">
+        <h2>治理</h2>
+        <p className="hint">治理模块加载异常，请刷新页面。若持续报错，请检查 config.ts 中 GOVERNANCE_ADDRESS 是否正确。</p>
+      </div>
+    )
+    return this.props.children
+  }
+}
 
 const parseAmount = (s: string) => {
   const n = parseFloat(s)
@@ -53,7 +71,7 @@ function App() {
   const connectWallet = useCallback(async () => {
     setError(null)
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+      const ethereum = getEthereum()
       if (!ethereum) {
         setError('请安装 MetaMask 或其他钱包扩展')
         return
@@ -96,11 +114,11 @@ function App() {
   const tokenAddr = tokenAddress.trim()
 
   const fetchBalances = useCallback(async () => {
-    if (!account || !tokenAddr || !tokenAddr.startsWith('0x') || tokenAddr.length !== 42) return
+    if (!account || !isValidAddress(tokenAddr)) return
     setError(null)
     setLoading(true)
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+      const ethereum = getEthereum()
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
@@ -109,8 +127,8 @@ function App() {
         vault.balanceOf(tokenAddr, account),
         token.balanceOf(account),
       ])
-      setVaultBalance(vBal ? (Number(vBal) / 1e18).toFixed(6) : '0')
-      setWalletTokenBalance(wBal ? (Number(wBal) / 1e18).toFixed(6) : '0')
+      setVaultBalance(formatTokenAmount(vBal))
+      setWalletTokenBalance(formatTokenAmount(wBal))
     } catch (e) {
       setVaultBalance('')
       setWalletTokenBalance('')
@@ -121,7 +139,7 @@ function App() {
   }, [account, tokenAddr])
 
   const handleDeposit = useCallback(async () => {
-    if (!account || !tokenAddr || tokenAddr.length !== 42) {
+    if (!account || !isValidAddress(tokenAddr)) {
       setError('请先输入有效的代币地址')
       return
     }
@@ -133,7 +151,7 @@ function App() {
     setError(null)
     setLoadingDeposit(true)
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+      const ethereum = getEthereum()
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const signer = await provider.getSigner()
@@ -153,7 +171,7 @@ function App() {
   }, [account, tokenAddr, depositAmount, fetchBalances])
 
   const handleWithdraw = useCallback(async () => {
-    if (!account || !tokenAddr || tokenAddr.length !== 42) {
+    if (!account || !isValidAddress(tokenAddr)) {
       setError('请先输入有效的代币地址')
       return
     }
@@ -165,7 +183,7 @@ function App() {
     setError(null)
     setLoadingWithdraw(true)
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+      const ethereum = getEthereum()
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const signer = await provider.getSigner()
@@ -183,13 +201,13 @@ function App() {
 
   const fetchReserves = useCallback(async () => {
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+      const ethereum = getEthereum()
       if (!ethereum) return
       const provider = new BrowserProvider(ethereum)
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
       const [r0, r1] = await Promise.all([amm.reserve0(), amm.reserve1()])
-      setReserve0(r0 ? (Number(r0) / 1e18).toFixed(6) : '0')
-      setReserve1(r1 ? (Number(r1) / 1e18).toFixed(6) : '0')
+      setReserve0(formatTokenAmount(r0))
+      setReserve1(formatTokenAmount(r1))
     } catch {
       setReserve0('0')
       setReserve1('0')
@@ -203,13 +221,13 @@ function App() {
       return
     }
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+      const ethereum = getEthereum()
       if (!ethereum) return
       const provider = new BrowserProvider(ethereum)
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
       const tokenIn = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
       const out = await amm.getAmountOut(tokenIn, amount)
-      setSwapAmountOut(out ? (Number(out) / 1e18).toFixed(6) : '')
+      setSwapAmountOut(formatTokenAmount(out))
     } catch {
       setSwapAmountOut('')
     }
@@ -233,24 +251,20 @@ function App() {
     setLoadingSwap(true)
     try {
       const tokenIn = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+      const ethereum = getEthereum()
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const signer = await provider.getSigner()
       const token = new Contract(tokenIn, ERC20_ABI, signer)
       const bal = await token.balanceOf(account!)
-      if (bal < amount) throw new Error(`余额不足，钱包仅有 ${(Number(bal) / 1e18).toFixed(4)}`)
+      if (bal < amount) throw new Error(`余额不足，钱包仅有 ${formatTokenAmount(bal)}`)
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, signer)
-      // 部分代币需先 approve(0) 再 approve(amount)
       const allowance = await token.allowance(account!, AMM_POOL_ADDRESS)
       if (allowance < amount) {
-        const tx0 = await token.approve(AMM_POOL_ADDRESS, 0n)
-        await tx0.wait()
-        const txApprove = await token.approve(AMM_POOL_ADDRESS, amount)
-        await txApprove.wait()
+        await (await token.approve(AMM_POOL_ADDRESS, 0n)).wait()
+        await (await token.approve(AMM_POOL_ADDRESS, amount)).wait()
       }
-      const txSwap = await amm.swap(tokenIn, amount)
-      await txSwap.wait()
+      await (await amm.swap(tokenIn, amount)).wait()
       setSwapAmount('')
       setSwapAmountOut('')
       await fetchReserves()
@@ -271,19 +285,18 @@ function App() {
     setError(null)
     setLoadingAddLiq(true)
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+      const ethereum = getEthereum()
       if (!ethereum) throw new Error('未检测到钱包')
       const provider = new BrowserProvider(ethereum)
       const signer = await provider.getSigner()
-      const token0Contract = new Contract(TOKEN0_ADDRESS, ERC20_ABI, signer)
-      const token1Contract = new Contract(TOKEN1_ADDRESS, ERC20_ABI, signer)
+      const token0C = new Contract(TOKEN0_ADDRESS, ERC20_ABI, signer)
+      const token1C = new Contract(TOKEN1_ADDRESS, ERC20_ABI, signer)
       const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, signer)
-      const txApprove0 = await token0Contract.approve(AMM_POOL_ADDRESS, amt0)
-      const txApprove1 = await token1Contract.approve(AMM_POOL_ADDRESS, amt1)
-      await txApprove0.wait()
-      await txApprove1.wait()
-      const txAdd = await amm.addLiquidity(amt0, amt1)
-      await txAdd.wait()
+      await Promise.all([
+        token0C.approve(AMM_POOL_ADDRESS, amt0),
+        token1C.approve(AMM_POOL_ADDRESS, amt1),
+      ]).then((txs) => Promise.all(txs.map((tx) => tx.wait())))
+      await (await amm.addLiquidity(amt0, amt1)).wait()
       setAddLiqAmount0('')
       setAddLiqAmount1('')
       await fetchReserves()
@@ -304,58 +317,52 @@ function App() {
     else setError('请先查询该代币余额')
   }, [vaultBalance])
 
+  const fetchTokenBalance = useCallback(async (tokenAddress: string): Promise<string> => {
+    const ethereum = getEthereum()
+    if (!ethereum || !account) return '0'
+    const provider = new BrowserProvider(ethereum)
+    const token = new Contract(tokenAddress, ERC20_ABI, provider)
+    const bal = await token.balanceOf(account)
+    return formatTokenAmount(bal)
+  }, [account])
+
   const handleMaxSwap = useCallback(async () => {
     if (!account) return
     setError(null)
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
-      if (!ethereum) throw new Error('未检测到钱包')
-      const provider = new BrowserProvider(ethereum)
-      const tokenAddr = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
-      const token = new Contract(tokenAddr, ERC20_ABI, provider)
-      const bal = await token.balanceOf(account)
-      setSwapAmount(bal ? (Number(bal) / 1e18).toFixed(6) : '0')
+      const addr = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+      setSwapAmount(await fetchTokenBalance(addr))
     } catch (e) {
       setError(formatError(e))
     }
-  }, [account, swapTokenIn])
+  }, [account, swapTokenIn, fetchTokenBalance])
 
   const handleMaxAddLiq0 = useCallback(async () => {
     if (!account) return
     setError(null)
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
-      if (!ethereum) throw new Error('未检测到钱包')
-      const provider = new BrowserProvider(ethereum)
-      const token = new Contract(TOKEN0_ADDRESS, ERC20_ABI, provider)
-      const bal = await token.balanceOf(account)
-      setAddLiqAmount0(bal ? (Number(bal) / 1e18).toFixed(6) : '0')
+      setAddLiqAmount0(await fetchTokenBalance(TOKEN0_ADDRESS))
     } catch (e) {
       setError(formatError(e))
     }
-  }, [account])
+  }, [account, fetchTokenBalance])
 
   const handleMaxAddLiq1 = useCallback(async () => {
     if (!account) return
     setError(null)
     try {
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
-      if (!ethereum) throw new Error('未检测到钱包')
-      const provider = new BrowserProvider(ethereum)
-      const token = new Contract(TOKEN1_ADDRESS, ERC20_ABI, provider)
-      const bal = await token.balanceOf(account)
-      setAddLiqAmount1(bal ? (Number(bal) / 1e18).toFixed(6) : '0')
+      setAddLiqAmount1(await fetchTokenBalance(TOKEN1_ADDRESS))
     } catch (e) {
       setError(formatError(e))
     }
-  }, [account])
+  }, [account, fetchTokenBalance])
 
   useEffect(() => {
     if (!account) return
-      const ethereum = (window as unknown as { ethereum?: Eip1193Provider }).ethereum
+    const ethereum = getEthereum()
     if (!ethereum) return
     const provider = new BrowserProvider(ethereum)
-    provider.getBalance(account).then((b) => setEthBalance(b ? (Number(b) / 1e18).toFixed(6) : '0'))
+    provider.getBalance(account).then((b) => setEthBalance(formatTokenAmount(b)))
   }, [account])
 
   return (
@@ -371,7 +378,7 @@ function App() {
         <div className="card">
           <div className="row">
             <span className="label">当前账户</span>
-            <span className="value mono">{`${account.slice(0, 6)}...${account.slice(-4)}`}</span>
+            <span className="value mono">{shortAddress(account)}</span>
           </div>
           <div className="row">
             <span className="label">钱包 ETH 余额</span>
@@ -401,7 +408,7 @@ function App() {
             <button
               className="btn secondary"
               onClick={fetchBalances}
-              disabled={loading || !tokenAddr || tokenAddr.length !== 42}
+              disabled={loading || !isValidAddress(tokenAddr)}
             >
               {loading ? '查询中…' : '查询余额'}
             </button>
@@ -435,7 +442,7 @@ function App() {
             <button
               className="btn primary"
               onClick={handleDeposit}
-              disabled={loadingDeposit || !tokenAddr || tokenAddr.length !== 42 || !depositAmount.trim()}
+              disabled={loadingDeposit || !isValidAddress(tokenAddr) || !depositAmount.trim()}
             >
               {loadingDeposit ? '处理中…' : '存入'}
             </button>
@@ -457,7 +464,7 @@ function App() {
             <button
               className="btn secondary"
               onClick={handleWithdraw}
-              disabled={loadingWithdraw || !tokenAddr || tokenAddr.length !== 42 || !withdrawAmount.trim()}
+              disabled={loadingWithdraw || !isValidAddress(tokenAddr) || !withdrawAmount.trim()}
             >
               {loadingWithdraw ? '处理中…' : '提取'}
             </button>
@@ -465,7 +472,7 @@ function App() {
 
           <div className="card vault-section">
             <h2>AMM Swap</h2>
-            <p className="hint">Token A ↔ Token B，0.3% 手续费。池子需有流动性。</p>
+            <p className="hint">Token A ↔ Token B，0.05% 手续费。池子需有流动性。</p>
             <div className="row">
               <span className="label">池子储备</span>
               <span className="value mono">TKA: {reserve0} · TKB: {reserve1}</span>
@@ -497,6 +504,10 @@ function App() {
               {loadingSwap ? '处理中…' : 'Swap'}
             </button>
           </div>
+
+          <GovernanceErrorBoundary account={account}>
+            <GovernanceSection account={account} />
+          </GovernanceErrorBoundary>
 
           <div className="card vault-section">
             <h2>添加流动性</h2>

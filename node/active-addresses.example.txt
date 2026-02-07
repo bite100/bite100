@@ -1,0 +1,7 @@
+# 最近 4 周活跃地址示例（每行一个 0x 地址）
+# 实际使用时：从 ContributorReward 的 ProofSubmitted 事件或自有数据收集
+# 替换为真实地址后，另存为 active-addresses.txt
+
+# 示例（替换为你的测试地址）：
+# 0x1234567890123456789012345678901234567890
+# 0xabcdef1234567890abcdef1234567890abcdef12

@@ -145,6 +145,24 @@
   margin: 0;
 }
 
+/* 治理 */
+.governance-section h3.gov-sub {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.5rem 0;
+  color: #a1a1aa;
+}
+.governance-section h3.gov-sub:first-of-type { margin-top: 0; }
+.proposal-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.proposal-item {
+  padding: 0.75rem;
+  background: #0f0f12;
+  border-radius: 8px;
+  border: 1px solid #27272a;
+}
+.proof-input { font-family: ui-monospace, monospace; font-size: 0.8125rem; resize: vertical; }
+.vote-support { display: flex; align-items: center; gap: 0.5rem; color: #a1a1aa; font-size: 0.875rem; cursor: pointer; }
+
 /* 手机端适配：触控区域、字号、间距 */
 @media (max-width: 480px) {
   .app {

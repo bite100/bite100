@@ -15,16 +15,26 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-// NewHost 根据监听地址创建 libp2p Host
-func NewHost(listenAddrs []string) (host.Host, error) {
+// NewHost 根据监听地址创建 libp2p Host；dataDir 非空时从 dataDir/peerkey 加载或生成并持久化密钥，保证同目录 PeerID 不变
+func NewHost(listenAddrs []string, dataDir string) (host.Host, error) {
 	if len(listenAddrs) == 0 {
 		listenAddrs = []string{"/ip4/0.0.0.0/tcp/4001"}
 	}
-	return libp2p.New(
+	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.Ping(true),
 		libp2p.NATPortMap(),
-	)
+	}
+	if dataDir != "" {
+		priv, err := LoadOrCreateKey(dataDir)
+		if err != nil {
+			return nil, fmt.Errorf("节点密钥: %w", err)
+		}
+		if priv != nil {
+			opts = append(opts, libp2p.Identity(priv))
+		}
+	}
+	return libp2p.New(opts...)
 }
 
 // StartDHT 创建并启动 Kademlia DHT，连接 Bootstrap 节点
@@ -67,6 +77,11 @@ func NewGossipSub(ctx context.Context, h host.Host) (*pubsub.PubSub, error) {
 
 // SubscribeAndLog 订阅 topic 并打印收到的消息（为 M2/M3 打基础）
 func SubscribeAndLog(ctx context.Context, ps *pubsub.PubSub, topicName string) error {
+	return SubscribeWithHandler(ctx, ps, topicName, nil)
+}
+
+// SubscribeWithHandler 订阅 topic，每收到一条消息调用 onMessage（可为 nil 仅打印）；用于中继统计 bytes relayed
+func SubscribeWithHandler(ctx context.Context, ps *pubsub.PubSub, topicName string, onMessage func(topic string, from peer.ID, data []byte)) error {
 	sub, err := ps.Subscribe(topicName)
 	if err != nil {
 		return err
@@ -79,7 +94,12 @@ func SubscribeAndLog(ctx context.Context, ps *pubsub.PubSub, topicName string) e
 			if err != nil {
 				return
 			}
-			log.Printf("[%s] 来自 %s: %d bytes", topicName, msg.GetFrom(), len(msg.Data))
+			data := msg.Data
+			from := msg.GetFrom()
+			if onMessage != nil {
+				onMessage(topicName, from, data)
+			}
+			log.Printf("[%s] 来自 %s: %d bytes", topicName, from, len(data))
 		}
 	}()
 	return nil

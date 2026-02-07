@@ -11,3 +11,17 @@ network:
   topics:         # GossipSub 订阅的 topic（为空则默认 /p2p-exchange/sync/trades）
     - /p2p-exchange/sync/trades
     - /p2p-exchange/sync/orderbook
+
+storage:          # 仅存储节点
+  retention_months: 6   # 本节点保留月数：电脑端填 6、手机端填 1，超期删除；手机端需更久数据时向电脑端节点拉取
+
+metrics:          # 贡献指标与证明（M3）
+  proof_period_days: 7  # 证明周期（天）；验收 24h 可设为 1
+  proof_output_dir: "" # 证明落盘目录，默认 data_dir/proofs
+
+chain:            # 可选：从链上拉取历史成交
+  rpc_url: ""         # 如 https://sepolia.infura.io/v3/...
+  chain_id: 11155111
+  amm_pool: ""        # AMMPool 合约地址
+  token0: ""
+  token1: ""

@@ -14,6 +14,7 @@ node/data/
 node/node
 node/node.exe
 node/config.yaml
+node/*.exe
 node/*.exe~
 
 # 部署产物（可选保留则移除下一行）
