@@ -5,6 +5,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment: github-pages
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,9 +22,8 @@ jobs:
       - run: npm run build
         working-directory: frontend
         env:
-          # GitHub Pages 项目页地址为 /仓库名/，需设置 base
           VITE_BASE: '/${{ github.event.repository.name }}/'
-      - uses: peaceiris/actions-gh-pages@v3
+      - uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: frontend/dist
+          path: frontend/dist
+      - uses: actions/deploy-pages@v4
