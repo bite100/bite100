@@ -4,6 +4,26 @@
 
 ---
 
+## 当前仓库：P2P-P2P/p2p
+
+- **仓库地址**：https://github.com/P2P-P2P/p2p  
+- **部署后前端地址**：https://P2P-P2P.github.io/p2p/
+
+推送前请用 **P2P-P2P** 账号登录（或使用该账号的 Personal Access Token）。在项目根目录执行：
+
+```powershell
+cd D:\P2P
+git remote add origin https://github.com/P2P-P2P/p2p.git
+git branch -M main
+git push -u origin main
+```
+
+若已添加过 remote 但地址不对，可先删除再加：`git remote remove origin`。若提示 `origin already exists`，说明 remote 已正确，直接执行 `git push -u origin main` 即可。
+
+推送成功后，到仓库 **Settings → Pages** 将 **Source** 选为 **GitHub Actions**，即可自动部署。
+
+---
+
 ## 1. 新建/使用 GitHub 账号
 
 - 打开 **https://github.com**，若没有账号点 **Sign up** 注册（邮箱 + 密码）。
