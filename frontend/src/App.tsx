@@ -15,7 +15,7 @@ function formatError(e: unknown): string {
   const err = e as { code?: number; reason?: string; message?: string; shortMessage?: string; data?: unknown }
   const msg = err.reason ?? err.shortMessage ?? err.message ?? String(e)
   if (err.code === 4001 || msg.toLowerCase().includes('user rejected') || msg.toLowerCase().includes('denied')) return '您已拒绝签名或切换网络'
-  if (err.code === 'CALL_EXCEPTION' || msg.includes('CALL_EXCEPTION')) {
+  if (msg.includes('CALL_EXCEPTION')) {
     if (msg.includes('insufficient balance')) return '余额不足'
     if (msg.includes('insufficient allowance')) return '授权额度不足，请先 Approve'
     if (msg.includes('execution reverted')) {
