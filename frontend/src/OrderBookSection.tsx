@@ -1,11 +1,13 @@
 /**
  * Phase 3.5：订单簿展示、限价单下单/撤单、成交与结算状态
- * 需配置 NODE_API_URL（节点 api.listen 开启后）
+ * 支持多节点 P2P（VITE_NODE_API_URL 逗号分隔多个 URL 时依次尝试）；手机端本地缓存订单簿/成交/我的订单
  */
 import { useState, useEffect, useCallback } from 'react'
 import { ethers } from 'ethers'
-import { NODE_API_URL } from './config'
+import { NODE_API_URL, NODE_API_URLS } from './config'
 import { formatError } from './utils'
+import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
+import { nodeGet, nodePost } from './nodeClient'
 import type { Signer } from 'ethers'
 import './App.css'
 
@@ -49,26 +51,9 @@ interface OrderbookResponse {
 }
 
 const DEFAULT_PAIR = 'TKA/TKB'
-
-function apiGet<T>(path: string, params?: Record<string, string>): Promise<T> {
-  const url = new URL(path, NODE_API_URL)
-  if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
-  return fetch(url.toString()).then((r) => {
-    if (!r.ok) throw new Error(r.statusText || String(r.status))
-    return r.json()
-  })
-}
-
-function apiPost(path: string, body: unknown): Promise<{ ok: boolean }> {
-  return fetch(`${NODE_API_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }).then((r) => {
-    if (!r.ok) throw new Error(r.statusText || String(r.status))
-    return r.json()
-  })
-}
+const ORDERBOOK_DISPLAY_DEPTH = 12
+const TRADES_DISPLAY_LIMIT = 15
+const hasNodeApi = () => !!(NODE_API_URL || NODE_API_URLS.length > 0)
 
 /** 生成 orderId：keccak256(abi.encodePacked(trader, nonce, pair, side, price, amount)) */
 function buildOrderId(trader: string, nonce: number, pair: string, side: string, price: string, amount: string): string {
@@ -93,48 +78,80 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
   const [cancelLoading, setCancelLoading] = useState<string | null>(null)
   const [refreshAt, setRefreshAt] = useState(0)
   const [nodeType, setNodeType] = useState<string | null>(null)
+  const [connectedNode, setConnectedNode] = useState<string | null>(null)
+  const [fromCache, setFromCache] = useState<{ orderbook?: boolean; trades?: boolean; myOrders?: boolean }>({})
 
   const fetchOrderbook = useCallback(async () => {
-    if (!NODE_API_URL) return
+    if (!hasNodeApi()) return
     setError(null)
+    const cacheKey = CACHE_KEYS_ORDERBOOK.orderbook(pair)
+    const cached = getCached<OrderbookResponse>(cacheKey)
+    if (cached) {
+      setOrderbook(cached)
+      setFromCache((f) => ({ ...f, orderbook: true }))
+    }
     try {
-      const data = await apiGet<OrderbookResponse>('/api/orderbook', { pair })
+      const { data, baseUrl } = await nodeGet<OrderbookResponse>('/api/orderbook', { pair })
       setOrderbook(data)
+      setCached(cacheKey, data)
+      setConnectedNode(baseUrl)
+      setFromCache((f) => ({ ...f, orderbook: false }))
     } catch (e) {
-      setOrderbook(null)
+      if (!cached) setOrderbook(null)
       setError((e as Error).message)
     }
   }, [pair])
 
   const fetchTrades = useCallback(async () => {
-    if (!NODE_API_URL) return
+    if (!hasNodeApi()) return
+    const cacheKey = CACHE_KEYS_ORDERBOOK.trades(pair)
+    const cached = getCached<Trade[]>(cacheKey)
+    if (cached) {
+      setTrades(Array.isArray(cached) ? cached : [])
+      setFromCache((f) => ({ ...f, trades: true }))
+    }
     try {
-      const data = await apiGet<Trade[]>('/api/trades', { pair, limit: '30' })
-      setTrades(Array.isArray(data) ? data : [])
+      const { data } = await nodeGet<Trade[]>('/api/trades', { pair, limit: '30' })
+      const list = Array.isArray(data) ? data : []
+      setTrades(list)
+      setCached(cacheKey, list)
+      setFromCache((f) => ({ ...f, trades: false }))
     } catch {
-      setTrades([])
+      if (!cached) setTrades([])
     }
   }, [pair])
 
   const fetchMyOrders = useCallback(async () => {
-    if (!NODE_API_URL || !account) return
+    if (!hasNodeApi() || !account) return
+    const cacheKey = CACHE_KEYS_ORDERBOOK.myOrders(account, pair)
+    const cached = getCached<Order[]>(cacheKey)
+    if (cached) {
+      setMyOrders(Array.isArray(cached) ? cached : [])
+      setFromCache((f) => ({ ...f, myOrders: true }))
+    }
     try {
-      const data = await apiGet<Order[]>('/api/orders', { trader: account, pair, limit: '50' })
-      setMyOrders(Array.isArray(data) ? data : [])
+      const { data } = await nodeGet<Order[]>('/api/orders', { trader: account, pair, limit: '50' })
+      const list = Array.isArray(data) ? data : []
+      setMyOrders(list)
+      setCached(cacheKey, list)
+      setFromCache((f) => ({ ...f, myOrders: false }))
     } catch {
-      setMyOrders([])
+      if (!cached) setMyOrders([])
     }
   }, [account, pair])
 
   useEffect(() => {
-    if (!NODE_API_URL) return
-    apiGet<{ nodeType: string }>('/api/node')
-      .then((d) => setNodeType(d?.nodeType ?? null))
+    if (!hasNodeApi()) return
+    nodeGet<{ nodeType: string }>('/api/node')
+      .then(({ data, baseUrl }) => {
+        setNodeType(data?.nodeType ?? null)
+        setConnectedNode(baseUrl)
+      })
       .catch(() => setNodeType(null))
   }, [])
 
   useEffect(() => {
-    if (!NODE_API_URL) return
+    if (!hasNodeApi()) return
     setLoading(true)
     Promise.all([fetchOrderbook(), fetchTrades(), account ? fetchMyOrders() : Promise.resolve()]).finally(() =>
       setLoading(false)
@@ -177,7 +194,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
         expiresAt: 0,
         signature: sigHex,
       }
-      await apiPost('/api/order', order)
+      await nodePost('/api/order', order)
       setPrice('')
       setAmount('')
       setRefreshAt((x) => x + 1)
@@ -196,7 +213,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
       const signer = await getSigner()
       if (!signer) throw new Error('请先连接钱包')
       const sig = await signer.signMessage(ethers.getBytes(orderId))
-      await apiPost('/api/order/cancel', { orderId, signature: ethers.hexlify(ethers.getBytes(sig)) })
+      await nodePost('/api/order/cancel', { orderId, signature: ethers.hexlify(ethers.getBytes(sig)) })
       setRefreshAt((x) => x + 1)
     } catch (e) {
       setError(formatError(e))
@@ -205,12 +222,12 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
     }
   }
 
-  if (!NODE_API_URL) {
+  if (!hasNodeApi()) {
     return (
       <div className="card vault-section">
         <h2>链下订单簿</h2>
         <p className="hint">
-          请配置节点 API 地址（VITE_NODE_API_URL 或 .env 中 NODE_API_URL），并确保节点已开启 <code>api.listen</code>（如 :8080）。
+          请配置节点 API 地址（VITE_NODE_API_URL 或 .env 中 NODE_API_URL），并确保节点已开启 <code>api.listen</code>（如 :8080）。多节点可用逗号分隔，将按 P2P 方式依次尝试连接。
         </p>
       </div>
     )
@@ -223,6 +240,15 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
         限价单下单/撤单、成交与结算状态（数据来自节点 API）
         {nodeType && (
           <span className="node-type"> · 节点类型：{nodeType === 'match' ? '撮合' : nodeType === 'storage' ? '存储' : '中继'}</span>
+        )}
+        {NODE_API_URLS.length > 1 && (
+          <span className="node-type"> · P2P 多节点（{NODE_API_URLS.length} 个）</span>
+        )}
+        {connectedNode && (
+          <span className="node-type"> · 当前节点：{connectedNode.replace(/^https?:\/\//, '').slice(0, 32)}{(connectedNode.length > 32 ? '…' : '')}</span>
+        )}
+        {(fromCache.orderbook || fromCache.trades || fromCache.myOrders) && (
+          <span className="cache-hint"> · 部分为缓存数据（约 5 分钟内）</span>
         )}
       </p>
 
@@ -249,7 +275,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
                 </tr>
               </thead>
               <tbody>
-                {orderbook.asks.slice(0, 12).map((o) => (
+                {orderbook.asks.slice(0, ORDERBOOK_DISPLAY_DEPTH).map((o) => (
                   <tr key={o.orderId}>
                     <td className="ask-price">{o.price}</td>
                     <td>{o.amount}</td>
@@ -274,7 +300,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
                 </tr>
               </thead>
               <tbody>
-                {orderbook.bids.slice(0, 12).map((o) => (
+                {orderbook.bids.slice(0, ORDERBOOK_DISPLAY_DEPTH).map((o) => (
                   <tr key={o.orderId}>
                     <td className="bid-price">{o.price}</td>
                     <td>{o.amount}</td>
@@ -390,7 +416,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
               </tr>
             </thead>
             <tbody>
-              {trades.slice(0, 15).map((t) => (
+              {trades.slice(0, TRADES_DISPLAY_LIMIT).map((t) => (
                 <tr key={t.tradeId}>
                   <td>{t.price}</td>
                   <td>{t.amount}</td>

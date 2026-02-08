@@ -70,92 +70,87 @@ export class MatchEngine {
   }
 
   /**
+   * 撮合一侧：从 bookSide 中吃单直到 remainingAmount 为 0 或价格不匹配
+   * @param makerSide maker 方向（'sell' = 吃卖盘，'buy' = 吃买盘）
+   */
+  private matchSide(
+    takerOrder: Order,
+    bookSide: Order[],
+    makerSide: 'buy' | 'sell',
+    priceOk: (takerPrice: number, makerPrice: number) => boolean,
+    baseTs: number
+  ): { trades: Trade[]; remainingAmount: number } {
+    const trades: Trade[] = []
+    let remainingAmount = parseFloat(takerOrder.amount)
+
+    while (bookSide.length > 0 && remainingAmount > 0) {
+      const makerOrder = bookSide[0]
+      const makerPrice = parseFloat(makerOrder.price)
+      const takerPrice = parseFloat(takerOrder.price)
+      if (!priceOk(takerPrice, makerPrice)) break
+
+      const makerAmount = parseFloat(makerOrder.amount)
+      const matchAmount = Math.min(remainingAmount, makerAmount)
+
+      trades.push({
+        tradeId: `${takerOrder.orderId}-${baseTs}-${trades.length}`,
+        makerOrderId: makerOrder.orderId,
+        takerOrderId: takerOrder.orderId,
+        maker: makerOrder.trader,
+        taker: takerOrder.trader,
+        pair: takerOrder.pair,
+        price: makerOrder.price,
+        amount: matchAmount.toString(),
+        timestamp: baseTs,
+        makerSide,
+      })
+
+      remainingAmount -= matchAmount
+      makerOrder.amount = (makerAmount - matchAmount).toString()
+
+      if (parseFloat(makerOrder.amount) <= 0) {
+        bookSide.shift()
+        this.orderIdMap.delete(makerOrder.orderId)
+      }
+    }
+    return { trades, remainingAmount }
+  }
+
+  /**
    * 撮合订单
    * Price-Time 优先算法
    * 时间复杂度：O(n) n 为匹配的订单数
    */
   match(takerOrder: Order): Trade[] {
     const book = this.getOrCreateOrderBook(takerOrder.pair)
-    const trades: Trade[] = []
-    
-    let remainingAmount = parseFloat(takerOrder.amount)
-    
+    const baseTs = Date.now()
+
     if (takerOrder.side === 'buy') {
-      // 买单吃卖盘
-      while (book.asks.length > 0 && remainingAmount > 0) {
-        const makerOrder = book.asks[0]
-        const makerPrice = parseFloat(makerOrder.price)
-        const takerPrice = parseFloat(takerOrder.price)
-        
-        // 价格不匹配，停止撮合
-        if (takerPrice < makerPrice) break
-        
-        // 计算成交量
-        const makerAmount = parseFloat(makerOrder.amount)
-        const matchAmount = Math.min(remainingAmount, makerAmount)
-        
-        // 创建成交记录
-        trades.push({
-          tradeId: `${takerOrder.orderId}-${Date.now()}-${trades.length}`,
-          makerOrderId: makerOrder.orderId,
-          takerOrderId: takerOrder.orderId,
-          maker: makerOrder.trader,
-          taker: takerOrder.trader,
-          pair: takerOrder.pair,
-          price: makerOrder.price,
-          amount: matchAmount.toString(),
-          timestamp: Date.now(),
-        })
-        
-        // 更新剩余量
-        remainingAmount -= matchAmount
-        makerOrder.amount = (makerAmount - matchAmount).toString()
-        
-        // 如果 maker 订单完全成交，移除
-        if (parseFloat(makerOrder.amount) <= 0) {
-          book.asks.shift()
-          this.orderIdMap.delete(makerOrder.orderId)
-        }
+      const { trades } = this.matchSide(
+        takerOrder,
+        book.asks,
+        'sell',
+        (takerP, makerP) => takerP >= makerP,
+        baseTs
+      )
+      if (trades.length > 0) {
+        console.log(`✅ 撮合成功: ${trades.length} 笔成交`)
+        this.emitOrderBookUpdate(takerOrder.pair)
       }
-    } else {
-      // 卖单吃买盘（逻辑类似）
-      while (book.bids.length > 0 && remainingAmount > 0) {
-        const makerOrder = book.bids[0]
-        const makerPrice = parseFloat(makerOrder.price)
-        const takerPrice = parseFloat(takerOrder.price)
-        
-        if (takerPrice > makerPrice) break
-        
-        const makerAmount = parseFloat(makerOrder.amount)
-        const matchAmount = Math.min(remainingAmount, makerAmount)
-        
-        trades.push({
-          tradeId: `${takerOrder.orderId}-${Date.now()}-${trades.length}`,
-          makerOrderId: makerOrder.orderId,
-          takerOrderId: takerOrder.orderId,
-          maker: makerOrder.trader,
-          taker: takerOrder.trader,
-          pair: takerOrder.pair,
-          price: makerOrder.price,
-          amount: matchAmount.toString(),
-          timestamp: Date.now(),
-        })
-        
-        remainingAmount -= matchAmount
-        makerOrder.amount = (makerAmount - matchAmount).toString()
-        
-        if (parseFloat(makerOrder.amount) <= 0) {
-          book.bids.shift()
-          this.orderIdMap.delete(makerOrder.orderId)
-        }
-      }
+      return trades
     }
-    
+
+    const { trades } = this.matchSide(
+      takerOrder,
+      book.bids,
+      'buy',
+      (takerP, makerP) => takerP <= makerP,
+      baseTs
+    )
     if (trades.length > 0) {
       console.log(`✅ 撮合成功: ${trades.length} 笔成交`)
       this.emitOrderBookUpdate(takerOrder.pair)
     }
-    
     return trades
   }
 

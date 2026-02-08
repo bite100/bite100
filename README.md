@@ -1,17 +1,50 @@
 # P2P 去中心化交易所
 
-基于区块链与 P2P 资源的去中心化交易所项目。Phase 1 已完成：智能合约部署于 Sepolia，Web 前端支持连钱包、存提、Swap、添加流动性。
+基于区块链与 P2P 网络的去中心化交易所项目。**Phase 3 已完成**：P2P 订单撮合、WebSocket 实时订单簿、链上结算。
 
-- 概念与架构：[docs/概念设计文档.md](docs/概念设计文档.md) · [docs/技术架构说明.md](docs/技术架构说明.md) · [docs/API-接口说明.md](docs/API-接口说明.md)
-- **部署与使用**：[docs/部署与使用说明.md](docs/部署与使用说明.md)（环境、部署顺序、治理、前端）
-- **主网部署**：[docs/主网部署指南.md](docs/主网部署指南.md)（Ethereum mainnet）
-- 合约开发与部署：[contracts/README.md](contracts/README.md)
-- 前端：[frontend/README.md](frontend/README.md)
-- P2P 节点：[node/README.md](node/README.md)（Docker 或 Go 运行，无需额外安装）
+## ✨ 核心特性
+
+- 🌐 **P2P 订单撮合**：libp2p + GossipSub 实现去中心化订单广播
+- 📊 **实时订单簿**：WebSocket 推送，毫秒级更新
+- 🔐 **EIP-712 签名**：订单防伪造，链上可验证
+- ⚡ **链上结算**：Settlement 合约原子交易
+- 🐳 **一键部署**：Docker Compose 完整环境
+- 📱 **移动端适配**：PWA 支持，可添加到主屏幕
+
+## 📚 文档
+
+- **文档导航**：[docs/README.md](docs/README.md)（推荐阅读顺序与分类）
+- **快速开始**：[docs/快速开始.md](docs/快速开始.md)（一键启动）
+- **完整指南**：[docs/P2P节点整合交易撮合指南.md](docs/P2P节点整合交易撮合指南.md)（步步详解）
+- **概念与架构**：[docs/概念设计文档.md](docs/概念设计文档.md) · [docs/技术架构说明.md](docs/技术架构说明.md)
+- **API 接口**：[docs/API-接口说明.md](docs/API-接口说明.md)
+- **部署指南**：[docs/部署与使用说明.md](docs/部署与使用说明.md) · [docs/主网部署指南.md](docs/主网部署指南.md)
+- **模块文档**：[contracts/README.md](contracts/README.md) · [frontend/README.md](frontend/README.md) · [node/README.md](node/README.md)
 
 ---
 
-## Windows 客户端（像 YouTube 一样安装即用）
+## 🚀 快速开始
+
+### 一键启动（推荐）
+
+**Windows**：
+```powershell
+.\scripts\start-dev.ps1
+```
+
+**Linux / macOS**：
+```bash
+chmod +x scripts/start-dev.sh
+./scripts/start-dev.sh
+```
+
+启动后访问：http://localhost:5173
+
+详细步骤见 [docs/快速开始.md](docs/快速开始.md)
+
+---
+
+## 💻 Windows 客户端（像 YouTube 一样安装即用）
 
 希望**直接下载安装、双击打开**使用（类似 YouTube 桌面端）的用户：
 

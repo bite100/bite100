@@ -1,0 +1,121 @@
+.orderbook-view {
+  background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  height: 600px;
+  display: flex;
+  flex-direction: column;
+}
+
+.orderbook-view h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.25rem;
+  color: #111827;
+}
+
+.orderbook-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  padding: 0.5rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+}
+
+.orderbook-header span {
+  text-align: right;
+}
+
+.orderbook-header span:first-child {
+  text-align: left;
+}
+
+.asks, .bids {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 200px;
+}
+
+.order-level {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  padding: 0.5rem;
+  font-size: 0.875rem;
+  transition: background 0.2s;
+}
+
+.order-level:hover {
+  background: #f9fafb;
+}
+
+.order-level span {
+  text-align: right;
+}
+
+.order-level span:first-child {
+  text-align: left;
+}
+
+.order-level.ask .price {
+  color: #ef4444;
+  font-weight: 500;
+}
+
+.order-level.bid .price {
+  color: #10b981;
+  font-weight: 500;
+}
+
+.spread {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  margin: 0.5rem 0;
+  font-weight: 600;
+}
+
+.spread .label {
+  color: #6b7280;
+}
+
+.spread .value {
+  color: #111827;
+}
+
+.empty-message {
+  text-align: center;
+  padding: 2rem;
+  color: #9ca3af;
+  font-size: 0.875rem;
+}
+
+/* 滚动条样式 */
+.asks::-webkit-scrollbar,
+.bids::-webkit-scrollbar {
+  width: 6px;
+}
+
+.asks::-webkit-scrollbar-track,
+.bids::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.asks::-webkit-scrollbar-thumb,
+.bids::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.asks::-webkit-scrollbar-thumb:hover,
+.bids::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}

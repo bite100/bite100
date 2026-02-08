@@ -19,6 +19,7 @@ type Server struct {
 	MatchEngine *match.Engine
 	Publish     func(topic string, data []byte) error
 	NodeType    string // storage | relay | match，用于前端展示
+	WSServer    *WSServer // WebSocket 服务器
 }
 
 // OrderbookResponse 订单簿 GET 响应
@@ -33,6 +34,13 @@ func (s *Server) Run(listen string) {
 	if listen == "" {
 		return
 	}
+	
+	// 初始化 WebSocket 服务器
+	if s.WSServer == nil {
+		s.WSServer = NewWSServer()
+		go s.WSServer.Run()
+	}
+	
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/orderbook", s.cors(s.handleOrderbook))
 	mux.HandleFunc("/api/trades", s.cors(s.handleTrades))
@@ -41,8 +49,9 @@ func (s *Server) Run(listen string) {
 	mux.HandleFunc("/api/order/cancel", s.cors(s.handleCancelOrder))
 	mux.HandleFunc("/api/health", s.cors(s.handleHealth))
 	mux.HandleFunc("/api/node", s.cors(s.handleNode))
+	mux.HandleFunc("/ws", s.handleWebSocket)
 	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	log.Printf("[api] 监听 %s", listen)
+	log.Printf("[api] 监听 %s (含 WebSocket)", listen)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[api] 服务错误: %v", err)
@@ -195,6 +204,12 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "publish failed", http.StatusInternalServerError)
 		return
 	}
+	
+	// 广播订单状态到 WebSocket 客户端
+	if s.WSServer != nil {
+		s.WSServer.BroadcastOrderStatus(&o)
+	}
+	
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true,"orderId":"` + o.OrderID + `"}`))
 }
@@ -229,4 +244,24 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("[ws] 升级失败: %v", err)
+		return
+	}
+	
+	client := &WSClient{
+		conn:   conn,
+		send:   make(chan []byte, 256),
+		server: s.WSServer,
+	}
+	
+	s.WSServer.register <- client
+	
+	// 启动读写协程
+	go client.writePump()
+	go client.readPump()
 }

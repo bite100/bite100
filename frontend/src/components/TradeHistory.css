@@ -1,0 +1,95 @@
+.trade-history {
+  background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  height: 600px;
+  display: flex;
+  flex-direction: column;
+}
+
+.trade-history h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1.25rem;
+  color: #111827;
+}
+
+.trade-header {
+  display: grid;
+  grid-template-columns: 80px 1fr 1fr 30px;
+  padding: 0.5rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+}
+
+.trades-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.trade-item {
+  display: grid;
+  grid-template-columns: 80px 1fr 1fr 30px;
+  padding: 0.5rem;
+  font-size: 0.875rem;
+  transition: background 0.2s;
+  align-items: center;
+}
+
+.trade-item:hover {
+  background: #f9fafb;
+}
+
+.trade-item .time {
+  color: #6b7280;
+}
+
+.trade-item .price {
+  color: #111827;
+  font-weight: 500;
+}
+
+.trade-item .amount {
+  color: #6b7280;
+}
+
+.tx-link {
+  text-decoration: none;
+  font-size: 1rem;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.tx-link:hover {
+  opacity: 1;
+}
+
+.empty-message {
+  text-align: center;
+  padding: 2rem;
+  color: #9ca3af;
+  font-size: 0.875rem;
+}
+
+/* 滚动条样式 */
+.trades-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.trades-list::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.trades-list::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+.trades-list::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}

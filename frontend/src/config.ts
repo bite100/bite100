@@ -1,6 +1,24 @@
 const network = import.meta.env.VITE_NETWORK ?? 'sepolia' // sepolia | mainnet | polygon
-/** 节点 API 根地址（Phase 3.5 订单簿/下单/撤单/成交），空则订单簿功能不可用 */
-export const NODE_API_URL = (import.meta.env.VITE_NODE_API_URL ?? '').replace(/\/$/, '')
+/** 节点 API 根地址（单节点时使用）；多节点时取第一个，实际请求由 nodeClient 按列表依次尝试 */
+const _raw = (import.meta.env.VITE_NODE_API_URL ?? '').trim()
+export const NODE_API_URL = _raw.split(',')[0]?.replace(/\/$/, '') ?? ''
+/** 节点 API 列表（P2P 多节点：逗号分隔多个 URL，请求时依次尝试直至成功） */
+export const NODE_API_URLS: string[] = _raw
+  ? _raw.split(',').map((u) => u.trim().replace(/\/$/, '')).filter(Boolean)
+  : []
+
+// P2P 配置（客户端 JS-libp2p + 可选 Go 节点桥接）
+export const P2P_CONFIG = {
+  /** WebSocket 地址（连接 Go 节点时用；纯客户端 P2P 可留空） */
+  WS_URL: import.meta.env.VITE_P2P_WS_URL || 'ws://localhost:8080/ws',
+  /** Go 节点 API 地址（可选后备；不设则纯浏览器/Electron 直连） */
+  API_URL: import.meta.env.VITE_P2P_API_URL || 'http://localhost:8080',
+  /** Bootstrap 节点 multiaddr 列表（逗号分隔，用于 DHT 发现；可选） */
+  BOOTSTRAP_PEERS: (import.meta.env.VITE_P2P_BOOTSTRAP ?? '')
+    .split(',')
+    .map((u: string) => u.trim())
+    .filter(Boolean),
+}
 
 // 网络配置
 export const CHAIN_ID = network === 'mainnet' ? 1 : network === 'polygon' ? 137 : 11155111
@@ -93,4 +111,11 @@ export const CONTRIBUTOR_REWARD_ABI = [
   'function claimable(string calldata period, address token, address account) view returns (uint256)',
   'function claimed(bytes32 periodId, address token, address account) view returns (uint256)',
   'function claimReward(string calldata period, address token)',
+] as const
+
+/** Settlement 合约：链下撮合后调用 settleTrade 上链结算（需 owner/relayer） */
+export const SETTLEMENT_ABI = [
+  'function settleTrade(address maker, address taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 gasReimburseIn, uint256 gasReimburseOut)',
+  'event TradeSettled(address indexed maker, address indexed taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 feeAmount)',
+  'event TradeSettledWithGasReimburse(address indexed maker, address indexed taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 feeAmount, uint256 gasReimburseIn, uint256 gasReimburseOut, address indexed gasRecipient)',
 ] as const

@@ -18,6 +18,8 @@ export interface StoredOrder extends Order {
   filledAmount: string
   createdAt: number
   updatedAt: number
+  /** 过期时间戳（毫秒）；恢复订单簿时过滤已过期 */
+  expiresAt?: number
 }
 
 // 撮合记录
@@ -74,13 +76,17 @@ export class OrderStorage {
   /**
    * 保存新订单
    */
+  /** 默认订单有效期为 24 小时（可被 order.expiresAt 覆盖） */
   static async saveOrder(order: Order): Promise<void> {
+    const now = Date.now()
+    const defaultExpiry = 24 * 60 * 60 * 1000 // 24h
     const storedOrder: StoredOrder = {
       ...order,
       status: 'pending',
       filledAmount: '0',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: order.expiresAt ?? now + defaultExpiry,
     }
     
     await db.orders.put(storedOrder)
@@ -131,22 +137,33 @@ export class OrderStorage {
     return await query.reverse().sortBy('createdAt')
   }
 
+  /** 是否为活跃且未过期订单 */
+  static isActiveOrder(order: StoredOrder, now = Date.now()): boolean {
+    return (
+      (order.status === 'pending' || order.status === 'partial') &&
+      (!order.expiresAt || order.expiresAt > now)
+    )
+  }
+
   /**
-   * 获取交易对的活跃订单
+   * 获取交易对的活跃订单（排除已过期）
    */
   static async getActiveOrders(pair: string): Promise<StoredOrder[]> {
+    const now = Date.now()
     return await db.orders
       .where('pair').equals(pair)
-      .and(order => order.status === 'pending' || order.status === 'partial')
+      .and((order) => OrderStorage.isActiveOrder(order, now))
       .sortBy('createdAt')
   }
 
   /**
    * 获取所有活跃订单（任意交易对，用于节点启动时恢复订单簿）
+   * 排除已过期订单（expiresAt 过滤）
    */
   static async getAllActiveOrders(): Promise<StoredOrder[]> {
+    const now = Date.now()
     return await db.orders
-      .filter(order => order.status === 'pending' || order.status === 'partial')
+      .filter((order) => OrderStorage.isActiveOrder(order, now))
       .sortBy('createdAt')
   }
 
@@ -162,7 +179,8 @@ export class OrderStorage {
    * 清理旧订单（保留最近 N 天）
    */
   static async cleanupOldOrders(daysToKeep = 30): Promise<number> {
-    const cutoffTime = Date.now() - daysToKeep * 24 * 60 * 60 * 1000
+    const now = Date.now()
+    const cutoffTime = now - daysToKeep * 24 * 60 * 60 * 1000
     
     const oldOrders = await db.orders
       .where('createdAt').below(cutoffTime)
@@ -171,8 +189,22 @@ export class OrderStorage {
     
     await db.orders.bulkDelete(oldOrders.map(o => o.orderId))
     
-    console.log(`🧹 已清理 ${oldOrders.length} 个旧订单`)
-    return oldOrders.length
+    // 过期未成交订单：pending/partial 且 expiresAt < now
+    const expired = await db.orders
+      .filter(
+        (o) =>
+          (o.status === 'pending' || o.status === 'partial') &&
+          o.expiresAt != null &&
+          o.expiresAt < now
+      )
+      .toArray()
+    await db.orders.bulkDelete(expired.map(o => o.orderId))
+    
+    const total = oldOrders.length + expired.length
+    if (total > 0) {
+      console.log(`🧹 已清理 ${oldOrders.length} 个旧订单, ${expired.length} 个过期订单`)
+    }
+    return total
   }
 }
 

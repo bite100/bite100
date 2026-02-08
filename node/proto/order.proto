@@ -1,0 +1,51 @@
+syntax = "proto3";
+package p2pexchange;
+
+option go_package = "github.com/P2P-P2P/p2p/node/proto";
+
+// 订单消息
+message Order {
+  string order_id = 1;        // 订单唯一 ID
+  string user_address = 2;    // 用户钱包地址
+  string token_in = 3;        // 卖出代币地址
+  string token_out = 4;       // 买入代币地址
+  string amount_in = 5;       // 卖出数量（字符串，避免精度问题）
+  string amount_out = 6;      // 期望买入数量
+  string price = 7;           // 价格
+  int64 timestamp = 8;        // 时间戳
+  string signature = 9;       // 用户签名（防伪造）
+  OrderType type = 10;        // 订单类型
+  string pair = 11;           // 交易对，如 TKA/TKB
+  string side = 12;           // buy 或 sell
+  int64 expires_at = 13;      // 过期时间戳
+  
+  enum OrderType {
+    LIMIT = 0;   // 限价单
+    MARKET = 1;  // 市价单
+  }
+}
+
+// 取消订单消息
+message CancelOrder {
+  string order_id = 1;
+  string user_address = 2;
+  int64 timestamp = 3;
+  string signature = 4;
+}
+
+// 成交消息
+message Trade {
+  string trade_id = 1;
+  string maker_order_id = 2;
+  string taker_order_id = 3;
+  string maker_address = 4;
+  string taker_address = 5;
+  string token_in = 6;
+  string token_out = 7;
+  string amount_in = 8;
+  string amount_out = 9;
+  int64 timestamp = 10;
+  string tx_hash = 11;  // 链上结算交易哈希
+  string pair = 12;
+  string price = 13;
+}

@@ -78,10 +78,13 @@ export class OrderSubscriber {
         this.matchEngine.addOrder(order)
         const trades = this.matchEngine.match(order)
         if (trades.length > 0) {
-          for (const t of trades) {
-            await this.publisher?.publishTrade(t)
-            if (this.storageEnabled) await saveMatchAndUpdateMaker(t)
-          }
+          await Promise.all(
+            trades.map(async (t) => {
+              await this.publisher?.publishTrade(t)
+              if (this.storageEnabled) await saveMatchAndUpdateMaker(t)
+              window.dispatchEvent(new CustomEvent('match-for-settlement', { detail: t }))
+            })
+          )
         }
       } catch (error) {
         console.error('❌ 处理新订单失败:', error)

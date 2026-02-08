@@ -84,6 +84,14 @@
   font-size: 0.8125rem;
   margin: 0;
 }
+.node-type {
+  color: #71717a;
+  font-size: 0.75rem;
+}
+.cache-hint {
+  color: #a16207;
+  font-size: 0.75rem;
+}
 .input {
   width: 100%;
   padding: 0.625rem 0.75rem;

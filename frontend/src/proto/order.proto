@@ -1,0 +1,22 @@
+syntax = "proto3";
+package dex;
+
+// 与 Go 节点互操作时可选用；前端当前使用 JSON 以减小 bundle
+message Order {
+  string id = 1;
+  string maker = 2;
+  string token_in = 3;
+  string token_out = 4;
+  uint64 amount_in = 5;
+  uint64 min_amount_out = 6;
+  uint64 nonce = 7;
+  uint64 expiry = 8;
+  bytes signature = 9;
+}
+
+message Match {
+  string order_id = 1;
+  string taker = 2;
+  uint64 filled_amount = 3;
+  bytes sig = 4;
+}

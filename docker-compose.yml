@@ -1,11 +1,83 @@
-# P2P 项目 - 节点一键运行（无需安装 Go）
-# 用法: docker compose up node
+# P2P 项目 - 完整部署（节点 + 前端）
+# 用法: docker compose up
 
 services:
-  node:
+  # 撮合节点
+  match-node:
     build:
       context: ./node
       dockerfile: Dockerfile
     ports:
       - "4001:4001"
-    # 节点 A 监听；节点 B 可另起容器加 -connect 参数连接
+      - "8080:8080"
+    environment:
+      - NODE_TYPE=match
+      - API_LISTEN=:8080
+    volumes:
+      - ./node/config.yaml:/app/config.yaml
+      - match-data:/app/data
+    command: ["-config", "/app/config.yaml"]
+    networks:
+      - p2p-network
+
+  # 存储节点
+  storage-node:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    ports:
+      - "4002:4001"
+      - "8081:8080"
+    environment:
+      - NODE_TYPE=storage
+      - API_LISTEN=:8080
+    volumes:
+      - ./node/config.yaml:/app/config.yaml
+      - storage-data:/app/data
+    command: ["-config", "/app/config.yaml", "-port", "4001"]
+    networks:
+      - p2p-network
+    depends_on:
+      - match-node
+
+  # 中继节点
+  relay-node:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    ports:
+      - "4003:4001"
+    environment:
+      - NODE_TYPE=relay
+    volumes:
+      - ./node/config.yaml:/app/config.yaml
+      - relay-data:/app/data
+    command: ["-config", "/app/config.yaml", "-port", "4001"]
+    networks:
+      - p2p-network
+    depends_on:
+      - match-node
+
+  # 前端
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_P2P_WS_URL=ws://match-node:8080/ws
+      - VITE_P2P_API_URL=http://match-node:8080
+    networks:
+      - p2p-network
+    depends_on:
+      - match-node
+
+volumes:
+  match-data:
+  storage-data:
+  relay-data:
+
+networks:
+  p2p-network:
+    driver: bridge

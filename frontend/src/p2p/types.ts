@@ -7,6 +7,8 @@ export interface Order {
   amount: string
   timestamp: number
   signature: string
+  /** 过期时间戳（毫秒），未设则永不过期；加载/恢复时过滤已过期订单 */
+  expiresAt?: number
 }
 
 export interface CancelRequest {
@@ -25,6 +27,8 @@ export interface Trade {
   amount: string
   timestamp: number
   txHash?: string
+  /** maker 方向（用于链上 settleTrade：tokenIn = maker 卖出） */
+  makerSide?: 'buy' | 'sell'
 }
 
 export const TOPICS = {
