@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { Contract, BrowserProvider } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig } from '../config/chains'
-import { getProvider, withSigner, formatTokenAmount, formatError } from '../utils'
+import { getProvider, withSigner, formatTokenAmount, formatError, debug } from '../utils'
 import { ERC20_ABI } from '../config'
 import './CrossChainBridge.css'
 

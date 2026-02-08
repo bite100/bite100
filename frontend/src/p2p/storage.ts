@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie'
 import { Order, Trade } from './types'
+import { debug } from '../utils'
 
 /**
  * 分层数据存储方案
@@ -90,7 +91,7 @@ export class OrderStorage {
     }
     
     await db.orders.put(storedOrder)
-    console.log('💾 订单已保存:', order.orderId)
+    debug.log('💾 订单已保存:', order.orderId)
   }
 
   /**
@@ -111,7 +112,7 @@ export class OrderStorage {
     }
     
     await db.orders.update(orderId, updates)
-    console.log('📝 订单状态已更新:', orderId, status)
+    debug.log('📝 订单状态已更新:', orderId, status)
   }
 
   /**
@@ -172,7 +173,7 @@ export class OrderStorage {
    */
   static async deleteOrder(orderId: string): Promise<void> {
     await db.orders.delete(orderId)
-    console.log('🗑️ 订单已删除:', orderId)
+    debug.log('🗑️ 订单已删除:', orderId)
   }
 
   /**
@@ -202,7 +203,7 @@ export class OrderStorage {
     
     const total = oldOrders.length + expired.length
     if (total > 0) {
-      console.log(`🧹 已清理 ${oldOrders.length} 个旧订单, ${expired.length} 个过期订单`)
+      debug.log(`🧹 已清理 ${oldOrders.length} 个旧订单, ${expired.length} 个过期订单`)
     }
     return total
   }
@@ -217,7 +218,7 @@ export class MatchStorage {
    */
   static async saveMatch(match: Match): Promise<void> {
     await db.matches.put(match)
-    console.log('💾 撮合记录已保存:', match.matchId)
+    debug.log('💾 撮合记录已保存:', match.matchId)
   }
 
   /**
@@ -225,7 +226,7 @@ export class MatchStorage {
    */
   static async updateMatchTxHash(matchId: string, txHash: string): Promise<void> {
     await db.matches.update(matchId, { txHash })
-    console.log('📝 撮合交易哈希已更新:', matchId, txHash)
+    debug.log('📝 撮合交易哈希已更新:', matchId, txHash)
   }
 
   /**
@@ -264,7 +265,7 @@ export async function saveMatchAndUpdateMaker(trade: Trade, txHash?: string): Pr
     txHash,
   }
   await db.matches.put(match)
-  console.log('💾 撮合记录已保存:', match.matchId)
+  debug.log('💾 撮合记录已保存:', match.matchId)
 
   const maker = await db.orders.get(trade.makerOrderId)
   if (!maker) return
@@ -283,7 +284,7 @@ export class TradeStorage {
    */
   static async saveTrade(trade: OnChainTrade): Promise<void> {
     await db.trades.put(trade)
-    console.log('💾 链上成交已保存:', trade.tradeId)
+    debug.log('💾 链上成交已保存:', trade.tradeId)
   }
 
   /**
@@ -291,7 +292,7 @@ export class TradeStorage {
    */
   static async saveTrades(trades: OnChainTrade[]): Promise<void> {
     await db.trades.bulkPut(trades)
-    console.log(`💾 批量保存 ${trades.length} 条链上成交`)
+    debug.log(`💾 批量保存 ${trades.length} 条链上成交`)
   }
 
   /**
@@ -332,7 +333,7 @@ export class TradeStorage {
    */
   static async confirmTrade(tradeId: string): Promise<void> {
     await db.trades.update(tradeId, { confirmed: true })
-    console.log('✅ 成交已确认:', tradeId)
+    debug.log('✅ 成交已确认:', tradeId)
   }
 
   /**
@@ -347,7 +348,7 @@ export class TradeStorage {
     
     await db.trades.bulkDelete(oldTrades.map(t => t.tradeId))
     
-    console.log(`🧹 已清理 ${oldTrades.length} 条旧成交`)
+    debug.log(`🧹 已清理 ${oldTrades.length} 条旧成交`)
     return oldTrades.length
   }
 }
@@ -362,7 +363,7 @@ export class DatabaseManager {
   static async init(): Promise<void> {
     try {
       await db.open()
-      console.log('✅ 数据库已初始化')
+      debug.log('✅ 数据库已初始化')
     } catch (error) {
       console.error('❌ 数据库初始化失败:', error)
       throw error
@@ -395,7 +396,7 @@ export class DatabaseManager {
       TradeStorage.cleanupOldTrades(daysToKeep * 3), // 成交保留更久
     ])
     
-    console.log(`🧹 清理完成: ${orders} 个订单, ${trades} 条成交`)
+    debug.log(`🧹 清理完成: ${orders} 个订单, ${trades} 条成交`)
   }
 
   /**
@@ -435,7 +436,7 @@ export class DatabaseManager {
       }
     })
     
-    console.log('✅ 数据导入完成')
+    debug.log('✅ 数据导入完成')
   }
 
   /**
@@ -448,7 +449,7 @@ export class DatabaseManager {
       await db.trades.clear()
     })
     
-    console.log('🗑️ 所有数据已清空')
+    debug.log('🗑️ 所有数据已清空')
   }
 
   /**
@@ -456,7 +457,7 @@ export class DatabaseManager {
    */
   static async close(): Promise<void> {
     await db.close()
-    console.log('📦 数据库已关闭')
+    debug.log('📦 数据库已关闭')
   }
 }
 

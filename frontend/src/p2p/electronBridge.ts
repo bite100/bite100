@@ -7,15 +7,7 @@ import { OrderStorage, TradeStorage, saveMatchAndUpdateMaker } from './storage'
 import { MatchEngine } from './matchEngine'
 import type { OrderPublisher } from './orderPublisher'
 
-declare global {
-  interface Window {
-    electronP2P?: {
-      send: (topic: string, data: string) => Promise<void>
-      onMessage: (cb: (msg: { topic: string; data?: string }) => void) => void
-      isAvailable?: boolean
-    }
-  }
-}
+// 类型定义已移至 src/types/electron.d.ts
 
 export function isBridgeAvailable(): boolean {
   return typeof window !== 'undefined' && !!window.electronP2P?.isAvailable

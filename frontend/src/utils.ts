@@ -3,6 +3,14 @@ import { BrowserProvider, type Eip1193Provider, type Signer } from 'ethers'
 const WIN = typeof window !== 'undefined' ? (window as unknown as { ethereum?: Eip1193Provider }) : null
 
 export function getEthereum(): Eip1193Provider | null {
+  // 在 Electron 中，等待扩展注入完成
+  if (isElectron() && typeof window !== 'undefined') {
+    // 直接访问 window.ethereum（扩展会注入）
+    const eth = (window as any).ethereum
+    if (eth) {
+      return eth as Eip1193Provider
+    }
+  }
   return WIN?.ethereum ?? null
 }
 
@@ -10,6 +18,33 @@ export function getEthereum(): Eip1193Provider | null {
 export function isElectron(): boolean {
   return typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron')
 }
+
+/** 浏览器版本 URL */
+export const BROWSER_APP_URL = 'https://p2p-p2p.github.io/p2p/'
+
+/**
+ * 在 Electron 环境中打开浏览器版本
+ * @returns 是否成功打开浏览器
+ */
+export async function openBrowserVersion(): Promise<boolean> {
+  if (!isElectron()) {
+    return false
+  }
+  
+  try {
+    const electronUtils = window.electronUtils
+    if (electronUtils && typeof electronUtils.openExternal === 'function') {
+      debug.log('🌐 正在打开浏览器版本...')
+      const result = await electronUtils.openExternal(BROWSER_APP_URL)
+      return result?.success === true
+    }
+  } catch (err) {
+    debug.error('打开浏览器失败:', err)
+  }
+  
+  return false
+}
+
 
 export function getProvider(): BrowserProvider | null {
   const ethereum = getEthereum()
@@ -95,3 +130,11 @@ export const CACHE_KEYS = {
   SWAP_PREVIEW: 'p2p_swap_',
 } as const
 export const CACHE_TTL = { BALANCE: 20000, RESERVES: 15000, SWAP_PREVIEW: 10000 }
+
+/** 调试日志工具（仅在开发环境输出） */
+const isDev = import.meta.env.DEV || import.meta.env.MODE === 'development'
+export const debug = {
+  log: (...args: unknown[]) => isDev && console.log(...args),
+  error: (...args: unknown[]) => console.error(...args), // 错误始终输出
+  warn: (...args: unknown[]) => isDev && console.warn(...args),
+}

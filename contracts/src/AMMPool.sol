@@ -140,9 +140,8 @@ contract AMMPool {
 
     /// @notice 查询流动性提供者的流动性数量
     function getLiquidityAmount(address provider) external view returns (uint256) {
-        LiquidityProvider memory p = liquidityProviders[provider];
-        // 简化：使用 Token0 数量作为流动性数量
-        return p.currentLiquidity0;
+        // 简化：使用 Token0 数量作为流动性数量（直接读取，避免复制整个结构体）
+        return liquidityProviders[provider].currentLiquidity0;
     }
 
     /// @notice 交换：转入 tokenIn 数量 amountIn，获得 tokenOut（扣 0.01% 手续费，最高等值 1 美元）

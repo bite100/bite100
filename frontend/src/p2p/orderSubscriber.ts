@@ -4,6 +4,8 @@ import { Order, CancelRequest, Trade, TOPICS } from './types'
 import { MatchEngine } from './matchEngine'
 import { OrderPublisher } from './orderPublisher'
 import { OrderStorage, TradeStorage, saveMatchAndUpdateMaker } from './storage'
+import { verifyOrderSignature, verifyCancelOrderSignature } from '../services/orderVerification'
+import { debug } from '../utils'
 
 /** Gossipsub 消息：detail 含 topic 与 data */
 interface PubSubMessageDetail {
@@ -47,7 +49,7 @@ export class OrderSubscriber {
     await this.subscribeOrderCancel()
     await this.subscribeTradeExecuted()
     
-    console.log('✅ 订单订阅器已启动')
+    debug.log('✅ 订单订阅器已启动')
   }
 
   /**
@@ -58,7 +60,7 @@ export class OrderSubscriber {
       unsubscribe()
     }
     this.subscriptions.clear()
-    console.log('🛑 订单订阅器已停止')
+    debug.log('🛑 订单订阅器已停止')
   }
 
   /**
@@ -73,7 +75,15 @@ export class OrderSubscriber {
       try {
         const data = uint8ArrayToString(evt.detail.data)
         const order: Order = JSON.parse(data)
-        console.log('📥 收到新订单:', order.orderId)
+        
+        // 安全：验证订单签名（防止订单伪造）
+        const isValid = await verifyOrderSignature(order)
+        if (!isValid) {
+          debug.error('❌ 订单签名验证失败:', order.orderId, order.trader)
+          return
+        }
+        
+        debug.log('📥 收到新订单:', order.orderId)
         if (this.storageEnabled) await OrderStorage.saveOrder(order)
         this.matchEngine.addOrder(order)
         const trades = this.matchEngine.match(order)
@@ -110,7 +120,19 @@ export class OrderSubscriber {
       try {
         const data = uint8ArrayToString(evt.detail.data)
         const cancel: CancelRequest = JSON.parse(data)
-        console.log('📥 收到撤单:', cancel.orderId)
+        
+        // 安全：验证撤单签名
+        // 从订单簿或存储中获取订单以获取 trader 地址
+        const order = this.matchEngine.getOrder(cancel.orderId)
+        if (order) {
+          const isValid = await verifyCancelOrderSignature(cancel, order.trader)
+          if (!isValid) {
+            debug.error('❌ 撤单签名验证失败:', cancel.orderId)
+            return
+          }
+        }
+        
+        debug.log('📥 收到撤单:', cancel.orderId)
         this.matchEngine.removeOrder(cancel.orderId)
         if (this.storageEnabled) await OrderStorage.updateOrderStatus(cancel.orderId, 'cancelled')
       } catch (error) {
@@ -137,7 +159,7 @@ export class OrderSubscriber {
       try {
         const data = uint8ArrayToString(evt.detail.data)
         const trade: Trade = JSON.parse(data)
-        console.log('📥 收到成交:', trade.tradeId)
+        debug.log('📥 收到成交:', trade.tradeId)
         if (this.storageEnabled) {
           await TradeStorage.saveTrade({
             ...trade,

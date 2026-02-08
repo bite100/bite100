@@ -1,4 +1,5 @@
 import { Order, Trade } from './types'
+import { debug } from '../utils'
 
 /**
  * 简化的撮合引擎
@@ -134,7 +135,7 @@ export class MatchEngine {
         baseTs
       )
       if (trades.length > 0) {
-        console.log(`✅ 撮合成功: ${trades.length} 笔成交`)
+        debug.log(`✅ 撮合成功: ${trades.length} 笔成交`)
         this.emitOrderBookUpdate(takerOrder.pair)
       }
       return trades
@@ -148,10 +149,29 @@ export class MatchEngine {
       baseTs
     )
     if (trades.length > 0) {
-      console.log(`✅ 撮合成功: ${trades.length} 笔成交`)
+      debug.log(`✅ 撮合成功: ${trades.length} 笔成交`)
       this.emitOrderBookUpdate(takerOrder.pair)
     }
     return trades
+  }
+
+  /**
+   * 根据订单 ID 获取订单
+   */
+  getOrder(orderId: string): Order | null {
+    const pair = this.orderIdMap.get(orderId)
+    if (!pair) return null
+    
+    const book = this.orderbooks.get(pair)
+    if (!book) return null
+    
+    // 在买盘中查找
+    const bidOrder = book.bids.find(o => o.orderId === orderId)
+    if (bidOrder) return bidOrder
+    
+    // 在卖盘中查找
+    const askOrder = book.asks.find(o => o.orderId === orderId)
+    return askOrder || null
   }
 
   /**
@@ -207,6 +227,6 @@ export class MatchEngine {
   clear(): void {
     this.orderbooks.clear()
     this.orderIdMap.clear()
-    console.log('🧹 订单簿已清空')
+    debug.log('🧹 订单簿已清空')
   }
 }

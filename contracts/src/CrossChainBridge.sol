@@ -2,13 +2,8 @@
 pragma solidity ^0.8.0;
 
 import "@layerzerolabs/oapp-evm/contracts/oapp/OApp.sol";
-import "@layerzerolabs/oapp-evm/contracts/oapp/interfaces/IOAppCore.sol";
-import "@layerzerolabs/oapp-evm/contracts/oapp/interfaces/IOAppReceiver.sol";
-import "@layerzerolabs/oapp-evm/contracts/oapp/interfaces/IOAppOptionsBuilder.sol";
-import "@layerzerolabs/oapp-evm/contracts/oft/interfaces/IOFT.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @title CrossChainBridge 跨链资产桥接合约
 /// @notice 使用 LayerZero OApp 实现跨链资产转移
@@ -129,9 +124,6 @@ contract CrossChainBridge is OApp {
         });
 
         bytes memory payload = abi.encode(request);
-
-        // 估算费用
-        MessagingFee memory fee_quote = _quote(uint32(dstChainId), payload, options, false);
         
         // 发送跨链消息
         _lzSend(
@@ -147,7 +139,7 @@ contract CrossChainBridge is OApp {
             abi.encodePacked(msg.sender, token, amount, dstChainId, block.timestamp, block.number)
         );
 
-        emit BridgeInitiated(requestId, msg.sender, token, amount, dstChainId, 0);
+        emit BridgeInitiated(requestId, msg.sender, token, amount, dstChainId);
     }
 
     /// @notice 接收跨链消息（解锁/铸造资产）
@@ -173,8 +165,8 @@ contract CrossChainBridge is OApp {
                 request.token,
                 request.amount,
                 _origin.srcEid,
-                request.nonce,
-                request.timestamp
+                request.timestamp,
+                _guid
             )
         );
 
@@ -200,15 +192,15 @@ contract CrossChainBridge is OApp {
     }
 
     /// @notice 获取跨链费用估算
-    /// @param dstChainId 目标链 ID
+    /// @param dstChainId 目标链 ID（LayerZero EID，uint32）
     /// @param payload 消息内容
     /// @param options 跨链选项
     function quoteBridgeFee(
-        uint16 dstChainId,
+        uint32 dstChainId,
         bytes calldata payload,
         bytes calldata options
     ) external view returns (uint256 nativeFee, uint256 lzTokenFee) {
-        MessagingFee memory fee = _quote(uint32(dstChainId), payload, options, false);
+        MessagingFee memory fee = _quote(dstChainId, payload, options, false);
         return (fee.nativeFee, fee.lzTokenFee);
     }
 

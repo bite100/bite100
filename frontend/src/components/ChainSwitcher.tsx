@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { BrowserProvider } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig, getAddChainParams, isChainSupported, DEFAULT_CHAIN_ID } from '../config/chains'
+import { debug } from '../utils'
 import './ChainSwitcher.css'
 
 interface ChainSwitcherProps {
@@ -53,7 +54,7 @@ export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherPr
         }
       }
     } catch (error: any) {
-      console.error('切换链失败:', error)
+      debug.error('切换链失败:', error)
       alert(`切换链失败: ${error.message || '未知错误'}`)
     } finally {
       setSwitching(false)

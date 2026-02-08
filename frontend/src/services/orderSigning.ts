@@ -40,7 +40,7 @@ export async function signOrder(
   signer: ethers.Signer
 ): Promise<string> {
   // 使用 EIP-712 签名
-  const signature = await signer._signTypedData(DOMAIN, ORDER_TYPES, order)
+  const signature = await signer.signTypedData(DOMAIN, ORDER_TYPES, order)
   return signature
 }
 
@@ -58,7 +58,7 @@ export async function signCancelOrder(
     ],
   }
   
-  const signature = await signer._signTypedData(DOMAIN, CANCEL_TYPES, {
+  const signature = await signer.signTypedData(DOMAIN, CANCEL_TYPES, {
     orderId,
     userAddress,
     timestamp,

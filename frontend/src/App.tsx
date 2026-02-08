@@ -10,7 +10,7 @@ import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorDisplay } from './components/ErrorDisplay'
 import { ChainSwitcher } from './components/ChainSwitcher'
 import { useChain } from './hooks/useChain'
-import { getEthereum, getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, isElectron, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL } from './utils'
+import { getEthereum, getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, isElectron, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL, debug, openBrowserVersion, BROWSER_APP_URL } from './utils'
 import './App.css'
 
 /** 治理模块错误边界：治理区报错时不影响整页 */
@@ -112,25 +112,77 @@ function App() {
   useEffect(() => { setStored('swapTokenIn', swapTokenIn) }, [swapTokenIn])
 
   const connectWallet = useCallback(async () => {
+    debug.log('🔗 开始连接钱包...')
     setError(null)
+    setLoading(true)
+    
     try {
+      const isElectronEnv = isElectron()
+      debug.log('🔍 检查环境... 是否 Electron:', isElectronEnv)
+      
+      // 在 Electron 中，给扩展一些时间注入
+      if (isElectronEnv) {
+        debug.log('⏳ 等待 MetaMask 扩展注入...')
+        // 等待扩展注入（最多等待 2 秒）
+        for (let i = 0; i < 4; i++) {
+          const ethereum = getEthereum()
+          if (ethereum) {
+            debug.log('✅ MetaMask 扩展已检测到')
+            break
+          }
+          debug.log(`   等待中... (${i + 1}/4)`)
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+      }
+      
       const ethereum = getEthereum()
+      debug.log('🔍 检查 window.ethereum:', typeof window !== 'undefined' ? typeof (window as any).ethereum : 'window undefined')
+      debug.log('🔍 getEthereum() 结果:', ethereum ? '存在' : '不存在')
+      
       if (!ethereum) {
-        setError(isElectron()
-          ? '桌面版需先在 Chrome 或 Edge 中安装 MetaMask。若已安装仍无法连接，请使用浏览器打开 https://p2p-p2p.github.io/p2p/'
-          : '请安装 MetaMask 或其他钱包扩展')
+        let errorMsg = '请安装 MetaMask 或其他钱包扩展'
+        
+        if (isElectronEnv) {
+          // 检查 window.ethereum 是否存在（调试用）
+          const hasEthereum = typeof window !== 'undefined' && typeof (window as any).ethereum !== 'undefined'
+          debug.error('❌ MetaMask 未检测到')
+          debug.error('   调试信息: window.ethereum', hasEthereum ? '已存在' : '不存在')
+          
+          // 尝试打开浏览器版本
+          const browserOpened = await openBrowserVersion()
+          if (browserOpened) {
+            errorMsg = `桌面版无法检测到 MetaMask，已为您打开浏览器版本。\n\n浏览器版本地址：${BROWSER_APP_URL}\n\n如果浏览器版本也无法连接，请确保：\n1. 已在浏览器中安装 MetaMask\n2. MetaMask 已启用`
+          } else {
+            errorMsg = `桌面版无法检测到 MetaMask。\n\n请使用浏览器打开：${BROWSER_APP_URL}\n\n请确保：\n1. 已在 Chrome 或 Edge 中安装 MetaMask\n2. MetaMask 已启用\n3. 重启桌面应用\n\n调试信息：window.ethereum ${hasEthereum ? '已存在' : '不存在'}`
+          }
+        }
+        
+        setError(errorMsg)
         return
       }
+      
+      debug.log('✅ 开始请求账户...')
       const provider = getProvider()
       if (!provider) {
-        setError(isElectron()
-          ? '桌面版需先在 Chrome 或 Edge 中安装 MetaMask。若已安装仍无法连接，请使用浏览器打开 https://p2p-p2p.github.io/p2p/'
-          : '请安装 MetaMask 或其他钱包扩展')
+        let errorMsg = '请安装 MetaMask 或其他钱包扩展'
+        
+        if (isElectronEnv) {
+          // 尝试打开浏览器版本
+          const browserOpened = await openBrowserVersion()
+          if (browserOpened) {
+            errorMsg = `桌面版无法创建 Provider，已为您打开浏览器版本。\n\n浏览器版本地址：${BROWSER_APP_URL}`
+          } else {
+            errorMsg = `桌面版需先在 Chrome 或 Edge 中安装 MetaMask。若已安装仍无法连接，请使用浏览器打开 ${BROWSER_APP_URL}`
+          }
+        }
+        
+        setError(errorMsg)
         return
       }
       const accounts = (await ethereum.request({ method: 'eth_requestAccounts' })) as string[]
       if (!accounts.length) {
         setError('未获取到账户')
+        setLoading(false)
         return
       }
       // 检查当前链，如果不支持则提示切换
@@ -144,10 +196,16 @@ function App() {
         // 不阻止连接，但提示用户切换
       }
       setAccount(accounts[0])
+      debug.log('✅ 账户已连接:', accounts[0])
+      
       const balance = await provider.getBalance(accounts[0])
       setEthBalance(balance ? (Number(balance) / 1e18).toFixed(6) : '0')
+      debug.log('✅ 余额已获取:', balance ? (Number(balance) / 1e18).toFixed(6) : '0')
     } catch (e) {
+      debug.error('❌ 连接钱包失败:', e)
       setError(formatError(e))
+    } finally {
+      setLoading(false)
     }
   }, [])
 
@@ -471,13 +529,45 @@ function App() {
 
       {!account ? (
         <>
-          <button className="btn primary" onClick={connectWallet}>
-            连接钱包
+          <button 
+            className="btn primary" 
+            onClick={async (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              debug.log('🖱️ 点击连接钱包按钮')
+              if (loading) {
+                debug.log('⚠️ 正在连接中，忽略重复点击')
+                return
+              }
+              
+              // 如果是 Electron 环境且无法检测到钱包，直接打开浏览器
+              if (isElectron()) {
+                const ethereum = getEthereum()
+                if (!ethereum) {
+                  debug.log('🌐 Electron 环境未检测到钱包，打开浏览器版本')
+                  const browserOpened = await openBrowserVersion()
+                  if (browserOpened) {
+                    setError(`桌面版无法检测到 MetaMask，已为您打开浏览器版本。\n\n浏览器版本地址：${BROWSER_APP_URL}`)
+                    return
+                  }
+                }
+              }
+              
+              connectWallet().catch(err => {
+                debug.error('连接钱包异常:', err)
+                setError(formatError(err))
+                setLoading(false)
+              })
+            }}
+            disabled={loading}
+            type="button"
+          >
+            {loading ? '连接中...' : '连接钱包'}
           </button>
           {isElectron() && (
             <p className="hint" style={{ marginTop: '0.5rem' }}>
               桌面版需先在 Chrome 或 Edge 中安装 MetaMask，本应用会自动加载。若无法连接，请使用浏览器打开{' '}
-              <a href="https://p2p-p2p.github.io/p2p/" target="_blank" rel="noopener noreferrer">p2p-p2p.github.io/p2p</a>。
+              <a href={BROWSER_APP_URL} target="_blank" rel="noopener noreferrer">p2p-p2p.github.io/p2p</a>。
             </p>
           )}
         </>
@@ -499,86 +589,88 @@ function App() {
           <Navigation activeTab={activeTab} onTabChange={setActiveTab} account={account} />
 
           {(activeTab === 'vault' || activeTab === 'swap') && (
-            <div className="card vault-section">
-            <h2>代币与 Vault 余额</h2>
-            <p className="hint">输入 ERC20 代币合约地址，或点下方快捷填入。代币地址与 Swap 方向会保存在本机，刷新后仍保留；清除浏览器/缓存会丢失。</p>
-            <div className="input-row">
-              <input
-                type="text"
-                placeholder="0x..."
-                value={tokenAddress}
-                onChange={(e) => { setTokenAddress(e.target.value); setVaultBalance(''); setWalletTokenBalance('') }}
-                className="input"
-              />
-            </div>
-            <div className="quick-tokens">
-              <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token0); setVaultBalance(''); setWalletTokenBalance('') } }}>Token A (TKA)</button>
-              <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token1); setVaultBalance(''); setWalletTokenBalance('') } }}>Token B (TKB)</button>
-            </div>
-            <button
-              className="btn secondary"
-              onClick={fetchBalances}
-              disabled={loading || !isValidAddress(tokenAddr)}
-            >
-              {loading ? '查询中…' : '查询余额'}
-            </button>
-            {(vaultBalance !== '' || walletTokenBalance !== '') && !error && (
-              <div className="balances">
-                <div className="row result">
-                  <span className="label">钱包中该代币</span>
-                  <span className="value">{walletTokenBalance}</span>
+            <>
+              <div className="card vault-section">
+                <h2>代币与 Vault 余额</h2>
+                <p className="hint">输入 ERC20 代币合约地址，或点下方快捷填入。代币地址与 Swap 方向会保存在本机，刷新后仍保留；清除浏览器/缓存会丢失。</p>
+                <div className="input-row">
+                  <input
+                    type="text"
+                    placeholder="0x..."
+                    value={tokenAddress}
+                    onChange={(e) => { setTokenAddress(e.target.value); setVaultBalance(''); setWalletTokenBalance('') }}
+                    className="input"
+                  />
                 </div>
-                <div className="row result">
-                  <span className="label">Vault 中该代币</span>
-                  <span className="value">{vaultBalance}</span>
+                <div className="quick-tokens">
+                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token0); setVaultBalance(''); setWalletTokenBalance('') } }}>Token A (TKA)</button>
+                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token1); setVaultBalance(''); setWalletTokenBalance('') } }}>Token B (TKB)</button>
                 </div>
+                <button
+                  className="btn secondary"
+                  onClick={fetchBalances}
+                  disabled={loading || !isValidAddress(tokenAddr)}
+                >
+                  {loading ? '查询中…' : '查询余额'}
+                </button>
+                {(vaultBalance !== '' || walletTokenBalance !== '') && !error && (
+                  <div className="balances">
+                    <div className="row result">
+                      <span className="label">钱包中该代币</span>
+                      <span className="value">{walletTokenBalance}</span>
+                    </div>
+                    <div className="row result">
+                      <span className="label">Vault 中该代币</span>
+                      <span className="value">{vaultBalance}</span>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <div className="card vault-section">
-            <h2>存入 Vault</h2>
-            <p className="hint">先 approve 再 deposit，需有该代币余额</p>
-            <div className="input-row">
-              <input
-                type="text"
-                placeholder="数量"
-                value={depositAmount}
-                onChange={(e) => setDepositAmount(e.target.value)}
-                className="input"
-              />
-              <button type="button" className="btn-max" onClick={handleMaxDeposit}>最大</button>
-            </div>
-            <button
-              className="btn primary"
-              onClick={handleDeposit}
-              disabled={loadingDeposit || !isValidAddress(tokenAddr) || !depositAmount.trim()}
-            >
-              {loadingDeposit ? '处理中…' : '存入'}
-            </button>
-          </div>
+              <div className="card vault-section">
+                <h2>存入 Vault</h2>
+                <p className="hint">先 approve 再 deposit，需有该代币余额</p>
+                <div className="input-row">
+                  <input
+                    type="text"
+                    placeholder="数量"
+                    value={depositAmount}
+                    onChange={(e) => setDepositAmount(e.target.value)}
+                    className="input"
+                  />
+                  <button type="button" className="btn-max" onClick={handleMaxDeposit}>最大</button>
+                </div>
+                <button
+                  className="btn primary"
+                  onClick={handleDeposit}
+                  disabled={loadingDeposit || !isValidAddress(tokenAddr) || !depositAmount.trim()}
+                >
+                  {loadingDeposit ? '处理中…' : '存入'}
+                </button>
+              </div>
 
-          <div className="card vault-section">
-            <h2>从 Vault 提取</h2>
-            <p className="hint">从 Vault 提回钱包，不超过 Vault 中该代币余额</p>
-            <div className="input-row">
-              <input
-                type="text"
-                placeholder="数量"
-                value={withdrawAmount}
-                onChange={(e) => setWithdrawAmount(e.target.value)}
-                className="input"
-              />
-              <button type="button" className="btn-max" onClick={handleMaxWithdraw}>最大</button>
-            </div>
-            <button
-              className="btn secondary"
-              onClick={handleWithdraw}
-              disabled={loadingWithdraw || !isValidAddress(tokenAddr) || !withdrawAmount.trim()}
-            >
-              {loadingWithdraw ? '处理中…' : '提取'}
-            </button>
-          </div>
+              <div className="card vault-section">
+                <h2>从 Vault 提取</h2>
+                <p className="hint">从 Vault 提回钱包，不超过 Vault 中该代币余额</p>
+                <div className="input-row">
+                  <input
+                    type="text"
+                    placeholder="数量"
+                    value={withdrawAmount}
+                    onChange={(e) => setWithdrawAmount(e.target.value)}
+                    className="input"
+                  />
+                  <button type="button" className="btn-max" onClick={handleMaxWithdraw}>最大</button>
+                </div>
+                <button
+                  className="btn secondary"
+                  onClick={handleWithdraw}
+                  disabled={loadingWithdraw || !isValidAddress(tokenAddr) || !withdrawAmount.trim()}
+                >
+                  {loadingWithdraw ? '处理中…' : '提取'}
+                </button>
+              </div>
+            </>
           )}
 
           {activeTab === 'orderbook' && (

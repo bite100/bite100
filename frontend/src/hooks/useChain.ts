@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { BrowserProvider } from 'ethers'
 import { DEFAULT_CHAIN_ID, getChainConfig, isChainSupported } from '../config/chains'
+import { debug } from '../utils'
 
 export function useChain() {
   const [currentChainId, setCurrentChainId] = useState<number | null>(null)
@@ -23,7 +24,7 @@ export function useChain() {
           setCurrentChainId(DEFAULT_CHAIN_ID)
         }
       } catch (error) {
-        console.error('检测链失败:', error)
+        debug.error('检测链失败:', error)
         setCurrentChainId(DEFAULT_CHAIN_ID)
       }
     }

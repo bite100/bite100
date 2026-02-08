@@ -1,0 +1,20 @@
+appId: io.github.p2p-p2p.exchange
+productName: P2P 交易所
+directories:
+  output: release
+files:
+  - dist/**
+  - electron/**
+win:
+  target:
+    - nsis
+  sign: null
+  certificateFile: null
+  certificatePassword: null
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerLanguages:
+    - zh-CN
+    - en-US
+  shortcutName: P2P 交易所

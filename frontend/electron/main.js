@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, session, dialog, ipcMain, shell } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -6,8 +6,12 @@ import WebSocket from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** P2P 桥接：Go 节点 WebSocket 地址（可通过环境变量 P2P_WS_URL 覆盖，如 ws://localhost:9000） */
+/** P2P 模式：'ws' = WebSocket 桥接到 Go 节点，'libp2p' = JS-libp2p TCP（推荐） */
+const P2P_MODE = process.env.P2P_MODE || 'libp2p';
+/** P2P 桥接：Go 节点 WebSocket 地址（P2P_MODE=ws 时使用） */
 const P2P_WS_URL = process.env.P2P_WS_URL || 'ws://localhost:9000';
+/** Bootstrap 节点列表（P2P_MODE=libp2p 时使用） */
+const P2P_BOOTSTRAP = process.env.P2P_BOOTSTRAP ? process.env.P2P_BOOTSTRAP.split(',') : [];
 
 const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
 
@@ -73,12 +77,25 @@ function findMetaMaskPath() {
 
 async function loadMetaMaskExtension(ses) {
   const extPath = findMetaMaskPath();
-  if (!extPath) return;
+  if (!extPath) {
+    console.warn('⚠️ MetaMask 扩展未找到，请确保已在 Chrome 或 Edge 中安装 MetaMask');
+    console.warn('   扩展路径查找位置：');
+    if (process.platform === 'win32') {
+      const localAppData = process.env.LOCALAPPDATA || '';
+      console.warn(`   - ${path.join(localAppData, 'Google', 'Chrome', 'User Data', 'Default', 'Extensions', METAMASK_ID)}`);
+      console.warn(`   - ${path.join(localAppData, 'Microsoft', 'Edge', 'User Data', 'Default', 'Extensions', METAMASK_ID)}`);
+    }
+    return;
+  }
   try {
     const ext = await ses.loadExtension(extPath);
-    console.log('MetaMask extension loaded:', ext?.id || extPath);
+    console.log('✅ MetaMask 扩展已加载:', ext?.id || extPath);
+    console.log('   扩展名称:', ext?.name || '未知');
+    // 等待扩展初始化
+    await new Promise(resolve => setTimeout(resolve, 500));
   } catch (err) {
-    console.warn('Failed to load MetaMask extension:', err.message);
+    console.error('❌ 加载 MetaMask 扩展失败:', err.message);
+    console.error('   错误详情:', err);
   }
 }
 
@@ -103,6 +120,21 @@ function createWindow(ses) {
 
   win.once('ready-to-show', () => win.show());
 
+  // 监听页面加载完成，检查扩展状态
+  win.webContents.on('did-finish-load', () => {
+    // 检查扩展是否已加载
+    ses.getAllExtensions().then(extensions => {
+      const metamask = extensions.find(ext => ext.id === METAMASK_ID || ext.name?.toLowerCase().includes('metamask'));
+      if (metamask) {
+        console.log('✅ MetaMask 扩展在页面中可用:', metamask.name);
+      } else {
+        console.warn('⚠️ MetaMask 扩展未在页面中检测到');
+      }
+    }).catch(err => {
+      console.warn('检查扩展状态失败:', err.message);
+    });
+  });
+
   if (isDev) {
     win.loadURL('http://localhost:5173').catch((err) => {
       console.error('Load dev URL failed:', err);
@@ -125,7 +157,73 @@ function createWindow(ses) {
     }
   }
 
-  startP2PBridge(win);
+  // 根据模式启动 P2P
+  if (P2P_MODE === 'libp2p') {
+    startP2PClient(win);
+  } else {
+    startP2PBridge(win);
+  }
+}
+
+/** 启动 JS-libp2p P2P 客户端（Node.js TCP transport，比 WebSocket 更稳定） */
+async function startP2PClient(win) {
+  try {
+    // 动态导入 P2P 客户端（ESM 模块）
+    const { initP2PClient, stopP2PClient, getP2PNode } = await import('../dist/src/services/p2p-client.js');
+    
+    // 初始化 P2P 客户端
+    const node = await initP2PClient({
+      bootstrapList: P2P_BOOTSTRAP,
+      maxConnections: 100,
+      enableDHTCache: true,
+    });
+
+    console.log('✅ JS-libp2p P2P 客户端已启动');
+    console.log('📍 PeerID:', node.peerId.toString());
+    console.log('🔗 传输协议: TCP (Node.js)');
+
+    // 订阅 GossipSub 主题（与 types.ts 中的 TOPICS 一致）
+    const topics = [
+      '/p2p-exchange/order/new',
+      '/p2p-exchange/order/cancel',
+      '/p2p-exchange/trade/executed',
+    ];
+    for (const topic of topics) {
+      await node.pubsub.subscribe(topic);
+      console.log(`📡 已订阅主题: ${topic}`);
+    }
+
+    // 监听消息
+    node.pubsub.addEventListener('message', (evt) => {
+      const { topic, data } = evt.detail;
+      if (win && !win.isDestroyed() && win.webContents) {
+        win.webContents.send('p2p-message', {
+          topic: topic,
+          data: data.toString(),
+        });
+      }
+    });
+
+    // IPC：发送消息到 P2P 网络
+    ipcMain.handle('p2p-send', async (_event, topic, data) => {
+      try {
+        await node.pubsub.publish(topic, new TextEncoder().encode(data));
+        return { success: true };
+      } catch (err) {
+        console.error('P2P 发送失败:', err);
+        return { success: false, error: err.message };
+      }
+    });
+
+    // 应用退出时停止 P2P 客户端
+    app.on('before-quit', async () => {
+      await stopP2PClient();
+    });
+  } catch (err) {
+    console.error('❌ JS-libp2p P2P 客户端启动失败:', err);
+    console.log('⚠️  回退到 WebSocket 桥接模式');
+    startP2PBridge(win);
+  }
 }
 
 /** 启动 P2P 桥接：main 进程连 Go 节点 WebSocket，renderer 通过 IPC 发/收订单 */
@@ -170,13 +268,36 @@ function startP2PBridge(win) {
   connect();
 }
 
+// 处理打开外部链接
+ipcMain.handle('open-external', async (_event, url) => {
+  if (!url || typeof url !== 'string') {
+    console.error('❌ 无效的 URL:', url);
+    return { success: false, error: 'Invalid URL' };
+  }
+  
+  try {
+    await shell.openExternal(url);
+    console.log('✅ 已打开外部链接:', url);
+    return { success: true };
+  } catch (err) {
+    console.error('❌ 打开外部链接失败:', err);
+    return { success: false, error: err?.message || String(err) };
+  }
+});
+
 app.whenReady().then(async () => {
   const ses = session.fromPartition('persist:main');
+  
+  // 先加载扩展，再创建窗口
   try {
     await loadMetaMaskExtension(ses);
   } catch (err) {
     console.warn('MetaMask load skipped:', err?.message || err);
   }
+  
+  // 等待扩展初始化
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
   createWindow(ses);
 }).catch((err) => {
   console.error('app.whenReady failed:', err);

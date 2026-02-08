@@ -13,3 +13,21 @@ contextBridge.exposeInMainWorld('electronP2P', {
   },
   isAvailable: true,
 });
+
+/**
+ * 暴露调试信息，帮助检查 MetaMask 扩展状态
+ * 扩展会在页面加载后注入 window.ethereum
+ */
+contextBridge.exposeInMainWorld('electronDebug', {
+  checkEthereum: () => {
+    // 这个函数会在 renderer 进程中调用
+    return typeof window !== 'undefined' && typeof window.ethereum !== 'undefined';
+  },
+});
+
+/**
+ * 暴露工具函数，用于打开外部链接
+ */
+contextBridge.exposeInMainWorld('electronUtils', {
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+});

@@ -1,0 +1,49 @@
+===========================================
+Windows 安装包构建说明
+===========================================
+
+【当前状态】
+✅ 前端构建：已完成
+✅ Electron 打包：已完成（win-unpacked 目录）
+⚠️  NSIS 安装包：需要管理员权限
+
+【快速开始 - 管理员权限】
+
+1. 以管理员身份打开 PowerShell
+   （Win+X -> Windows PowerShell (管理员)）
+
+2. 执行以下命令：
+   cd d:\P2P\frontend
+   $env:CSC_IDENTITY_AUTO_DISCOVERY='false'
+   npm run electron:build
+
+3. 等待构建完成（约 2-5 分钟）
+
+4. 安装包位置：
+   frontend\release\P2P 交易所 Setup 0.0.1.exe
+
+【替代方案 - 便携版（无需管理员）】
+
+1. 修改 package.json，将 win.target 改为：
+   "target": ["portable"]
+
+2. 运行：
+   npm run electron:build
+
+3. 输出：
+   frontend\release\P2P 交易所-0.0.1.exe
+
+【推荐方案 - GitHub Actions】
+
+推送到 GitHub 后自动构建，无需本地权限：
+1. git add .
+2. git commit -m "构建安装包"
+3. git push
+4. 在 GitHub Actions 中下载安装包
+
+【当前可用文件】
+
+便携版（已生成，可直接使用）：
+  frontend\release\win-unpacked\P2P 交易所.exe
+
+===========================================
