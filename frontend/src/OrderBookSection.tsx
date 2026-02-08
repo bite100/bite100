@@ -8,6 +8,8 @@ import { NODE_API_URL, NODE_API_URLS } from './config'
 import { formatError } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { nodeGet, nodePost } from './nodeClient'
+import { LoadingSpinner } from './components/LoadingSpinner'
+import { ErrorDisplay } from './components/ErrorDisplay'
 import type { Signer } from 'ethers'
 import './App.css'
 
@@ -259,13 +261,13 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
         </select>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      <ErrorDisplay error={error} onDismiss={() => setError(null)} />
 
       <div className="orderbook-grid">
         <div className="orderbook-panel">
           <h3>卖盘 Asks</h3>
           {loading ? (
-            <p className="hint">加载中…</p>
+            <LoadingSpinner size="small" text="加载中…" />
           ) : orderbook?.asks?.length ? (
             <table className="orderbook-table">
               <thead>
@@ -290,7 +292,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
         <div className="orderbook-panel">
           <h3>买盘 Bids</h3>
           {loading ? (
-            <p className="hint">加载中…</p>
+            <LoadingSpinner size="small" text="加载中…" />
           ) : orderbook?.bids?.length ? (
             <table className="orderbook-table">
               <thead>

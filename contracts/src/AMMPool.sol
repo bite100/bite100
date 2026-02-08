@@ -6,21 +6,36 @@ import "./FeeDistributor.sol";
 
 /// @title AMMPool 简易 AMM 交易池
 /// @notice x*y=k 恒定乘积，0.01% 手续费至 FeeDistributor，每笔最高等值 1 美元（由 feeCapPerToken 配置）
+/// @notice 支持流动性贡献分：节点注入流动性可获得贡献分
 contract AMMPool {
     address public token0;
     address public token1;
     address public feeDistributor;
+    address public contributorReward; // 贡献奖励合约（可选）
     address public owner;
     address public governance;
 
     uint16 public feeBps = 1; // 0.01%
     mapping(address => uint256) public feeCapPerToken;
 
+    /// @notice 流动性提供者记录
+    struct LiquidityProvider {
+        uint256 totalLiquidity0;     // 累计注入的 Token0 数量
+        uint256 totalLiquidity1;     // 累计注入的 Token1 数量
+        uint256 currentLiquidity0;   // 当前持有的 Token0 数量
+        uint256 currentLiquidity1;   // 当前持有的 Token1 数量
+        uint256 lastUpdateTime;      // 最后更新时间
+    }
+
+    mapping(address => LiquidityProvider) public liquidityProviders;
+
     event AddLiquidity(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event RemoveLiquidity(address indexed provider, uint256 amount0, uint256 amount1, uint256 liquidity);
     event Swap(address indexed sender, address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut, uint256 fee);
     event FeeCapSet(address indexed token, uint256 cap);
     event GovernanceSet(address indexed governance);
+    event ContributorRewardSet(address indexed contributorReward);
+    event LiquidityScoreUpdated(address indexed provider, uint256 liquidityAmount);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "AMMPool: not owner");
@@ -49,6 +64,11 @@ contract AMMPool {
         emit GovernanceSet(_governance);
     }
 
+    function setContributorReward(address _contributorReward) external onlyOwner {
+        contributorReward = _contributorReward;
+        emit ContributorRewardSet(_contributorReward);
+    }
+
     function setFeeBps(uint16 _feeBps) external onlyOwnerOrGovernance {
         require(_feeBps <= 1000, "AMMPool: fee too high");
         feeBps = _feeBps;
@@ -67,22 +87,62 @@ contract AMMPool {
         return IERC20(token1).balanceOf(address(this));
     }
 
-    /// @notice 添加流动性
+    /// @notice 添加流动性（记录流动性提供者，用于贡献分计算）
     function addLiquidity(uint256 amount0, uint256 amount1) external {
         require(amount0 > 0 && amount1 > 0, "AMMPool: zero amount");
         require(IERC20(token0).transferFrom(msg.sender, address(this), amount0), "AMMPool: transfer0 failed");
         require(IERC20(token1).transferFrom(msg.sender, address(this), amount1), "AMMPool: transfer1 failed");
+        
+        // 记录流动性提供者
+        LiquidityProvider storage provider = liquidityProviders[msg.sender];
+        provider.totalLiquidity0 += amount0;
+        provider.totalLiquidity1 += amount1;
+        provider.currentLiquidity0 += amount0;
+        provider.currentLiquidity1 += amount1;
+        provider.lastUpdateTime = block.timestamp;
+        
+        // 触发流动性贡献分更新事件（链下监听并更新贡献分）
+        emit LiquidityScoreUpdated(msg.sender, amount0); // 使用 amount0 作为流动性数量（简化）
+        
         emit AddLiquidity(msg.sender, amount0, amount1, amount0 + amount1);
     }
 
     /// @notice 移除流动性（简化：按比例取回，无 LP 凭证）
-    function removeLiquidity(uint256 amount0, uint256 amount1) external onlyOwner {
+    /// @notice 节点可以移除自己注入的流动性
+    function removeLiquidity(uint256 amount0, uint256 amount1) external {
+        LiquidityProvider storage provider = liquidityProviders[msg.sender];
+        
+        // 如果是 owner，允许移除任意流动性（向后兼容）
+        // 否则只能移除自己注入的流动性
+        if (msg.sender != owner) {
+            require(amount0 <= provider.currentLiquidity0 && amount1 <= provider.currentLiquidity1, "AMMPool: insufficient liquidity");
+        }
+        
         uint256 r0 = reserve0();
         uint256 r1 = reserve1();
         require(amount0 <= r0 && amount1 <= r1, "AMMPool: insufficient reserve");
-        if (amount0 > 0) require(IERC20(token0).transfer(owner, amount0), "AMMPool: transfer0 failed");
-        if (amount1 > 0) require(IERC20(token1).transfer(owner, amount1), "AMMPool: transfer1 failed");
+        
+        if (amount0 > 0) require(IERC20(token0).transfer(msg.sender, amount0), "AMMPool: transfer0 failed");
+        if (amount1 > 0) require(IERC20(token1).transfer(msg.sender, amount1), "AMMPool: transfer1 failed");
+        
+        // 更新流动性记录
+        if (msg.sender != owner) {
+            provider.currentLiquidity0 -= amount0;
+            provider.currentLiquidity1 -= amount1;
+            provider.lastUpdateTime = block.timestamp;
+            
+            // 触发流动性贡献分更新事件
+            emit LiquidityScoreUpdated(msg.sender, provider.currentLiquidity0);
+        }
+        
         emit RemoveLiquidity(msg.sender, amount0, amount1, amount0 + amount1);
+    }
+
+    /// @notice 查询流动性提供者的流动性数量
+    function getLiquidityAmount(address provider) external view returns (uint256) {
+        LiquidityProvider memory p = liquidityProviders[provider];
+        // 简化：使用 Token0 数量作为流动性数量
+        return p.currentLiquidity0;
     }
 
     /// @notice 交换：转入 tokenIn 数量 amountIn，获得 tokenOut（扣 0.01% 手续费，最高等值 1 美元）

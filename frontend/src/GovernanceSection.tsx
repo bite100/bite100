@@ -15,6 +15,8 @@ type ProposalInfo = {
   yesCount: string
   noCount: string
   executed: boolean
+  executableAt: string
+  isMultiStep?: boolean
 }
 
 export function GovernanceSection({ account }: { account: string | null }) {
@@ -59,10 +61,30 @@ export function GovernanceSection({ account }: { account: string | null }) {
               yesCount: String(p[5] ?? 0),
               noCount: String(p[6] ?? 0),
               executed: Boolean(p[7]),
+              executableAt: String(p[8] ?? 0),
+              isMultiStep: false,
             })
           }
         } catch {
-          // 单条提案解析失败则跳过
+          // 可能是多步骤提案，尝试获取多步骤提案信息
+          try {
+            const mp = await gov.getMultiStepProposal(i)
+            if (mp && mp.length >= 9) {
+              list.push({
+                target: mp[0]?.[0] ?? '', // 使用第一个目标
+                activeCount: String(mp[3] ?? 0),
+                createdAt: String(mp[4] ?? 0),
+                votingEndsAt: String(mp[5] ?? 0),
+                yesCount: String(mp[6] ?? 0),
+                noCount: String(mp[7] ?? 0),
+                executed: Boolean(mp[8]),
+                executableAt: String(mp[8] ?? 0),
+                isMultiStep: true,
+              })
+            }
+          } catch {
+            // 单条提案解析失败则跳过
+          }
         }
       }
       setProposals(list)
@@ -173,22 +195,82 @@ export function GovernanceSection({ account }: { account: string | null }) {
         <p className="hint">暂无提案</p>
       ) : (
         <div className="proposal-list">
-          {proposals.map((p, i) => (
-            <div key={i} className="proposal-item">
-              <div className="row">
-                <span className="label">提案 #{i}</span>
-                <span className="value">{p.executed ? '已执行' : Number(p.votingEndsAt) * 1000 > Date.now() ? '投票中' : '可执行'}</span>
+          {proposals.map((p, i) => {
+            const now = Date.now()
+            const votingEnds = Number(p.votingEndsAt) * 1000
+            const executableAt = Number(p.executableAt) * 1000
+            const isVoting = votingEnds > now
+            const isPassed = Number(p.yesCount) > Math.floor(Number(p.activeCount) / 2)
+            const canExecute = !p.executed && !isVoting && isPassed && now >= executableAt
+            const waitingTimelock = !p.executed && !isVoting && isPassed && now < executableAt
+            
+            let statusText = ''
+            let statusColor = ''
+            if (p.executed) {
+              statusText = '✅ 已执行'
+              statusColor = 'green'
+            } else if (isVoting) {
+              statusText = '⏳ 投票中'
+              statusColor = 'blue'
+            } else if (canExecute) {
+              statusText = '✅ 可执行'
+              statusColor = 'green'
+            } else if (waitingTimelock) {
+              const waitHours = Math.ceil((executableAt - now) / (1000 * 60 * 60))
+              statusText = `⏰ 等待 Timelock（${waitHours} 小时后可执行）`
+              statusColor = 'orange'
+            } else if (!isPassed) {
+              statusText = '❌ 未通过'
+              statusColor = 'red'
+            } else {
+              statusText = '⏳ 等待中'
+              statusColor = 'gray'
+            }
+            
+            return (
+              <div key={i} className="proposal-item">
+                <div className="row">
+                  <span className="label">提案 #{i}</span>
+                  <span className="value" style={{ color: statusColor, fontWeight: 'bold' }}>
+                    {statusText}
+                    {p.isMultiStep && ' (多步骤)'}
+                  </span>
+                </div>
+                <div className="row">
+                  <span className="label">赞成 / 反对</span>
+                  <span className="value">
+                    {p.yesCount} / {p.noCount}（需 &gt; {Math.floor(Number(p.activeCount) / 2)}）
+                    {isPassed && !p.executed && <span style={{ color: 'green' }}> ✓</span>}
+                  </span>
+                </div>
+                <div className="row">
+                  <span className="label">目标</span>
+                  <span className="value mono">{shortAddress(p.target, 10, 8)}</span>
+                </div>
+                {waitingTimelock && (
+                  <div className="row">
+                    <span className="label">可执行时间</span>
+                    <span className="value">{new Date(executableAt).toLocaleString('zh-CN')}</span>
+                  </div>
+                )}
+                {canExecute && (
+                  <div className="row" style={{ marginTop: '8px' }}>
+                    <button
+                      className="btn primary"
+                      onClick={() => {
+                        setExecProposalId(String(i))
+                        handleExecute()
+                      }}
+                      disabled={loadingExec}
+                      style={{ fontSize: '0.9em', padding: '4px 12px' }}
+                    >
+                      {loadingExec ? '执行中...' : '立即执行'}
+                    </button>
+                  </div>
+                )}
               </div>
-              <div className="row">
-                <span className="label">赞成 / 反对</span>
-                <span className="value">{p.yesCount} / {p.noCount}（需 &gt; {Math.floor(Number(p.activeCount) / 2)}）</span>
-              </div>
-              <div className="row">
-                <span className="label">目标</span>
-                <span className="value mono">{shortAddress(p.target, 10, 8)}</span>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
       <button className="btn secondary" onClick={fetchProposals} disabled={loading}>刷新</button>

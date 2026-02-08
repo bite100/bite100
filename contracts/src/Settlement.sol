@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "./interfaces/IERC20.sol";
 import "./Vault.sol";
 import "./FeeDistributor.sol";
+import "./MerkleProof.sol";
 
 /// @title Settlement 交易结算
 /// @notice 根据链下撮合结果执行资产划转并收取手续费；0.01% 单边，买卖双方各自代币收取，每边最高等值 1 美元（由 feeCapPerToken 配置）。
@@ -47,6 +48,7 @@ contract Settlement {
     event FeeCapSet(address indexed token, uint256 cap);
     event RelayerSet(address indexed relayer);
     event GovernanceSet(address indexed governance);
+    event TradesBatchSettledWithMerkle(uint256 indexed batchId, bytes32 merkleRoot, uint256 count);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Settlement: not owner");
@@ -168,5 +170,124 @@ contract Settlement {
         } else {
             emit TradeSettled(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn + feeOut);
         }
+    }
+
+    /// @notice 批量结算多笔交易（节省 Gas）；参数数组长度需一致
+    /// @param makers 挂单方数组
+    /// @param takers 吃单方数组
+    /// @param tokenIns maker 卖出的代币数组
+    /// @param tokenOuts maker 买入的代币数组
+    /// @param amountIns maker 卖出数量数组
+    /// @param amountOuts maker 得到数量数组
+    /// @param gasReimburseIns 从 maker 侧扣除的 gas 费数组（0 表示无代付）
+    /// @param gasReimburseOuts 从 taker 侧扣除的 gas 费数组（0 表示无代付）
+    function settleTradesBatch(
+        address[] calldata makers,
+        address[] calldata takers,
+        address[] calldata tokenIns,
+        address[] calldata tokenOuts,
+        uint256[] calldata amountIns,
+        uint256[] calldata amountOuts,
+        uint256[] calldata gasReimburseIns,
+        uint256[] calldata gasReimburseOuts
+    ) external {
+        require(msg.sender == owner || (relayer != address(0) && msg.sender == relayer), "Settlement: not auth");
+        uint256 len = makers.length;
+        require(
+            len == takers.length &&
+            len == tokenIns.length &&
+            len == tokenOuts.length &&
+            len == amountIns.length &&
+            len == amountOuts.length &&
+            len == gasReimburseIns.length &&
+            len == gasReimburseOuts.length,
+            "Settlement: length mismatch"
+        );
+        require(len > 0 && len <= 50, "Settlement: batch size 1-50");
+
+        for (uint256 i = 0; i < len; i++) {
+            settleTrade(
+                makers[i],
+                takers[i],
+                tokenIns[i],
+                tokenOuts[i],
+                amountIns[i],
+                amountOuts[i],
+                gasReimburseIns[i],
+                gasReimburseOuts[i]
+            );
+        }
+    }
+
+    /// @notice 批量结算带默克尔根验证（便于审计）；先验证默克尔根，再批量结算
+    /// @param batchId 批次 ID（用于事件索引）
+    /// @param merkleRoot 所有 Trade 的默克尔根
+    /// @param makers 挂单方数组
+    /// @param takers 吃单方数组
+    /// @param tokenIns maker 卖出的代币数组
+    /// @param tokenOuts maker 买入的代币数组
+    /// @param amountIns maker 卖出数量数组
+    /// @param amountOuts maker 得到数量数组
+    /// @param gasReimburseIns 从 maker 侧扣除的 gas 费数组
+    /// @param gasReimburseOuts 从 taker 侧扣除的 gas 费数组
+    /// @param proofs 每个 Trade 的默克尔证明数组（proofs[i] 对应第 i 个 Trade）
+    function settleTradesBatchWithMerkle(
+        uint256 batchId,
+        bytes32 merkleRoot,
+        address[] calldata makers,
+        address[] calldata takers,
+        address[] calldata tokenIns,
+        address[] calldata tokenOuts,
+        uint256[] calldata amountIns,
+        uint256[] calldata amountOuts,
+        uint256[] calldata gasReimburseIns,
+        uint256[] calldata gasReimburseOuts,
+        bytes32[][] calldata proofs
+    ) external {
+        require(msg.sender == owner || (relayer != address(0) && msg.sender == relayer), "Settlement: not auth");
+        uint256 len = makers.length;
+        require(
+            len == takers.length &&
+            len == tokenIns.length &&
+            len == tokenOuts.length &&
+            len == amountIns.length &&
+            len == amountOuts.length &&
+            len == gasReimburseIns.length &&
+            len == gasReimburseOuts.length &&
+            len == proofs.length,
+            "Settlement: length mismatch"
+        );
+        require(len > 0 && len <= 50, "Settlement: batch size 1-50");
+
+        // 验证每个 Trade 的默克尔证明
+        for (uint256 i = 0; i < len; i++) {
+            bytes32 leaf = keccak256(abi.encodePacked(
+                makers[i],
+                takers[i],
+                tokenIns[i],
+                tokenOuts[i],
+                amountIns[i],
+                amountOuts[i],
+                gasReimburseIns[i],
+                gasReimburseOuts[i]
+            ));
+            require(MerkleProof.verify(proofs[i], merkleRoot, leaf), "Settlement: invalid merkle proof");
+        }
+
+        // 验证通过后批量结算
+        for (uint256 i = 0; i < len; i++) {
+            settleTrade(
+                makers[i],
+                takers[i],
+                tokenIns[i],
+                tokenOuts[i],
+                amountIns[i],
+                amountOuts[i],
+                gasReimburseIns[i],
+                gasReimburseOuts[i]
+            );
+        }
+
+        emit TradesBatchSettledWithMerkle(batchId, merkleRoot, len);
     }
 }

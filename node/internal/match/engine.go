@@ -72,6 +72,16 @@ func (e *Engine) SetCurrentPeriod(periodStr string) {
 	e.currentVolume = new(big.Int)
 }
 
+// GetPairTokens 返回交易对对应的代币地址（用于签名验证）
+func (e *Engine) GetPairTokens(pair string) *PairTokens {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if tokens, ok := e.tokens[pair]; ok {
+		return &tokens
+	}
+	return nil
+}
+
 // GetPeriodStats 返回指定周期的撮合笔数与成交量（最小单位），供贡献证明使用
 func (e *Engine) GetPeriodStats(periodStr string) (trades uint64, volume *big.Int) {
 	e.mu.RLock()

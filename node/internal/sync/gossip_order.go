@@ -13,12 +13,14 @@ const (
 	TopicOrderCancel   = "/p2p-exchange/order/cancel"
 	TopicTradeExecuted = "/p2p-exchange/trade/executed"
 	TopicSyncOrderbook = "/p2p-exchange/sync/orderbook"
+	TopicMatchRegister = "/p2p-exchange/match/register" // 方案 B：节点注册
 )
 
-// CancelRequest 撤单请求（orderId + signature）
+// CancelRequest 撤单请求（orderId + signature + timestamp）
 type CancelRequest struct {
 	OrderID   string `json:"orderId"`
 	Signature string `json:"signature,omitempty"`
+	Timestamp int64  `json:"timestamp,omitempty"` // 签名时间戳
 }
 
 // ParseOrderNew 解析 /order/new 消息为 Order

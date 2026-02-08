@@ -40,7 +40,8 @@ var (
 )
 
 // VerifyOrderSignature 验证订单签名（EIP-712）
-func VerifyOrderSignature(order *storage.Order) (bool, error) {
+// pairTokens 为 nil 时，tokenIn/tokenOut 使用空字符串（向后兼容）
+func VerifyOrderSignature(order *storage.Order, pairTokens *PairTokens) (bool, error) {
 	if order.Signature == "" {
 		return false, fmt.Errorf("missing signature")
 	}
@@ -52,6 +53,31 @@ func VerifyOrderSignature(order *storage.Order) (bool, error) {
 	price := new(big.Int)
 	price.SetString(order.Price, 10)
 	
+	// 从 pair 解析 tokenIn/tokenOut
+	tokenIn := ""
+	tokenOut := ""
+	if pairTokens != nil {
+		if order.Side == "buy" {
+			// 买单：买入 tokenOut（quote），卖出 tokenIn（base）
+			tokenIn = pairTokens.Token0
+			tokenOut = pairTokens.Token1
+		} else {
+			// 卖单：卖出 tokenIn（base），买入 tokenOut（quote）
+			tokenIn = pairTokens.Token0
+			tokenOut = pairTokens.Token1
+		}
+	}
+	
+	// 计算 amountOut = amountIn * price（以最小单位计算）
+	amountOut := new(big.Int).Mul(amountIn, price)
+	
+	// expiresAt 从订单的 ExpiresAt 字段获取
+	expiresAt := order.ExpiresAt
+	if expiresAt == 0 {
+		// 如果没有设置过期时间，使用默认值（7天后）
+		expiresAt = order.CreatedAt + 7*24*3600
+	}
+	
 	typedData := apitypes.TypedData{
 		Types:       orderTypes,
 		PrimaryType: "Order",
@@ -59,13 +85,13 @@ func VerifyOrderSignature(order *storage.Order) (bool, error) {
 		Message: apitypes.TypedDataMessage{
 			"orderId":     order.OrderID,
 			"userAddress": order.Trader,
-			"tokenIn":     "", // TODO: 从 pair 解析
-			"tokenOut":    "",
+			"tokenIn":     tokenIn,
+			"tokenOut":    tokenOut,
 			"amountIn":    amountIn.String(),
-			"amountOut":   "0", // TODO
+			"amountOut":   amountOut.String(),
 			"price":       price.String(),
 			"timestamp":   fmt.Sprintf("%d", order.CreatedAt),
-			"expiresAt":   "0", // TODO
+			"expiresAt":   fmt.Sprintf("%d", expiresAt),
 		},
 	}
 	

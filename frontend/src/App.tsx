@@ -1,9 +1,15 @@
 import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
 import { Contract } from 'ethers'
-import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS } from './config'
+import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
 import { OrderBookSection } from './OrderBookSection'
+import { CrossChainBridge } from './components/CrossChainBridge'
+import { Navigation, type Tab } from './components/Navigation'
+import { LoadingSpinner } from './components/LoadingSpinner'
+import { ErrorDisplay } from './components/ErrorDisplay'
+import { ChainSwitcher } from './components/ChainSwitcher'
+import { useChain } from './hooks/useChain'
 import { getEthereum, getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, isElectron, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL } from './utils'
 import './App.css'
 
@@ -70,6 +76,26 @@ function App() {
   const [reserve1, setReserve1] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine)
+  const [activeTab, setActiveTab] = useState<Tab>('vault')
+  
+  // 链切换
+  const { currentChainId, switchChain } = useChain()
+  const [currentChainConfig, setCurrentChainConfig] = useState(() => getChainConfig(CHAIN_ID))
+  
+  // 当链切换时，更新配置
+  useEffect(() => {
+    if (currentChainId) {
+      const config = getChainConfig(currentChainId)
+      if (config) {
+        setCurrentChainConfig(config)
+        // 刷新余额和储备
+        if (account) {
+          fetchBalances()
+          fetchReserves()
+        }
+      }
+    }
+  }, [currentChainId, account])
 
   useEffect(() => { setStored('tokenAddress', tokenAddress) }, [tokenAddress])
   useEffect(() => {
@@ -107,28 +133,15 @@ function App() {
         setError('未获取到账户')
         return
       }
+      // 检查当前链，如果不支持则提示切换
       const chainIdRaw = await ethereum.request({ method: 'eth_chainId' })
       const chainId = typeof chainIdRaw === 'string' ? parseInt(chainIdRaw, 16) : Number(chainIdRaw)
-      if (Number(chainId) !== CHAIN_ID) {
-        try {
-          await ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: `0x${CHAIN_ID.toString(16)}` }],
-          })
-        } catch (e) {
-          const chainName = CHAIN_ID === 1 ? 'Ethereum Mainnet' : CHAIN_ID === 137 ? 'Polygon Mainnet' : 'Sepolia'
-          const blockExplorer = CHAIN_ID === 1 ? 'https://etherscan.io' : CHAIN_ID === 137 ? 'https://polygonscan.com' : 'https://sepolia.etherscan.io'
-          await ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: `0x${CHAIN_ID.toString(16)}`,
-              chainName,
-              nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-              rpcUrls: [RPC_URL],
-              blockExplorerUrls: [blockExplorer],
-            }],
-          })
-        }
+      const currentConfig = getChainConfig(chainId)
+      
+      if (!currentConfig) {
+        // 当前链不支持，提示用户切换
+        setError(`当前链（Chain ID: ${chainId}）不支持，请切换到支持的链`)
+        // 不阻止连接，但提示用户切换
       }
       setAccount(accounts[0])
       const balance = await provider.getBalance(accounts[0])
@@ -141,8 +154,8 @@ function App() {
   const tokenAddr = tokenAddress.trim()
 
   const fetchBalances = useCallback(async () => {
-    if (!account || !isValidAddress(tokenAddr)) return
-    const cacheKey = CACHE_KEYS.BALANCE + account + tokenAddr
+    if (!account || !isValidAddress(tokenAddr) || !currentChainConfig) return
+    const cacheKey = CACHE_KEYS.BALANCE + account + tokenAddr + currentChainConfig.chainId
     const cached = cacheGet<[string, string]>(cacheKey)
     if (cached) {
       setVaultBalance(cached[0])
@@ -154,7 +167,7 @@ function App() {
     try {
       const provider = getProvider()
       if (!provider) throw new Error('未检测到钱包')
-      const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
+      const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, provider)
       const token = new Contract(tokenAddr, ERC20_ABI, provider)
       const [vBal, wBal] = await Promise.all([
         vault.balanceOf(tokenAddr, account),
@@ -172,7 +185,7 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }, [account, tokenAddr])
+  }, [account, tokenAddr, currentChainConfig])
 
   const handleDeposit = useCallback(async () => {
     if (!account || !isValidAddress(tokenAddr)) {
@@ -188,9 +201,10 @@ function App() {
     setLoadingDeposit(true)
     try {
       await withSigner(async (signer) => {
+        if (!currentChainConfig) throw new Error('链配置未加载')
         const token = new Contract(tokenAddr, ERC20_ABI, signer)
-        const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, signer)
-        const txApprove = await token.approve(VAULT_ADDRESS, amount)
+        const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, signer)
+        const txApprove = await token.approve(currentChainConfig.contracts.vault, amount)
         await txApprove.wait()
         const txDeposit = await vault.deposit(tokenAddr, amount)
         await txDeposit.wait()
@@ -203,7 +217,7 @@ function App() {
     } finally {
       setLoadingDeposit(false)
     }
-  }, [account, tokenAddr, depositAmount, fetchBalances])
+  }, [account, tokenAddr, depositAmount, fetchBalances, currentChainConfig])
 
   const handleWithdraw = useCallback(async () => {
     if (!account || !isValidAddress(tokenAddr)) {
@@ -219,7 +233,8 @@ function App() {
     setLoadingWithdraw(true)
     try {
       await withSigner(async (signer) => {
-        const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, signer)
+        if (!currentChainConfig) throw new Error('链配置未加载')
+        const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, signer)
         const tx = await vault.withdraw(tokenAddr, amount)
         await tx.wait()
       })
@@ -231,9 +246,14 @@ function App() {
     } finally {
       setLoadingWithdraw(false)
     }
-  }, [account, tokenAddr, withdrawAmount, fetchBalances])
+  }, [account, tokenAddr, withdrawAmount, fetchBalances, currentChainConfig])
 
   const fetchReserves = useCallback(async () => {
+    if (!currentChainConfig || currentChainConfig.contracts.ammPool === '0x0000000000000000000000000000000000000000') {
+      setReserve0('0')
+      setReserve1('0')
+      return
+    }
     const cached = cacheGet<[string, string]>(CACHE_KEYS.RESERVES)
     if (cached) {
       setReserve0(cached[0])
@@ -243,7 +263,7 @@ function App() {
     try {
       const provider = getProvider()
       if (!provider) return
-      const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
+      const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, provider)
       const [r0, r1] = await Promise.all([amm.reserve0(), amm.reserve1()])
       const r0Str = formatTokenAmount(r0)
       const r1Str = formatTokenAmount(r1)
@@ -254,15 +274,15 @@ function App() {
       setReserve0('0')
       setReserve1('0')
     }
-  }, [])
+  }, [currentChainConfig])
 
   const fetchSwapPreview = useCallback(async () => {
     const amount = parseAmount(swapAmount)
-    if (amount === 0n || !account) {
+    if (amount === 0n || !account || !currentChainConfig) {
       setSwapAmountOut('')
       return
     }
-    const cacheKey = CACHE_KEYS.SWAP_PREVIEW + swapTokenIn + '_' + swapAmount
+    const cacheKey = CACHE_KEYS.SWAP_PREVIEW + swapTokenIn + '_' + swapAmount + '_' + currentChainConfig.chainId
     const cached = cacheGet<string>(cacheKey)
     if (cached) {
       setSwapAmountOut(cached)
@@ -271,8 +291,8 @@ function App() {
     try {
       const provider = getProvider()
       if (!provider) return
-      const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, provider)
-      const tokenIn = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+      const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, provider)
+      const tokenIn = swapTokenIn === 'token0' ? currentChainConfig.contracts.token0 : currentChainConfig.contracts.token1
       const out = await amm.getAmountOut(tokenIn, amount)
       const outStr = formatTokenAmount(out)
       setSwapAmountOut(outStr)
@@ -296,19 +316,23 @@ function App() {
       setError('请输入数量')
       return
     }
+    if (!currentChainConfig || currentChainConfig.contracts.ammPool === '0x0000000000000000000000000000000000000000') {
+      setError('当前链的 AMM 池尚未部署，请切换到已部署的链（如 Sepolia）')
+      return
+    }
     setError(null)
     setLoadingSwap(true)
     try {
-      const tokenIn = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+      const tokenIn = swapTokenIn === 'token0' ? currentChainConfig.contracts.token0 : currentChainConfig.contracts.token1
       await withSigner(async (signer) => {
         const token = new Contract(tokenIn, ERC20_ABI, signer)
         const bal = await token.balanceOf(account!)
         if (bal < amount) throw new Error(`余额不足，钱包仅有 ${formatTokenAmount(bal)}`)
-        const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, signer)
-        const allowance = await token.allowance(account!, AMM_POOL_ADDRESS)
+        const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, signer)
+        const allowance = await token.allowance(account!, currentChainConfig.contracts.ammPool)
         if (allowance < amount) {
-          await (await token.approve(AMM_POOL_ADDRESS, 0n)).wait()
-          await (await token.approve(AMM_POOL_ADDRESS, amount)).wait()
+          await (await token.approve(currentChainConfig.contracts.ammPool, 0n)).wait()
+          await (await token.approve(currentChainConfig.contracts.ammPool, amount)).wait()
         }
         await (await amm.swap(tokenIn, amount)).wait()
       })
@@ -322,38 +346,42 @@ function App() {
     } finally {
       setLoadingSwap(false)
     }
-  }, [account, swapAmount, swapTokenIn, fetchReserves])
+  }, [account, swapAmount, swapTokenIn, fetchReserves, currentChainConfig])
 
   const handleAddLiquidity = useCallback(async () => {
-    const amt0 = parseAmount(addLiqAmount0)
-    const amt1 = parseAmount(addLiqAmount1)
-    if (amt0 === 0n || amt1 === 0n) {
-      setError('请输入 Token0 和 Token1 的数量')
-      return
-    }
-    setError(null)
-    setLoadingAddLiq(true)
-    try {
-      await withSigner(async (signer) => {
-        const token0C = new Contract(TOKEN0_ADDRESS, ERC20_ABI, signer)
-        const token1C = new Contract(TOKEN1_ADDRESS, ERC20_ABI, signer)
-        const amm = new Contract(AMM_POOL_ADDRESS, AMM_ABI, signer)
-        await Promise.all([
-          token0C.approve(AMM_POOL_ADDRESS, amt0),
-          token1C.approve(AMM_POOL_ADDRESS, amt1),
-        ]).then((txs) => Promise.all(txs.map((tx) => tx.wait())))
-        await (await amm.addLiquidity(amt0, amt1)).wait()
-      })
-      setAddLiqAmount0('')
-      setAddLiqAmount1('')
-      cacheInvalidate(CACHE_KEYS.RESERVES)
-      await fetchReserves()
-    } catch (e) {
-      setError(formatError(e))
-    } finally {
-      setLoadingAddLiq(false)
-    }
-  }, [account, addLiqAmount0, addLiqAmount1, fetchReserves])
+      const amt0 = parseAmount(addLiqAmount0)
+      const amt1 = parseAmount(addLiqAmount1)
+      if (amt0 === 0n || amt1 === 0n) {
+        setError('请输入 Token0 和 Token1 的数量')
+        return
+      }
+      if (!currentChainConfig || currentChainConfig.contracts.ammPool === '0x0000000000000000000000000000000000000000') {
+        setError('当前链的 AMM 池尚未部署，请切换到已部署的链（如 Sepolia）')
+        return
+      }
+      setError(null)
+      setLoadingAddLiq(true)
+      try {
+        await withSigner(async (signer) => {
+          const token0C = new Contract(currentChainConfig.contracts.token0, ERC20_ABI, signer)
+          const token1C = new Contract(currentChainConfig.contracts.token1, ERC20_ABI, signer)
+          const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, signer)
+          await Promise.all([
+            token0C.approve(currentChainConfig.contracts.ammPool, amt0),
+            token1C.approve(currentChainConfig.contracts.ammPool, amt1),
+          ]).then((txs) => Promise.all(txs.map((tx) => tx.wait())))
+          await (await amm.addLiquidity(amt0, amt1)).wait()
+        })
+        setAddLiqAmount0('')
+        setAddLiqAmount1('')
+        cacheInvalidate(CACHE_KEYS.RESERVES)
+        await fetchReserves()
+      } catch (e) {
+        setError(formatError(e))
+      } finally {
+        setLoadingAddLiq(false)
+      }
+    }, [account, addLiqAmount0, addLiqAmount1, fetchReserves, currentChainConfig])
 
   const handleMaxDeposit = useCallback(() => {
     if (walletTokenBalance) setDepositAmount(walletTokenBalance)
@@ -374,35 +402,35 @@ function App() {
   }, [account])
 
   const handleMaxSwap = useCallback(async () => {
-    if (!account) return
+    if (!account || !currentChainConfig) return
     setError(null)
     try {
-      const addr = swapTokenIn === 'token0' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+      const addr = swapTokenIn === 'token0' ? currentChainConfig.contracts.token0 : currentChainConfig.contracts.token1
       setSwapAmount(await fetchTokenBalance(addr))
     } catch (e) {
       setError(formatError(e))
     }
-  }, [account, swapTokenIn, fetchTokenBalance])
+  }, [account, swapTokenIn, fetchTokenBalance, currentChainConfig])
 
   const handleMaxAddLiq0 = useCallback(async () => {
-    if (!account) return
+    if (!account || !currentChainConfig) return
     setError(null)
     try {
-      setAddLiqAmount0(await fetchTokenBalance(TOKEN0_ADDRESS))
+      setAddLiqAmount0(await fetchTokenBalance(currentChainConfig.contracts.token0))
     } catch (e) {
       setError(formatError(e))
     }
-  }, [account, fetchTokenBalance])
+  }, [account, fetchTokenBalance, currentChainConfig])
 
   const handleMaxAddLiq1 = useCallback(async () => {
-    if (!account) return
+    if (!account || !currentChainConfig) return
     setError(null)
     try {
-      setAddLiqAmount1(await fetchTokenBalance(TOKEN1_ADDRESS))
+      setAddLiqAmount1(await fetchTokenBalance(currentChainConfig.contracts.token1))
     } catch (e) {
       setError(formatError(e))
     }
-  }, [account, fetchTokenBalance])
+  }, [account, fetchTokenBalance, currentChainConfig])
 
   useEffect(() => {
     if (!account) return
@@ -418,11 +446,22 @@ function App() {
           当前处于离线状态，请检查网络后重试
         </div>
       )}
-      <h1>P2P 交易所</h1>
-      <p className="subtitle">{CHAIN_ID === 1 ? 'Ethereum 主网' : CHAIN_ID === 137 ? 'Polygon 主网' : 'Sepolia 测试网'} · 连钱包 · 存提 · Swap · 添加流动性</p>
+      <div className="app-header-top">
+        <div>
+          <h1>P2P 交易所</h1>
+          <p className="subtitle">
+            {currentChainConfig?.name || '未知网络'} · 连钱包 · 存提 · Swap · 添加流动性
+          </p>
+        </div>
+        <ChainSwitcher
+          currentChainId={currentChainId}
+          onChainChange={switchChain}
+        />
+      </div>
 
       <div className="card" style={{ marginBottom: '0.5rem' }}>
         <p className="hint" style={{ margin: 0 }}>当前合约（验证用）</p>
+        <div className="row"><span className="label">网络</span><span className="value">{currentChainConfig?.name || '未知'}</span></div>
         <div className="row"><span className="label">AMM 池</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{AMM_POOL_ADDRESS}</span></div>
         <div className="row"><span className="label">Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
         <div className="row"><span className="label">Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
@@ -457,7 +496,10 @@ function App() {
 
       {account && (
         <>
-          <div className="card vault-section">
+          <Navigation activeTab={activeTab} onTabChange={setActiveTab} account={account} />
+
+          {(activeTab === 'vault' || activeTab === 'swap') && (
+            <div className="card vault-section">
             <h2>代币与 Vault 余额</h2>
             <p className="hint">输入 ERC20 代币合约地址，或点下方快捷填入。代币地址与 Swap 方向会保存在本机，刷新后仍保留；清除浏览器/缓存会丢失。</p>
             <div className="input-row">
@@ -470,8 +512,8 @@ function App() {
               />
             </div>
             <div className="quick-tokens">
-              <button type="button" className="btn-quick" onClick={() => { setTokenAddress(TOKEN0_ADDRESS); setVaultBalance(''); setWalletTokenBalance('') }}>Token A (TKA)</button>
-              <button type="button" className="btn-quick" onClick={() => { setTokenAddress(TOKEN1_ADDRESS); setVaultBalance(''); setWalletTokenBalance('') }}>Token B (TKB)</button>
+              <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token0); setVaultBalance(''); setWalletTokenBalance('') } }}>Token A (TKA)</button>
+              <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token1); setVaultBalance(''); setWalletTokenBalance('') } }}>Token B (TKB)</button>
             </div>
             <button
               className="btn secondary"
@@ -537,22 +579,26 @@ function App() {
               {loadingWithdraw ? '处理中…' : '提取'}
             </button>
           </div>
+          )}
 
-          <OrderBookSection
-            account={account}
-            getSigner={async () => {
-              try {
-                const p = getProvider()
-                if (!p) return null
-                return await p.getSigner()
-              } catch {
-                return null
-              }
-            }}
-          />
+          {activeTab === 'orderbook' && (
+            <OrderBookSection
+              account={account}
+              getSigner={async () => {
+                try {
+                  const p = getProvider()
+                  if (!p) return null
+                  return await p.getSigner()
+                } catch {
+                  return null
+                }
+              }}
+            />
+          )}
 
-          <div className="card vault-section">
-            <h2>AMM Swap</h2>
+          {activeTab === 'swap' && (
+            <div className="card vault-section">
+              <h2>AMM Swap</h2>
             <p className="hint">Token A ↔ Token B，0.01% 手续费，单笔最高等值 1 USD。池子需有流动性。</p>
             <div className="row">
               <span className="label">池子储备</span>
@@ -584,14 +630,26 @@ function App() {
             >
               {loadingSwap ? '处理中…' : 'Swap'}
             </button>
-          </div>
+            </div>
+          )}
 
-          <GovernanceErrorBoundary account={account}>
-            <GovernanceSection account={account} />
-          </GovernanceErrorBoundary>
+          {activeTab === 'governance' && (
+            <GovernanceErrorBoundary account={account}>
+              <GovernanceSection account={account} />
+            </GovernanceErrorBoundary>
+          )}
 
-          <div className="card vault-section">
-            <h2>添加流动性</h2>
+          {activeTab === 'contribution' && (
+            <ContributionSection account={account} />
+          )}
+
+          {activeTab === 'bridge' && (
+            <CrossChainBridge account={account} currentChainId={currentChainId} />
+          )}
+
+          {(activeTab === 'vault' || activeTab === 'swap') && (
+            <div className="card vault-section">
+              <h2>添加流动性</h2>
             <p className="hint">向 AMM 池添加 Token A 和 Token B，需有该代币余额</p>
             <div className="input-row">
               <input
@@ -620,27 +678,21 @@ function App() {
             >
               {loadingAddLiq ? '处理中…' : '添加流动性'}
             </button>
-          </div>
+            </div>
+          )}
 
         </>
       )}
 
-      {error && (
-        <p className="error">
-          {error}
-          <button
-            type="button"
-            className="retry-btn"
-            onClick={() => {
-              setError(null)
-              if (account && isValidAddress(tokenAddr)) fetchBalances()
-              fetchReserves()
-            }}
-          >
-            重试
-          </button>
-        </p>
-      )}
+      <ErrorDisplay
+        error={error}
+        onRetry={() => {
+          setError(null)
+          if (account && isValidAddress(tokenAddr)) fetchBalances()
+          fetchReserves()
+        }}
+        onDismiss={() => setError(null)}
+      />
     </div>
   )
 }

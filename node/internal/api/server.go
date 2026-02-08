@@ -194,6 +194,24 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing required fields", http.StatusBadRequest)
 		return
 	}
+	
+	// 验证订单签名（如果提供了签名）
+	if o.Signature != "" {
+		var pairTokens *match.PairTokens
+		if s.MatchEngine != nil {
+			pairTokens = s.MatchEngine.GetPairTokens(o.Pair)
+		}
+		valid, err := match.VerifyOrderSignature(&o, pairTokens)
+		if err != nil {
+			log.Printf("[api] 签名验证错误: %v", err)
+			http.Error(w, "signature verification error", http.StatusBadRequest)
+			return
+		}
+		if !valid {
+			http.Error(w, "invalid signature", http.StatusUnauthorized)
+			return
+		}
+	}
 	data, err := json.Marshal(&o)
 	if err != nil {
 		http.Error(w, "encode error", http.StatusInternalServerError)
@@ -231,6 +249,31 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	if req.OrderID == "" {
 		http.Error(w, "orderId required", http.StatusBadRequest)
 		return
+	}
+	
+	// 验证取消订单签名（如果提供了签名和用户地址）
+	if req.Signature != "" {
+		// 需要从订单中获取用户地址，这里简化处理，实际应从订单存储中查询
+		// 如果订单不存在或无法获取用户地址，跳过签名验证（向后兼容）
+		if s.Store != nil {
+			order, err := s.Store.GetOrder(req.OrderID)
+			if err == nil && order != nil {
+				timestamp := req.Timestamp
+				if timestamp == 0 {
+					timestamp = time.Now().Unix()
+				}
+				valid, err := match.VerifyCancelSignature(req.OrderID, order.Trader, req.Signature, timestamp)
+				if err != nil {
+					log.Printf("[api] 取消签名验证错误: %v", err)
+					http.Error(w, "signature verification error", http.StatusBadRequest)
+					return
+				}
+				if !valid {
+					http.Error(w, "invalid signature", http.StatusUnauthorized)
+					return
+				}
+			}
+		}
 	}
 	data, err := json.Marshal(&req)
 	if err != nil {

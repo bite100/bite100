@@ -146,15 +146,26 @@ function addLiquidity(uint256 amount0, uint256 amount1)
 | `submitProof(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType, signature)` | write | 提交贡献证明（msg.sender 为领奖地址，signature 为 ECDSA 65 字节） |
 | `setPeriodReward(period, token, amount)` | write | Owner 注入某周期某代币奖励池 |
 | `setPeriodEndTimestamp(periodId, endTimestamp)` | write | Owner 设置某周期结束时间（Unix 秒）；设置后超过 endTimestamp+14 天禁止领取 |
-| `claimReward(period, token)` | write | 领取某周期某代币应得奖励（若已设结束时间且过期则 revert）；**每次领取不超过该周期奖励池的 10%**，可多次领取直到领完应得部分 |
+| `claimReward(period, token)` | write | 领取某周期某代币应得奖励（若已设结束时间且过期则 revert）；**每次领取不超过该周期奖励池的 10%**，可多次领取直到领完应得部分。如果启用按信誉分分配（`useReputationWeighting=true`），奖励按（贡献分 × 信誉分数/10000）分配 |
 | `claimable(period, token, account)` | view | 查询可领取金额（过期返回 0） |
 | `getContributionScore(period, account)` | view | 查询某周期贡献分 |
 | `getPeriodTotalScore(period)` | view | 查询某周期总贡献分 |
 | `setContributionScore(period, account, score)` | write | Owner 直接设置某地址贡献分（用于上线奖励等特殊分配） |
+| `setReputationScore(account, score)` | write | Owner 设置节点信誉分数（0-10000，仅 owner） |
+| `setReputationScores(accounts[], scores[])` | write | Owner 批量设置多个节点信誉分数（仅 owner） |
+| `setReputationThreshold(threshold)` | write | Governance 设置信誉阈值（低于此值无法领取，0 表示不启用） |
+| `setReputationWeighting(enabled)` | write | Governance 启用/禁用按信誉分加权分配（true：按信誉分分配；false：仅用阈值作为门槛） |
+| `updateReputationAndRecalculateWeightedScore(account, newScore, periods[])` | write | Owner 更新信誉分数并重新计算相关周期的总加权贡献分 |
+| `reputationScore(account)` | view | 查询节点信誉分数 |
+| `reputationThreshold()` | view | 查询信誉阈值 |
+| `useReputationWeighting()` | view | 查询是否启用按信誉分加权分配 |
+| `isReputationQualified(account)` | view | 查询节点是否满足信誉要求 |
 | `periodEndTimestamp(periodId)` | view | 某周期结束时间（0 表示未设置，不校验截止） |
 | `CLAIM_DEADLINE_SECONDS` | constant | 14 days |
 
-**事件**：`ProofSubmitted`, `PeriodRewardSet`, `PeriodEndTimestampSet`, `RewardClaimed`
+**事件**：`ProofSubmitted`, `PeriodRewardSet`, `PeriodEndTimestampSet`, `RewardClaimed`, `ReputationScoreSet`, `ReputationThresholdSet`, `ReputationWeightingEnabled`
+
+**按信誉分分配**：如果 `useReputationWeighting = true`，奖励按照（贡献分 × 信誉分数/10000）进行分配。信誉分数越高，获得的奖励份额越多。详见 [信誉机制说明](./信誉机制说明.md)。
 
 **上线奖励**：部署时通过 `setContributionScore("launch", developerAddress, 50000e18)` 给开发者地址设置 5 万贡献分（第一个周期）。**可自由流通**：该贡献分不受周期结束时间限制（周期未设置结束时间），可随时领取奖励（需先注入奖励池 `setPeriodReward`）。
 

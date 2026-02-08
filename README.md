@@ -10,6 +10,7 @@
 - ⚡ **链上结算**：Settlement 合约原子交易
 - 🐳 **一键部署**：Docker Compose 完整环境
 - 📱 **移动端适配**：PWA 支持，可添加到主屏幕
+- 🚪 **完全开放**：**节点入网无任何条件**，无需白名单、质押或邀请
 
 ## 📚 文档
 
@@ -18,7 +19,7 @@
 - **完整指南**：[docs/P2P节点整合交易撮合指南.md](docs/P2P节点整合交易撮合指南.md)（步步详解）
 - **概念与架构**：[docs/概念设计文档.md](docs/概念设计文档.md) · [docs/技术架构说明.md](docs/技术架构说明.md)
 - **API 接口**：[docs/API-接口说明.md](docs/API-接口说明.md)
-- **部署指南**：[docs/部署与使用说明.md](docs/部署与使用说明.md) · [docs/主网部署指南.md](docs/主网部署指南.md)
+- **部署指南**：[docs/部署与使用说明.md](docs/部署与使用说明.md) · [docs/主网部署指南.md](docs/主网部署指南.md) · [docs/主网试运行指南.md](docs/主网试运行指南.md)
 - **模块文档**：[contracts/README.md](contracts/README.md) · [frontend/README.md](frontend/README.md) · [node/README.md](node/README.md)
 
 ---

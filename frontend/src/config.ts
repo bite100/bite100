@@ -1,4 +1,5 @@
-const network = import.meta.env.VITE_NETWORK ?? 'sepolia' // sepolia | mainnet | polygon
+import { DEFAULT_CHAIN_ID, getChainConfig } from './config/chains'
+
 /** 节点 API 根地址（单节点时使用）；多节点时取第一个，实际请求由 nodeClient 按列表依次尝试 */
 const _raw = (import.meta.env.VITE_NODE_API_URL ?? '').trim()
 export const NODE_API_URL = _raw.split(',')[0]?.replace(/\/$/, '') ?? ''
@@ -20,57 +21,28 @@ export const P2P_CONFIG = {
     .filter(Boolean),
 }
 
-// 网络配置
-export const CHAIN_ID = network === 'mainnet' ? 1 : network === 'polygon' ? 137 : 11155111
-export const RPC_URL =
-  network === 'mainnet' ? 'https://ethereum.publicnode.com'
-  : network === 'polygon' ? 'https://polygon-rpc.com'
-  : 'https://ethereum-sepolia.publicnode.com'
+// 多链配置：从环境变量或默认链获取当前链配置
+const initialChainId = import.meta.env.VITE_CHAIN_ID 
+  ? parseInt(import.meta.env.VITE_CHAIN_ID, 10)
+  : DEFAULT_CHAIN_ID
 
-// 合约地址（主网/Polygon：部署后把脚本输出填入下方；Sepolia：已部署）
-const MAINNET = {
-  VAULT: '0x0000000000000000000000000000000000000000',
-  SETTLEMENT: '0x0000000000000000000000000000000000000000',
-  TOKEN0: '0x0000000000000000000000000000000000000000',
-  TOKEN1: '0x0000000000000000000000000000000000000000',
-  AMM_POOL: '0x0000000000000000000000000000000000000000',
-  CONTRIBUTOR_REWARD: '0x0000000000000000000000000000000000000000',
-  GOVERNANCE: '0x0000000000000000000000000000000000000000',
-  TOKEN_REGISTRY: '0x0000000000000000000000000000000000000000',
-  CHAIN_CONFIG: '0x0000000000000000000000000000000000000000',
-}
-const POLYGON = {
-  VAULT: '0x0000000000000000000000000000000000000000',
-  SETTLEMENT: '0x0000000000000000000000000000000000000000',
-  TOKEN0: '0x0000000000000000000000000000000000000000',
-  TOKEN1: '0x0000000000000000000000000000000000000000',
-  AMM_POOL: '0x0000000000000000000000000000000000000000',
-  CONTRIBUTOR_REWARD: '0x0000000000000000000000000000000000000000',
-  GOVERNANCE: '0x0000000000000000000000000000000000000000',
-  TOKEN_REGISTRY: '0x0000000000000000000000000000000000000000',
-  CHAIN_CONFIG: '0x0000000000000000000000000000000000000000',
-}
-const SEPOLIA = {
-  VAULT: '0xbe3962Eaf7103d05665279469FFE3573352ec70C',
-  SETTLEMENT: '0x493Da680973F6c222c89eeC02922E91F1D9404a0',
-  TOKEN0: '0x678195277dc8F84F787A4694DF42F3489eA757bf',
-  TOKEN1: '0x9Be241a0bF1C2827194333B57278d1676494333a',
-  AMM_POOL: '0x8d392e6b270238c3a05dDB719795eE31ad7c72AF',
-  CONTRIBUTOR_REWARD: '0x851019107c4F3150D90f1629f6A646eBC1B1E286',
-  GOVERNANCE: '0x8F107ffaB0FC42E623AA69Bd10d8ad4cfbcE87BB',
-  TOKEN_REGISTRY: '0x77AF51BC13eE8b83274255f4a9077D3E9498c556',
-  CHAIN_CONFIG: '0x7639fc976361752c8d9cb82a41bc5D0F423D5169',
-}
-const addr = network === 'mainnet' ? MAINNET : network === 'polygon' ? POLYGON : SEPOLIA
-export const VAULT_ADDRESS = addr.VAULT as const
-export const SETTLEMENT_ADDRESS = addr.SETTLEMENT as const
-export const TOKEN0_ADDRESS = addr.TOKEN0 as const
-export const TOKEN1_ADDRESS = addr.TOKEN1 as const
-export const AMM_POOL_ADDRESS = addr.AMM_POOL as const
-export const CONTRIBUTOR_REWARD_ADDRESS = addr.CONTRIBUTOR_REWARD as const
-export const GOVERNANCE_ADDRESS = addr.GOVERNANCE as const
-export const TOKEN_REGISTRY_ADDRESS = addr.TOKEN_REGISTRY as const
-export const CHAIN_CONFIG_ADDRESS = addr.CHAIN_CONFIG as const
+const currentChainConfig = getChainConfig(initialChainId) || getChainConfig(DEFAULT_CHAIN_ID)!
+
+// 导出当前链配置（动态，可通过链切换更新）
+export const CHAIN_ID = currentChainConfig.chainId
+export const RPC_URL = currentChainConfig.rpcUrl
+export const VAULT_ADDRESS = currentChainConfig.contracts.vault as const
+export const SETTLEMENT_ADDRESS = currentChainConfig.contracts.settlement as const
+export const TOKEN0_ADDRESS = currentChainConfig.contracts.token0 as const
+export const TOKEN1_ADDRESS = currentChainConfig.contracts.token1 as const
+export const AMM_POOL_ADDRESS = currentChainConfig.contracts.ammPool as const
+export const CONTRIBUTOR_REWARD_ADDRESS = currentChainConfig.contracts.contributorReward as const
+export const GOVERNANCE_ADDRESS = currentChainConfig.contracts.governance as const
+export const TOKEN_REGISTRY_ADDRESS = currentChainConfig.contracts.tokenRegistry as const
+export const CHAIN_CONFIG_ADDRESS = currentChainConfig.contracts.chainConfig as const
+
+// 导出链配置获取函数（供组件使用）
+export { getChainConfig, DEFAULT_CHAIN_ID } from './config/chains'
 
 export const VAULT_ABI = [
   'function balanceOf(address token, address user) view returns (uint256)',

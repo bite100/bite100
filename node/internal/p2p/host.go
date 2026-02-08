@@ -37,15 +37,15 @@ func NewHost(listenAddrs []string, dataDir string) (host.Host, error) {
 	return libp2p.New(opts...)
 }
 
-// StartDHT 创建并启动 Kademlia DHT，连接 Bootstrap 节点
+// StartDHT 创建并启动 Kademlia DHT，连接 Bootstrap 节点（优化：重试、超时、DHT 发现）
 func StartDHT(ctx context.Context, h host.Host, bootstrapPeers []string) (*dht.IpfsDHT, error) {
 	kad, err := dht.New(ctx, h, dht.Mode(dht.ModeAutoServer))
 	if err != nil {
 		return nil, fmt.Errorf("new dht: %w", err)
 	}
-	if err := kad.Bootstrap(ctx); err != nil {
-		return nil, fmt.Errorf("dht bootstrap: %w", err)
-	}
+	
+	// 连接 Bootstrap 节点（带重试）
+	connectedCount := 0
 	for _, addrStr := range bootstrapPeers {
 		if addrStr == "" {
 			continue
@@ -61,12 +61,41 @@ func StartDHT(ctx context.Context, h host.Host, bootstrapPeers []string) (*dht.I
 			continue
 		}
 		h.Peerstore().AddAddrs(ai.ID, ai.Addrs, peerstore.PermanentAddrTTL)
-		if err := h.Connect(ctx, *ai); err != nil {
-			log.Printf("连接 bootstrap %s: %v", ai.ID, err)
-			continue
+		
+		// 重试连接（最多 3 次，每次 5 秒超时）
+		var lastErr error
+		for retry := 0; retry < 3; retry++ {
+			connCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := h.Connect(connCtx, *ai)
+			cancel()
+			if err == nil {
+				log.Printf("已连接 Bootstrap: %s", ai.ID)
+				connectedCount++
+				break
+			}
+			lastErr = err
+			if retry < 2 {
+				time.Sleep(time.Second * time.Duration(retry+1))
+			}
 		}
-		log.Printf("已连接 Bootstrap: %s", ai.ID)
+		if lastErr != nil && connectedCount == 0 {
+			log.Printf("连接 bootstrap %s 失败（已重试）: %v", ai.ID, lastErr)
+		}
 	}
+	
+	// 启动 DHT Bootstrap（即使没有直连的 bootstrap，DHT 也会尝试发现）
+	if err := kad.Bootstrap(ctx); err != nil {
+		log.Printf("DHT bootstrap 警告: %v（将继续运行，可能通过 DHT 发现节点）", err)
+	}
+	
+	if connectedCount > 0 {
+		log.Printf("已连接 %d 个 Bootstrap 节点，DHT 已启动", connectedCount)
+	} else if len(bootstrapPeers) > 0 {
+		log.Printf("未连接到任何 Bootstrap 节点，DHT 将尝试通过路由表发现节点")
+	} else {
+		log.Printf("未配置 Bootstrap 节点，DHT 将尝试通过路由表发现节点")
+	}
+	
 	return kad, nil
 }
 

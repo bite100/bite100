@@ -1,0 +1,51 @@
+---
+name: p2p-dex-project
+description: Guides work on the P2P DEX codebase: doc structure, concept/phase alignment, contract and frontend conventions. Use when editing project docs, adding features, planning work, or when the user asks about this repository's structure or conventions.
+---
+
+# P2P DEX 项目协作指南
+
+## 文档结构（必读）
+
+| 文档 | 路径 | 用途 |
+|------|------|------|
+| 概念设计文档 | docs/概念设计文档.md | 愿景、去中心化原则、经济模型比例、治理规则、Phase 1–4 路线 |
+| 规划与路线图 | docs/规划与路线图.md | 阶段对照、已完成项、近期优先级、Phase 3/4 大块 |
+| Phase2-设计文档 | docs/Phase2-设计文档.md | 节点类型、数据同步、贡献证明、M1–M4 里程碑 |
+| Phase3-设计文档 | docs/Phase3-设计文档.md | 链下订单簿、撮合节点、中继规模化、经济模型细化 |
+| 技术架构说明 | docs/技术架构说明.md | 分层架构、订单/成交结构、Gossip Topic、数据流 |
+| 贡献奖励接口 | docs/贡献奖励接口.md | 证明格式、链上校验、贡献分、奖励池与领取 |
+| API-接口说明 | docs/API-接口说明.md | 合约 ABI、链配置、Settlement/AMMPool/Governance |
+| 部署与使用说明 | docs/部署与使用说明.md | 环境、部署顺序、前端、治理 |
+| 主网部署指南 | docs/主网部署指南.md | 主网部署步骤与前端主网构建 |
+| 设计文档索引 | docs/设计文档索引.md | 设计文档列表与**维护约定**（以当时修改为准，随时更新设计文档） |
+
+**文档维护原则**：**以当时修改为准**，以每次修改时的内容为当前权威；功能、参数或阶段有变更时，**随时更新设计文档**（概念设计、规划与路线图、Phase2/Phase3、技术架构说明等），避免文档滞后。参见 [设计文档索引](docs/设计文档索引.md)。
+
+## 阶段对齐
+
+- **Phase 1**：链上合约 + 基础 DEX（Vault、Settlement、FeeDistributor、AMMPool、Governance、ContributorReward、TokenRegistry/ChainConfig）— 已完成。
+- **Phase 2**：节点（Go + libp2p）、存储/中继、数据同步、贡献证明与链上 ContributorReward — 已有；可完善保留期、中继指标。
+- **Phase 3**：链下订单簿、撮合节点、中继规模化、完整经济模型（40/25/15/15/5）— 见 Phase3-设计文档。
+- **Phase 4**：手机端、跨链、治理代币/DAO、第三方接入 — 部分（PWA/Electron/主网已做）。
+
+做设计或排期时，先对照概念文档与对应 Phase 文档，再改规划与路线图或新建/更新设计文档。
+
+## 代码与配置位置
+
+- **合约**：contracts/script/Deploy.s.sol（部署入口）；contracts/src/*.sol（Vault、Settlement、AMMPool、Governance、ContributorReward 等）。
+- **前端**：frontend/src/config.ts（链与合约地址）；frontend/src/App.tsx（主界面、钱包、缓存）；frontend/src/utils.ts（getProvider、withSigner、cache、isElectron）；frontend/electron/main.js（Electron + MetaMask 扩展）。
+- **节点**：node/ 下 Go 项目；internal/storage、internal/sync、internal/metrics、internal/reward；cmd/submitproof、cmd/merkletool。
+- **部署脚本**：contracts/scripts/（deploy-mainnet.ps1、redeploy-settlement-amm.ps1、deploy-governance.ps1、bind-settlement-amm-to-governance.ps1）。
+
+## 文档与提交约定
+
+- 设计类文档放在 docs/，文件名可用中文（如 概念设计文档.md、规划与路线图.md）。
+- 更新阶段状态或优先级时，改 docs/规划与路线图.md；若涉及 Phase 3/4 细节，改或引用 docs/Phase3-设计文档.md。
+- 合约/接口/贡献证明有变更时，同步更新 API-接口说明.md、贡献奖励接口.md 或 技术架构说明.md，避免文档与实现脱节。
+
+## 术语一致
+
+- 链下订单簿、撮合节点、中继节点、存储节点、贡献证明、ContributorReward、Settlement、Governance、Vault、AMMPool、FeeDistributor。
+- 经济模型比例：撮合 40%、存储 25%、中继 15%、团队 15%、治理 5%（与概念文档一致）。
+- 数据保留：电脑端最多 6 个月、手机端最多 1 个月，超期清理（与概念文档、Phase2、技术架构说明一致）。
