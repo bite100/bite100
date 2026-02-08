@@ -212,6 +212,7 @@ contract ContributorReward {
     }
 
     /// @notice 领取某周期某代币的应得奖励；若该周期已设置结束时间且超过结束+14天则禁止领取
+    /// @notice 每次领取不超过该周期奖励池的 10%，可多次领取直到领完应得部分
     function claimReward(string calldata period, address token) external {
         bytes32 pid = _periodId(period);
         uint256 endTs = periodEndTimestamp[pid];
@@ -225,8 +226,13 @@ contract ContributorReward {
         uint256 pool = periodReward[pid][token];
         require(pool > 0, "ContributorReward: no reward pool");
         uint256 distributable = (pool * (10000 - reserveBps)) / 10000;
-        uint256 amount = (distributable * myScore) / total - claimed[pid][token][msg.sender];
-        require(amount > 0, "ContributorReward: nothing to claim");
+        uint256 totalClaimable = (distributable * myScore) / total - claimed[pid][token][msg.sender];
+        require(totalClaimable > 0, "ContributorReward: nothing to claim");
+        
+        // 每次领取不超过奖励池的 10%
+        uint256 maxPerClaim = pool / 10;
+        uint256 amount = totalClaimable > maxPerClaim ? maxPerClaim : totalClaimable;
+        
         claimed[pid][token][msg.sender] += amount;
         require(IERC20(token).transfer(msg.sender, amount), "ContributorReward: transfer failed");
         emit RewardClaimed(pid, msg.sender, token, amount);
@@ -275,6 +281,21 @@ contract ContributorReward {
     /// @notice 查询某周期总贡献分
     function getPeriodTotalScore(string calldata period) external view returns (uint256) {
         return periodTotalScore[_periodId(period)];
+    }
+
+    /// @notice Owner 直接设置某地址在某周期的贡献分（用于上线奖励等特殊分配）
+    function setContributionScore(string calldata period, address account, uint256 score) external onlyOwner {
+        require(account != address(0), "ContributorReward: zero address");
+        bytes32 pid = _periodId(period);
+        uint256 oldScore = contributionScore[pid][account];
+        if (oldScore > 0) {
+            periodTotalScore[pid] -= oldScore;
+        }
+        if (score > 0) {
+            periodTotalScore[pid] += score;
+        }
+        contributionScore[pid][account] = score;
+        emit ProofSubmitted(pid, account, score);
     }
 
     function transferOwnership(address newOwner) external onlyOwner {

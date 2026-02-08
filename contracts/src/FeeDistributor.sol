@@ -4,12 +4,17 @@ pragma solidity ^0.8.0;
 import "./interfaces/IERC20.sol";
 
 /// @title FeeDistributor 手续费分配
-/// @notice 接收手续费，支持按比例分配与 claim
+/// @notice 接收手续费：开发者固定 5% 自动转至开发者地址；其余按比例由接收方 claim
 contract FeeDistributor {
     address public owner;
     address public vault; // 若手续费先入 Vault 再转本合约，可不用；若直接转本合约则需记录
 
-    /// 分配对象与比例（万分比，10000 = 100%）
+    /// @notice 开发者地址，收取手续费的固定 1%，无需手动领取
+    address public developerAddress;
+    /// @notice 开发者分成比例（万分比），永久 1%
+    uint16 public constant DEVELOPER_SHARE_BPS = 100;
+
+    /// 分配对象与比例（万分比，10000 = 100%）；仅针对「扣除开发者 5% 后的剩余部分」
     struct Recipient {
         address account;
         uint16 shareBps; // basis points
@@ -17,12 +22,14 @@ contract FeeDistributor {
     Recipient[] public recipients;
     uint16 public totalShareBps;
 
-    /// token => 未领取的累计金额
+    /// token => 未领取的累计金额（不含已转给开发者的 5%）
     mapping(address => uint256) public accumulated;
     /// token => account => 已领取
     mapping(address => mapping(address => uint256)) public claimed;
 
     event FeeReceived(address indexed token, uint256 amount);
+    event DeveloperPaid(address indexed token, address indexed developer, uint256 amount);
+    event DeveloperSet(address indexed developer);
     event RecipientSet(uint256 index, address account, uint16 shareBps);
     event Claimed(address indexed account, address indexed token, uint256 amount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -47,14 +54,26 @@ contract FeeDistributor {
             recipients.push(Recipient(accounts[i], shareBps[i]));
             emit RecipientSet(i, accounts[i], shareBps[i]);
         }
-        require(totalShareBps <= 10000, "FeeDistributor: share > 100%");
+        require(totalShareBps <= (developerAddress == address(0) ? 10000 : 10000 - DEVELOPER_SHARE_BPS), "FeeDistributor: share overflow"); // 开发者 1%，其余最多 99%
     }
 
-    /// @notice 接收手续费（由 Settlement 或 AMM 转入）
+    /// @notice 设置开发者地址（收取 5% 手续费，每次到账自动转入，无需兑换）
+    function setDeveloperAddress(address _developer) external onlyOwner {
+        developerAddress = _developer;
+        emit DeveloperSet(_developer);
+    }
+
+    /// @notice 接收手续费（由 Settlement 或 AMM 转入）：1% 自动转开发者，99% 进入分配池供 claim
     function receiveFee(address token, uint256 amount) external {
         require(token != address(0) && amount > 0, "FeeDistributor: invalid input");
         require(IERC20(token).transferFrom(msg.sender, address(this), amount), "FeeDistributor: transfer failed");
-        accumulated[token] += amount;
+
+        uint256 developerAmount = (developerAddress != address(0)) ? (amount * DEVELOPER_SHARE_BPS) / 10000 : 0;
+        if (developerAmount > 0) {
+            require(IERC20(token).transfer(developerAddress, developerAmount), "FeeDistributor: developer transfer failed");
+            emit DeveloperPaid(token, developerAddress, developerAmount);
+        }
+        accumulated[token] += amount - developerAmount;
         emit FeeReceived(token, amount);
     }
 

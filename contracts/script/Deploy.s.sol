@@ -35,12 +35,14 @@ contract Deploy is Script {
         // 4. Vault 绑定 Settlement
         vault.setSettlement(address(settlement));
 
-        // 5. FeeDistributor 设置接收方（部署者 100%）
+        // 5. FeeDistributor：开发者 5% 自动到账，其余 95% 由接收方 claim
+        address developer = vm.envOr("DEVELOPER_ADDRESS", deployer);
+        feeDistributor.setDeveloperAddress(developer);
         address feeRecipient = vm.envOr("FEE_RECIPIENT", deployer);
         address[] memory accounts = new address[](1);
         accounts[0] = feeRecipient;
         uint16[] memory shareBps = new uint16[](1);
-        shareBps[0] = 10000;
+        shareBps[0] = 9900; // 99%，开发者 1% 已单独自动转
         feeDistributor.setRecipients(accounts, shareBps);
 
         vm.stopBroadcast();
@@ -60,11 +62,13 @@ contract Deploy is Script {
         Settlement settlement = new Settlement(address(vault), address(feeDistributor));
         vault.setSettlement(address(settlement));
 
+        address developer = vm.envOr("DEVELOPER_ADDRESS", deployer);
+        feeDistributor.setDeveloperAddress(developer);
         address feeRecipient = vm.envOr("FEE_RECIPIENT", deployer);
         address[] memory accounts = new address[](1);
         accounts[0] = feeRecipient;
         uint16[] memory shareBps = new uint16[](1);
-        shareBps[0] = 10000;
+        shareBps[0] = 9900; // 99%，开发者 1% 已单独自动转
         feeDistributor.setRecipients(accounts, shareBps);
 
         // Mock 代币
@@ -144,12 +148,20 @@ contract Deploy is Script {
     }
 
     /// @notice 仅部署 ContributorReward（贡献证明与按周期分配奖励）
+    /// 可选：DEVELOPER_ADDRESS（上线奖励 5 万贡献分地址，默认同 deployer）, LAUNCH_PERIOD（周期名，默认 "launch"）
+    /// 上线奖励可自由流通：不受周期结束时间限制，可随时领取（需先注入奖励池 setPeriodReward）
     function runContributorReward() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
         vm.startBroadcast(deployerPrivateKey);
         ContributorReward contributorReward = new ContributorReward();
+        address developer = vm.envOr("DEVELOPER_ADDRESS", deployer);
+        string memory launchPeriod = vm.envOr("LAUNCH_PERIOD", string("launch"));
+        contributorReward.setContributionScore(launchPeriod, developer, 50000e18);
         vm.stopBroadcast();
         console.log("ContributorReward", address(contributorReward));
+        console.log("Developer launch reward: 50000 contribution score set for", developer);
+        console.log("Note: Inject reward pool via setPeriodReward to enable claiming");
     }
 
     /// @notice 重新部署 Settlement 与 AMMPool（当前源码含 governance），并绑定 Governance
@@ -181,7 +193,7 @@ contract Deploy is Script {
 
     /// @notice 主网一键部署：核心 + AMM（真实代币）+ 治理
     /// 需设置：PRIVATE_KEY, TOKEN0_ADDRESS, TOKEN1_ADDRESS（主网真实 ERC20，如 USDT/USDC）
-    /// 可选：FEE_RECIPIENT, MAINNET_RPC_URL
+    /// 可选：FEE_RECIPIENT, DEVELOPER_ADDRESS（开发者 1% 自动到账地址，默认同 deployer）, MAINNET_RPC_URL
     function runMainnetFull() external {
         address token0Addr = vm.envAddress("TOKEN0_ADDRESS");
         address token1Addr = vm.envAddress("TOKEN1_ADDRESS");
@@ -195,11 +207,13 @@ contract Deploy is Script {
         Settlement settlement = new Settlement(address(vault), address(feeDistributor));
         vault.setSettlement(address(settlement));
 
+        address developer = vm.envOr("DEVELOPER_ADDRESS", deployer);
+        feeDistributor.setDeveloperAddress(developer);
         address feeRecipient = vm.envOr("FEE_RECIPIENT", deployer);
         address[] memory accounts = new address[](1);
         accounts[0] = feeRecipient;
         uint16[] memory shareBps = new uint16[](1);
-        shareBps[0] = 10000;
+        shareBps[0] = 9900; // 99%，开发者 1% 已单独自动转
         feeDistributor.setRecipients(accounts, shareBps);
 
         AMMPool ammPool = new AMMPool(token0Addr, token1Addr, address(feeDistributor));
@@ -214,6 +228,11 @@ contract Deploy is Script {
         ChainConfig chainConfig = new ChainConfig();
         tokenRegistry.setGovernance(address(gov));
         chainConfig.setGovernance(address(gov));
+
+        // 上线奖励：给开发者地址设置 5 万贡献分（第一个周期，可自由流通，不受周期结束时间限制）
+        string memory launchPeriod = vm.envOr("LAUNCH_PERIOD", string("launch"));
+        contributorReward.setContributionScore(launchPeriod, developer, 50000e18);
+        // 注意：需后续通过 setPeriodReward 注入奖励池后，开发者才能领取；周期未设置结束时间，可随时领取
 
         vm.stopBroadcast();
 

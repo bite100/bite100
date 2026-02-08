@@ -79,18 +79,27 @@ function withdraw(address token, uint256 amount)
 
 ### 2.4 FeeDistributor（手续费分配）
 
+**开发者 1% 永久分成**：手续费的 **1%** 在每次 `receiveFee` 时**自动转入** `developerAddress`，无需手动 claim 或兑换。其余部分按 `recipients` 比例由各接收方自行 `claim`；`setRecipients` 时总比例不得超过 99%（10000 - 100 bps）。
+
 | 方法 | 类型 | 说明 |
 |------|------|------|
-| `receiveFee(address token, uint256 amount)` | write | 接收手续费（由 Settlement/AMM 调用） |
-| `claim(address token)` | write | 领取应得份额 |
+| `receiveFee(address token, uint256 amount)` | write | 接收手续费（由 Settlement/AMM 调用）；1% 自动转开发者，99% 进入分配池 |
+| `claim(address token)` | write | 领取应得份额（仅针对 95% 分配池） |
 | `claimable(address token, address account)` | view | 查询可领取金额 |
-| `setRecipients(address[] accounts, uint16[] shareBps)` | write | 设置分配对象与比例（仅 owner） |
+| `setRecipients(address[] accounts, uint16[] shareBps)` | write | 设置分配对象与比例（仅 owner；总比例 ≤ 9500 bps） |
+| `setDeveloperAddress(address _developer)` | write | 设置开发者地址（仅 owner）；设为 0 可关闭自动转出，此时接收方比例可设至 100% |
+| `developerAddress()` | view | 开发者地址 |
+| `DEVELOPER_SHARE_BPS` | constant | 100（1%） |
+
+**事件**：`FeeReceived`、`DeveloperPaid(token, developer, amount)`、`DeveloperSet`、`RecipientSet`、`Claimed`
 
 **ABI（前端用）**：
 ```
 function receiveFee(address token, uint256 amount)
 function claim(address token)
 function claimable(address token, address account) view returns (uint256)
+function setDeveloperAddress(address _developer)
+function developerAddress() view returns (address)
 ```
 
 ### 2.5 AMMPool（AMM 交易池）
@@ -137,14 +146,17 @@ function addLiquidity(uint256 amount0, uint256 amount1)
 | `submitProof(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType, signature)` | write | 提交贡献证明（msg.sender 为领奖地址，signature 为 ECDSA 65 字节） |
 | `setPeriodReward(period, token, amount)` | write | Owner 注入某周期某代币奖励池 |
 | `setPeriodEndTimestamp(periodId, endTimestamp)` | write | Owner 设置某周期结束时间（Unix 秒）；设置后超过 endTimestamp+14 天禁止领取 |
-| `claimReward(period, token)` | write | 领取某周期某代币应得奖励（若已设结束时间且过期则 revert） |
+| `claimReward(period, token)` | write | 领取某周期某代币应得奖励（若已设结束时间且过期则 revert）；**每次领取不超过该周期奖励池的 10%**，可多次领取直到领完应得部分 |
 | `claimable(period, token, account)` | view | 查询可领取金额（过期返回 0） |
 | `getContributionScore(period, account)` | view | 查询某周期贡献分 |
 | `getPeriodTotalScore(period)` | view | 查询某周期总贡献分 |
+| `setContributionScore(period, account, score)` | write | Owner 直接设置某地址贡献分（用于上线奖励等特殊分配） |
 | `periodEndTimestamp(periodId)` | view | 某周期结束时间（0 表示未设置，不校验截止） |
 | `CLAIM_DEADLINE_SECONDS` | constant | 14 days |
 
 **事件**：`ProofSubmitted`, `PeriodRewardSet`, `PeriodEndTimestampSet`, `RewardClaimed`
+
+**上线奖励**：部署时通过 `setContributionScore("launch", developerAddress, 50000e18)` 给开发者地址设置 5 万贡献分（第一个周期）。**可自由流通**：该贡献分不受周期结束时间限制（周期未设置结束时间），可随时领取奖励（需先注入奖励池 `setPeriodReward`）。
 
 **节点端提交**：使用 `go run ./cmd/submitproof -proof <JSON> -contract <addr> -rpc <url> -key <EVM 私钥>` 或环境变量 `REWARD_ETH_PRIVATE_KEY`。
 
