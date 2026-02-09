@@ -1,3 +1,4 @@
+// @ts-nocheck
 import React, { useEffect, useState } from 'react'
 import { ethers } from 'ethers'
 import { P2PProvider, useP2P } from './contexts/P2PContext'

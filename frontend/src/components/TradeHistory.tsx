@@ -1,4 +1,3 @@
-import React from 'react'
 import { useTrades } from '../hooks/useTrades'
 import './TradeHistory.css'
 
@@ -7,7 +6,7 @@ interface TradeHistoryProps {
 }
 
 export function TradeHistory({ pair }: TradeHistoryProps) {
-  const trades = useTrades(pair)
+  const { trades } = useTrades(pair)
 
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp)

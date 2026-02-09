@@ -29,9 +29,9 @@ export async function submitOrder(
     userAddress: address,
     tokenIn: params.tokenIn,
     tokenOut: params.tokenOut,
-    amountIn: ethers.utils.parseUnits(params.amountIn, 18).toString(),
-    amountOut: ethers.utils.parseUnits(params.amountOut, 18).toString(),
-    price: ethers.utils.parseUnits(params.price, 18).toString(),
+    amountIn: ethers.parseUnits(params.amountIn, 18).toString(),
+    amountOut: ethers.parseUnits(params.amountOut, 18).toString(),
+    price: ethers.parseUnits(params.price, 18).toString(),
     timestamp,
     expiresAt,
   }
@@ -40,7 +40,7 @@ export async function submitOrder(
   const signature = await signOrder(orderData, signer)
   
   // 提交到 P2P 节点
-  const { data } = await nodePost('/api/order', {
+  await nodePost('/api/order', {
     orderId,
     trader: address,
     pair: params.pair,

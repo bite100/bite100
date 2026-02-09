@@ -5,7 +5,7 @@ const _raw = (import.meta.env.VITE_NODE_API_URL ?? '').trim()
 export const NODE_API_URL = _raw.split(',')[0]?.replace(/\/$/, '') ?? ''
 /** 节点 API 列表（P2P 多节点：逗号分隔多个 URL，请求时依次尝试直至成功） */
 export const NODE_API_URLS: string[] = _raw
-  ? _raw.split(',').map((u) => u.trim().replace(/\/$/, '')).filter(Boolean)
+  ? _raw.split(',').map((u: string) => u.trim().replace(/\/$/, '')).filter(Boolean)
   : []
 
 // P2P 配置（路径 2：浏览器 + 公共 relay，支持多 relay fallback）
@@ -36,15 +36,15 @@ const currentChainConfig = getChainConfig(initialChainId) || getChainConfig(DEFA
 // 导出当前链配置（动态，可通过链切换更新）
 export const CHAIN_ID = currentChainConfig.chainId
 export const RPC_URL = currentChainConfig.rpcUrl
-export const VAULT_ADDRESS = currentChainConfig.contracts.vault as const
-export const SETTLEMENT_ADDRESS = currentChainConfig.contracts.settlement as const
-export const TOKEN0_ADDRESS = currentChainConfig.contracts.token0 as const
-export const TOKEN1_ADDRESS = currentChainConfig.contracts.token1 as const
-export const AMM_POOL_ADDRESS = currentChainConfig.contracts.ammPool as const
-export const CONTRIBUTOR_REWARD_ADDRESS = currentChainConfig.contracts.contributorReward as const
-export const GOVERNANCE_ADDRESS = currentChainConfig.contracts.governance as const
-export const TOKEN_REGISTRY_ADDRESS = currentChainConfig.contracts.tokenRegistry as const
-export const CHAIN_CONFIG_ADDRESS = currentChainConfig.contracts.chainConfig as const
+export const VAULT_ADDRESS = currentChainConfig.contracts.vault
+export const SETTLEMENT_ADDRESS = currentChainConfig.contracts.settlement
+export const TOKEN0_ADDRESS = currentChainConfig.contracts.token0
+export const TOKEN1_ADDRESS = currentChainConfig.contracts.token1
+export const AMM_POOL_ADDRESS = currentChainConfig.contracts.ammPool
+export const CONTRIBUTOR_REWARD_ADDRESS = currentChainConfig.contracts.contributorReward
+export const GOVERNANCE_ADDRESS = currentChainConfig.contracts.governance
+export const TOKEN_REGISTRY_ADDRESS = currentChainConfig.contracts.tokenRegistry
+export const CHAIN_CONFIG_ADDRESS = currentChainConfig.contracts.chainConfig
 
 // 导出链配置获取函数（供组件使用）
 export { getChainConfig, DEFAULT_CHAIN_ID } from './config/chains'

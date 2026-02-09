@@ -44,7 +44,7 @@ export async function nodeGet<T>(path: string, params?: Record<string, string>):
 export async function nodePost(
   path: string,
   body: unknown
-): Promise<{ ok: boolean; baseUrl: string }> {
+): Promise<{ data: { ok: boolean }; baseUrl: string }> {
   return tryNodes(async (baseUrl) => {
     const r = await fetch(`${baseUrl}${path}`, {
       method: 'POST',

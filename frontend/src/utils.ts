@@ -1,10 +1,14 @@
 /** 工具函数：钱包 Provider、缓存、错误格式化等（仅浏览器/PWA） */
 import { BrowserProvider, type Eip1193Provider, type Signer } from 'ethers'
 
-const WIN = typeof window !== 'undefined' ? (window as unknown as { ethereum?: Eip1193Provider }) : null
+const WIN =
+  typeof window !== 'undefined'
+    ? (window as unknown as { ethereum?: Eip1193Provider; phantom?: { ethereum?: Eip1193Provider } })
+    : null
 
 export function getEthereum(): Eip1193Provider | null {
-  return WIN?.ethereum ?? null
+  // 优先使用标准 window.ethereum，其次尝试 Phantom 的 EVM provider
+  return WIN?.ethereum ?? WIN?.phantom?.ethereum ?? null
 }
 
 export function getProvider(): BrowserProvider | null {

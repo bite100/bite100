@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { BrowserProvider } from 'ethers'
-import { SUPPORTED_CHAINS, getChainConfig, getAddChainParams, isChainSupported, DEFAULT_CHAIN_ID } from '../config/chains'
+import { SUPPORTED_CHAINS, getChainConfig, getAddChainParams } from '../config/chains'
 import { debug } from '../utils'
 import './ChainSwitcher.css'
 

@@ -17,7 +17,7 @@ import {
   type Match,
   type OnChainTrade,
 } from '../p2p/storage'
-import type { Order, Trade } from '../p2p/types'
+import type { Trade } from '../p2p/types'
 
 export { DatabaseManager, OrderStorage, MatchStorage, TradeStorage }
 export type { OrderStatus, StoredOrder, Match, OnChainTrade }

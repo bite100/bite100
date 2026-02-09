@@ -1,4 +1,3 @@
-import React from 'react'
 import { useP2P } from '../contexts/P2PContext'
 import './P2PStatus.css'
 

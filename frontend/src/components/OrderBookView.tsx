@@ -1,4 +1,3 @@
-import React from 'react'
 import { useOrderBook } from '../hooks/useOrderBook'
 import './OrderBookView.css'
 

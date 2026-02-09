@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
 import { Contract } from 'ethers'
-import { CHAIN_ID, RPC_URL, VAULT_ADDRESS, VAULT_ABI, ERC20_ABI, AMM_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
+import { useConnection, useConnect, useDisconnect } from 'wagmi'
+import { CHAIN_ID, VAULT_ABI, ERC20_ABI, AMM_ABI, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
 import { OrderBookSection } from './OrderBookSection'
@@ -10,11 +11,10 @@ import { RewardPoolInfo } from './components/RewardPoolInfo'
 import { UnifiedRewardClaim } from './components/UnifiedRewardClaim'
 import { AddNetworkButton } from './components/AddNetworkButton'
 import { Navigation, type Tab } from './components/Navigation'
-import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorDisplay } from './components/ErrorDisplay'
 import { ChainSwitcher } from './components/ChainSwitcher'
 import { useChain } from './hooks/useChain'
-import { getEthereum, getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL, debug } from './utils'
+import { getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL } from './utils'
 import './App.css'
 
 /** 治理模块错误边界：治理区报错时不影响整页 */
@@ -48,7 +48,16 @@ function setStored(key: string, value: string) {
 }
 
 function App() {
-  const [account, setAccount] = useState<string | null>(null)
+  const connection = useConnection()
+  const account = connection.address ?? null
+  const { connect, connectors, isPending: connectPending, error: connectError } = useConnect()
+  const { disconnect } = useDisconnect()
+
+  const connectionLabel =
+    connection.connector?.id === 'walletConnect'
+      ? 'WalletConnect / 钱包 App'
+      : connection.connector?.name || '浏览器钱包'
+
   const [ethBalance, setEthBalance] = useState<string>('')
   const [vaultBalance, setVaultBalance] = useState<string>('')
   const [walletTokenBalance, setWalletTokenBalance] = useState<string>('')
@@ -60,7 +69,7 @@ function App() {
   })
   const [depositAmount, setDepositAmount] = useState<string>('')
   const [withdrawAmount, setWithdrawAmount] = useState<string>('')
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(false) // 用于余额/其他操作，连接状态用 connectPending
   const [loadingDeposit, setLoadingDeposit] = useState(false)
   const [loadingWithdraw, setLoadingWithdraw] = useState(false)
   const [loadingSwap, setLoadingSwap] = useState(false)
@@ -115,53 +124,27 @@ function App() {
   }, [])
   useEffect(() => { setStored('swapTokenIn', swapTokenIn) }, [swapTokenIn])
 
-  const connectWallet = useCallback(async () => {
-    debug.log('🔗 开始连接钱包...')
+  const handleConnectInjected = useCallback(() => {
     setError(null)
-    setLoading(true)
-    try {
-      const ethereum = getEthereum()
-      if (!ethereum) {
-        setError('请安装 MetaMask 或其他钱包扩展')
-        setLoading(false)
-        return
-      }
-      const provider = getProvider()
-      if (!provider) {
-        setError('请安装 MetaMask 或其他钱包扩展')
-        setLoading(false)
-        return
-      }
-      debug.log('✅ 开始请求账户...')
-      const accounts = (await ethereum.request({ method: 'eth_requestAccounts' })) as string[]
-      if (!accounts.length) {
-        setError('未获取到账户')
-        setLoading(false)
-        return
-      }
-      // 检查当前链，如果不支持则提示切换
-      const chainIdRaw = await ethereum.request({ method: 'eth_chainId' })
-      const chainId = typeof chainIdRaw === 'string' ? parseInt(chainIdRaw, 16) : Number(chainIdRaw)
-      const currentConfig = getChainConfig(chainId)
-      
-      if (!currentConfig) {
-        // 当前链不支持，提示用户切换
-        setError(`当前链（Chain ID: ${chainId}）不支持，请切换到支持的链`)
-        // 不阻止连接，但提示用户切换
-      }
-      setAccount(accounts[0])
-      debug.log('✅ 账户已连接:', accounts[0])
-      
-      const balance = await provider.getBalance(accounts[0])
-      setEthBalance(balance ? (Number(balance) / 1e18).toFixed(6) : '0')
-      debug.log('✅ 余额已获取:', balance ? (Number(balance) / 1e18).toFixed(6) : '0')
-    } catch (e) {
-      debug.error('❌ 连接钱包失败:', e)
-      setError(formatError(e))
-    } finally {
-      setLoading(false)
+    const connector = connectors?.find((c) => c.type === 'injected') ?? connectors?.[0]
+    if (!connector) {
+      setError('未检测到浏览器钱包（请安装 MetaMask / Rabby / Phantom 等，或在钱包 App 内置浏览器中打开本页）')
+      return
     }
-  }, [])
+    connect({ connector }, { onError: (e) => setError(formatError(e)) })
+  }, [connectors, connect])
+
+  const handleConnectWalletConnect = useCallback(() => {
+    setError(null)
+    const connector =
+      connectors?.find((c) => c.id === 'walletConnect') ??
+      connectors?.find((c) => c.name.toLowerCase().includes('walletconnect'))
+    if (!connector) {
+      setError('当前未配置 WalletConnect（需要设置 VITE_WC_PROJECT_ID）。')
+      return
+    }
+    connect({ connector }, { onError: (e) => setError(formatError(e)) })
+  }, [connectors, connect])
 
   const tokenAddr = tokenAddress.trim()
 
@@ -486,21 +469,33 @@ function App() {
 
       {!account ? (
         <>
-          <button 
-            className="btn primary" 
-            onClick={() => {
-              if (loading) return
-              connectWallet().catch(err => {
-                debug.error('连接钱包异常:', err)
-                setError(formatError(err))
-                setLoading(false)
-              })
-            }}
-            disabled={loading}
-            type="button"
-          >
-            {loading ? '连接中...' : '连接钱包'}
-          </button>
+          <div className="connect-buttons">
+            <button
+              className="btn primary"
+              onClick={handleConnectInjected}
+              disabled={connectPending}
+              type="button"
+            >
+              {connectPending ? '连接中...' : '浏览器钱包连接'}
+            </button>
+            {connectors?.some((c) => c.id === 'walletConnect' || c.name.toLowerCase().includes('walletconnect')) && (
+              <button
+                className="btn secondary"
+                onClick={handleConnectWalletConnect}
+                disabled={connectPending}
+                type="button"
+                style={{ marginLeft: '0.5rem' }}
+              >
+                {connectPending ? '连接中...' : 'WalletConnect / 钱包 App'}
+              </button>
+            )}
+          </div>
+          <p className="hint" style={{ marginTop: '0.5rem', marginBottom: 0, fontSize: '0.85rem' }}>
+            手机端建议在 MetaMask、Trust 等钱包 App 内置浏览器中打开本页，或使用 WalletConnect 从外部浏览器自动拉起钱包 App。
+          </p>
+          <p className="hint" style={{ marginTop: '0.25rem', marginBottom: 0, fontSize: '0.8rem' }}>
+            支持主流 EVM 钱包：MetaMask、Rabby、Phantom（EVM 模式）、OKX、Bitget、imToken、Trust 等。
+          </p>
           <AddNetworkButton chainId={currentChainId ?? undefined} className="add-network-below-connect" />
           <div className="public-data-section" style={{ marginTop: '1rem' }}>
             <LiquidityPoolInfo />
@@ -514,9 +509,16 @@ function App() {
             <span className="value mono">{shortAddress(account)}</span>
           </div>
           <div className="row">
+            <span className="label">连接方式</span>
+            <span className="value">{connectionLabel}</span>
+          </div>
+          <div className="row">
             <span className="label">钱包 ETH 余额</span>
             <span className="value">{ethBalance} ETH</span>
           </div>
+          <button type="button" className="btn secondary" onClick={() => disconnect()} style={{ marginTop: '0.5rem' }}>
+            断开连接
+          </button>
         </div>
       )}
 
@@ -544,7 +546,7 @@ function App() {
                 </div>
                 <button
                   className="btn secondary"
-                  onClick={fetchBalances}
+                  onClick={() => fetchBalances(false)}
                   disabled={loading || !isValidAddress(tokenAddr)}
                 >
                   {loading ? '查询中…' : '查询余额'}
@@ -723,7 +725,7 @@ function App() {
       )}
 
       <ErrorDisplay
-        error={error}
+        error={error ?? (connectError ? formatError(connectError) : null)}
         onRetry={() => {
           setError(null)
           if (account && isValidAddress(tokenAddr)) fetchBalances()

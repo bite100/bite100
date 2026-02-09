@@ -2,11 +2,11 @@
 
 > **手机浏览器即用，无需节点、无需 App。** 打开链接 → 连钱包 → gasless 交易 → PWA 添加主屏幕。
 
-基于区块链与 P2P 网络的去中心化交易所。**采用路径 2**：浏览器前端 + 少量公共 relay 节点；用户零门槛，relay 由项目方/社区在 VPS 上运行（轻量模式：只广播 + WebSocket），去中心化程度随 relay 数量增加而提升。
+基于区块链与 P2P 网络的去中心化交易所。**采用路径 2（浏览器 + 公共 relay）**：前端仅用浏览器，由少量公共 relay 节点提供 GossipSub + WebSocket；用户零门槛，relay 由项目方/社区在 VPS 上运行（轻量模式：只广播 + wss），去中心化程度随 relay 数量增加而提升。
 
 ## 🎯 项目愿景
 
-用**手机浏览器 + 公共 relay + 可自定义分成**，实现无托管、链上结算、真正可落地的 P2P 交易。
+突出 **手机浏览器**、**公共 relay**、**零门槛**、**gasless**、**可跑 relay 获分成**：用浏览器 + 公共 relay + 可自定义分成，实现无托管、链上结算、真正可落地的 P2P 交易。
 
 **核心价值主张**：
 - ✅ **去中心化**：无托管、无 KYC、链上结算、可自定义分成
@@ -71,17 +71,17 @@ chmod +x scripts/start-dev.sh
 
 启动后访问：http://localhost:5173
 
-详细步骤见 [docs/快速开始.md](docs/快速开始.md)
+详细步骤见 [快速开始](docs/快速开始.md)。
 
 ### 生产环境：Relay 列表 + wss
 
-前端支持多 relay 地址依次 fallback（`VITE_P2P_WS_URLS=wss://relay1.p2p-p2p.xyz/ws,wss://relay2...`）。Relay 节点可用 **`--mode=relay`** 轻量运行（仅 GossipSub + WebSocket），Nginx 反代 + Certbot 即可提供 wss。详见 [Relay 部署与 Nginx](docs/Relay部署与Nginx.md)。
+前端支持多 relay 地址依次 fallback（`VITE_P2P_WS_URLS=wss://relay1.example.com/ws,wss://relay2...`）。Relay 节点可用 **`--mode=relay`** 轻量运行（仅 GossipSub + WebSocket），Nginx 反代 + Certbot 即可提供 wss。详见 **[Relay 部署与 Nginx](docs/Relay部署与Nginx.md)**。
 
 ---
 
 ## 使用方式
 
-**完全放弃电脑端**（无 Electron、无 Windows exe）。请使用 **手机/电脑浏览器** 打开前端，或 **PWA 添加到主屏幕**。无需自建节点、无需下载 App。
+**完全放弃电脑端**（无 Electron、无 Windows exe），**仅浏览器 / PWA**。请使用手机或电脑浏览器打开前端，或 PWA 添加到主屏幕。**无需自建节点、无需 App**。
 
 ---
 
@@ -146,6 +146,8 @@ npm run dev          # 默认连接 Sepolia，浏览器打开 http://localhost:5
 
 ## 🏗️ 项目结构
 
+项目方向已改为 **仅浏览器 + 公共 relay**（无 Electron 桌面版、无 Windows exe）。
+
 ```
 P2P/
 ├── contracts/     # 智能合约（Foundry）
@@ -155,12 +157,12 @@ P2P/
 │   ├── Governance.sol       # DAO 治理
 │   └── CrossChainBridge.sol # 跨链桥接（LayerZero）
 ├── frontend/      # Web 前端（React + Vite + ethers）
-│   ├── PWA 支持            # 手机浏览器优先，relay 列表 + fallback
-│   └── 仅浏览器            # 无桌面版
+│   ├── PWA + relay 列表 + fallback   # 多 relay wss 依次回退
+│   └── 仅浏览器 / PWA                # 无桌面版、无 App
 ├── node/          # P2P 节点（Go + libp2p）
-│   ├── --mode=relay        # 轻量 relay：仅 GossipSub + WebSocket
-│   ├── MatchEngine         # 可选撮合引擎
-│   └── WebSocket API       # 实时订单簿
+│   ├── --mode=relay        # 轻量 relay：仅 GossipSub + WebSocket API
+│   ├── MatchEngine         # 可选撮合引擎（非 relay 模式）
+│   └── WebSocket API       # 实时订单簿、wss 接入
 ├── docs/          # 完整文档
 │   ├── 项目价值与定位.md    # 项目意义与差异化
 │   ├── 概念设计文档.md      # 愿景与架构

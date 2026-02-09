@@ -61,15 +61,6 @@ const ORDERBOOK_DISPLAY_DEPTH = 12
 const TRADES_DISPLAY_LIMIT = 15
 const hasNodeApi = () => !!(NODE_API_URL || NODE_API_URLS.length > 0)
 
-/** 生成 orderId：keccak256(abi.encodePacked(trader, nonce, pair, side, price, amount)) */
-function buildOrderId(trader: string, nonce: number, pair: string, side: string, price: string, amount: string): string {
-  const addr = trader.length === 42 && trader.startsWith('0x') ? trader : ethers.getAddress(trader)
-  return ethers.solidityPackedKeccak256(
-    ['address', 'uint64', 'string', 'string', 'string', 'string'],
-    [addr, BigInt(nonce), pair, side, price, amount]
-  )
-}
-
 export function OrderBookSection({ account, getSigner }: { account: string | null; getSigner: () => Promise<Signer | null> }) {
   const [pair, setPair] = useState(DEFAULT_PAIR)
   const [orderbook, setOrderbook] = useState<OrderbookResponse | null>(null)

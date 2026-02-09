@@ -1,23 +1,13 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Contract, BrowserProvider } from 'ethers'
+import { Contract } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig } from '../config/chains'
-import { getProvider, withSigner, formatTokenAmount, formatError, debug } from '../utils'
+import { getProvider, withSigner, formatTokenAmount, formatError } from '../utils'
 import { ERC20_ABI } from '../config'
 import './CrossChainBridge.css'
 
 interface CrossChainBridgeProps {
   account: string | null
   currentChainId: number | null
-}
-
-// LayerZero Endpoint V2 地址（示例，实际需根据链配置）
-const LAYERZERO_ENDPOINTS: Record<number, string> = {
-  1: '0x1a44076050125825900e736c501f859c50fE728c', // Ethereum
-  8453: '0x1a44076050125825900e736c501f859c50fE728c', // Base
-  42161: '0x1a44076050125825900e736c501f859c50fE728c', // Arbitrum
-  137: '0x1a44076050125825900e736c501f859c50fE728c', // Polygon
-  10: '0x1a44076050125825900e736c501f859c50fE728c', // Optimism
-  11155111: '0x6EDCE65403992e310A62460808c4b910D972f10f', // Sepolia
 }
 
 const CROSS_CHAIN_BRIDGE_ABI = [

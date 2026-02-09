@@ -58,16 +58,18 @@ export async function initP2PClient(options: P2PClientOptions = {}): Promise<Lib
       // Bootstrap 节点发现
       ...(bootstrapList.length > 0 ? [bootstrap({ list: bootstrapList })] : []),
       // DHT 节点发现（用于热门订单缓存）
-      ...(enableDHTCache ? [kadDHT({
-        clientMode: false, // 同时作为 DHT 客户端和服务器
-        kBucketSize: 20,
-        // DHT 查询优化
-        queryTimeout: 10000,
-        providers: {
-          // 缓存热门订单
-          providePrefix: '/p2p-dex/orders/0.0.1',
-        },
-      })] : []),
+      ...(enableDHTCache
+        ? [
+            kadDHT({
+              clientMode: false, // 同时作为 DHT 客户端和服务器
+              kBucketSize: 20,
+              // 其余 DHT 优化参数在类型中未暴露，这里不显式配置
+              providers: {
+                providePrefix: '/p2p-dex/orders/0.0.1',
+              } as any,
+            }),
+          ]
+        : []),
       identify(),
     ],
     connectionManager: {
@@ -78,7 +80,7 @@ export async function initP2PClient(options: P2PClientOptions = {}): Promise<Lib
       autoDial: true,
       autoDialInterval: 10000,
     },
-  })
+  } as any)
 
   // 启动节点
   await p2pNode.start()
