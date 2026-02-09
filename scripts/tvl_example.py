@@ -1,3 +1,120 @@
+"""
+简单 TVL 脚本示例：
+- 读取 Vault 与 AMM 池中的 TKA/TKB 余额
+- 按当前价格（可选，默认 1:1）估算 TVL
+
+用法：
+    python scripts/tvl_example.py
+
+依赖：
+    pip install web3
+"""
+
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Optional
+import os
+
+from web3 import Web3
+
+
+@dataclass
+class ChainConfig:
+  rpc_url: str
+  vault: str
+  amm_pool: str
+  token0: str
+  token1: str
+
+
+# 默认使用 Sepolia，地址与 frontend/src/config/chains.ts 中一致
+DEFAULT_CONFIG = ChainConfig(
+  rpc_url=os.environ.get("RPC_URL", "https://ethereum-sepolia.publicnode.com"),
+  vault="0xbe3962Eaf7103d05665279469FFE3573352ec70C",
+  amm_pool="0x8d392e6b270238c3a05dDB719795eE31ad7c72AF",
+  token0="0x678195277dc8F84F787A4694DF42F3489eA757bf",  # TKA
+  token1="0x9Be241a0bF1C2827194333B57278d1676494333a",  # TKB
+)
+
+
+ERC20_ABI = [
+  {
+    "constant": True,
+    "inputs": [{"name": "_owner", "type": "address"}],
+    "name": "balanceOf",
+    "outputs": [{"name": "balance", "type": "uint256"}],
+    "type": "function",
+  }
+]
+
+VAULT_ABI = [
+  {
+    "constant": True,
+    "inputs": [{"name": "token", "type": "address"}, {"name": "user", "type": "address"}],
+    "name": "balanceOf",
+    "outputs": [{"name": "balance", "type": "uint256"}],
+    "type": "function",
+  }
+]
+
+AMM_ABI = [
+  {
+    "constant": True,
+    "inputs": [],
+    "name": "reserve0",
+    "outputs": [{"name": "", "type": "uint256"}],
+    "type": "function",
+  },
+  {
+    "constant": True,
+    "inputs": [],
+    "name": "reserve1",
+    "outputs": [{"name": "", "type": "uint256"}],
+    "type": "function",
+  },
+]
+
+
+def wei_to_decimal(value: int, decimals: int = 18) -> Decimal:
+  return Decimal(value) / (Decimal(10) ** decimals)
+
+
+def get_vault_tvl(web3: Web3, cfg: ChainConfig) -> Decimal:
+  vault = web3.eth.contract(address=cfg.vault, abi=VAULT_ABI)
+  # Vault 按 token 地址 + 用户地址记录余额，这里用零地址统计「总余额」示例
+  zero = "0x0000000000000000000000000000000000000000"
+  bal0 = vault.functions.balanceOf(cfg.token0, zero).call()
+  bal1 = vault.functions.balanceOf(cfg.token1, zero).call()
+  return wei_to_decimal(bal0) + wei_to_decimal(bal1)
+
+
+def get_amm_tvl(web3: Web3, cfg: ChainConfig) -> Decimal:
+  amm = web3.eth.contract(address=cfg.amm_pool, abi=AMM_ABI)
+  r0 = amm.functions.reserve0().call()
+  r1 = amm.functions.reserve1().call()
+  return wei_to_decimal(r0) + wei_to_decimal(r1)
+
+
+def main(cfg: Optional[ChainConfig] = None) -> None:
+  cfg = cfg or DEFAULT_CONFIG
+  web3 = Web3(Web3.HTTPProvider(cfg.rpc_url))
+
+  print(f"RPC_URL = {cfg.rpc_url}")
+  print(f"Vault   = {cfg.vault}")
+  print(f"AMMPool = {cfg.amm_pool}")
+
+  vault_tvl = get_vault_tvl(web3, cfg)
+  amm_tvl = get_amm_tvl(web3, cfg)
+  total_tvl = vault_tvl + amm_tvl
+
+  print(f"Vault TVL (TKA+TKB): {vault_tvl:.6f}")
+  print(f"AMM   TVL (TKA+TKB): {amm_tvl:.6f}")
+  print(f"Total TVL (TKA+TKB): {total_tvl:.6f}")
+
+
+if __name__ == "__main__":
+  main()
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
