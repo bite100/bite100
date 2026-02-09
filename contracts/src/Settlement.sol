@@ -14,8 +14,12 @@ contract Settlement {
     FeeDistributor public feeDistributor;
     address public owner;
     address public governance;
-    /// @notice 交易所/中继地址：当有原生代币时代付 gas，可从结算中扣除买卖双方均摊的 gas  reimbursement 至本地址；0 表示不启用
+    /// @notice 交易所/中继地址（兼容旧接口）：当有原生代币时代付 gas；与 isRelayer 白名单二选一或同时使用
     address public relayer;
+    /// @notice Relayer 白名单：多 relayer 时可在此登记，调用 settleTrade 时 owner 或 relayer 或 isRelayer[msg.sender] 均可
+    mapping(address => bool) public isRelayer;
+    /// @notice 单笔 settleTrade 允许的 gas 报销上限（token 最小单位之和，gasReimburseIn + gasReimburseOut <= 此值）；0 表示不设上限，防滥用
+    uint256 public maxGasReimbursePerTrade;
 
     uint16 public feeBps = 1; // 0.01%
     address public feeToken; // 保留，兼容旧接口
@@ -47,6 +51,8 @@ contract Settlement {
     event FeeTokenSet(address indexed token);
     event FeeCapSet(address indexed token, uint256 cap);
     event RelayerSet(address indexed relayer);
+    event RelayerAllowedSet(address indexed account, bool allowed);
+    event MaxGasReimbursePerTradeSet(uint256 oldCap, uint256 newCap);
     event GovernanceSet(address indexed governance);
     event TradesBatchSettledWithMerkle(uint256 indexed batchId, bytes32 merkleRoot, uint256 count);
 
@@ -92,10 +98,31 @@ contract Settlement {
         emit GovernanceSet(_governance);
     }
 
-    /// @notice 设置交易所/中继地址（代付 gas 时接收均摊的 gas 费）；0 表示不启用代付
+    /// @notice 设置交易所/中继地址（代付 gas 时接收均摊的 gas 费）；0 表示不启用代付；与 isRelayer 白名单兼容
     function setRelayer(address _relayer) external onlyOwner {
         relayer = _relayer;
         emit RelayerSet(_relayer);
+    }
+
+    /// @notice 设置 relayer 白名单（多 relayer 时使用）；仅 owner 可调用
+    function setRelayerAllowed(address account, bool allowed) external onlyOwner {
+        require(account != address(0), "Settlement: zero address");
+        isRelayer[account] = allowed;
+        emit RelayerAllowedSet(account, allowed);
+    }
+
+    /// @notice 设置单笔 settleTrade 的 gas 报销上限（token 最小单位之和）；0 表示不设上限
+    function setMaxGasReimbursePerTrade(uint256 _cap) external onlyOwner {
+        uint256 old = maxGasReimbursePerTrade;
+        maxGasReimbursePerTrade = _cap;
+        emit MaxGasReimbursePerTradeSet(old, _cap);
+    }
+
+    /// @notice 检查调用者是否为授权结算方（owner、单一 relayer 或白名单 relayer）
+    function _isSettlementCaller() internal view returns (bool) {
+        return msg.sender == owner
+            || (relayer != address(0) && msg.sender == relayer)
+            || isRelayer[msg.sender];
     }
 
     /// @param maker 挂单方
@@ -117,11 +144,10 @@ contract Settlement {
         uint256 gasReimburseIn,
         uint256 gasReimburseOut
     ) external {
+        require(_isSettlementCaller(), "Settlement: not auth");
         bool withGas = gasReimburseIn > 0 || gasReimburseOut > 0;
-        if (withGas) {
-            require(relayer != address(0) && (msg.sender == owner || msg.sender == relayer), "Settlement: not relayer");
-        } else {
-            require(msg.sender == owner, "Settlement: not owner");
+        if (withGas && maxGasReimbursePerTrade > 0) {
+            require(gasReimburseIn + gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
         }
 
         require(maker != address(0) && taker != address(0), "Settlement: zero address");
@@ -191,7 +217,7 @@ contract Settlement {
         uint256[] calldata gasReimburseIns,
         uint256[] calldata gasReimburseOuts
     ) external {
-        require(msg.sender == owner || (relayer != address(0) && msg.sender == relayer), "Settlement: not auth");
+        require(_isSettlementCaller(), "Settlement: not auth");
         uint256 len = makers.length;
         require(
             len == takers.length &&
@@ -244,7 +270,7 @@ contract Settlement {
         uint256[] calldata gasReimburseOuts,
         bytes32[][] calldata proofs
     ) external {
-        require(msg.sender == owner || (relayer != address(0) && msg.sender == relayer), "Settlement: not auth");
+        require(_isSettlementCaller(), "Settlement: not auth");
         uint256 len = makers.length;
         require(
             len == takers.length &&

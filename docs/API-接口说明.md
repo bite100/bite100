@@ -70,12 +70,14 @@ function withdraw(address token, uint256 amount)
 
 | 方法 | 类型 | 说明 |
 |------|------|------|
-| `settleTrade(maker, taker, tokenIn, tokenOut, amountIn, amountOut, gasReimburseIn, gasReimburseOut)` | write | 结算链下撮合成交。仅 owner 可调用；当后两参为 0 时仅 owner。当启用代付 gas 时仅 owner 或 `relayer` 可调用，且从卖方/买方均摊扣除后转给调用方。 |
-| `setRelayer(address)` | write | 设置交易所/中继地址（代付 gas 时接收均摊的 gas 费）；0 表示不启用（仅 owner） |
+| `settleTrade(maker, taker, tokenIn, tokenOut, amountIn, amountOut, gasReimburseIn, gasReimburseOut)` | write | 结算链下撮合成交。仅 owner、单一 `relayer` 或白名单 `isRelayer[addr]` 可调用；当 `maxGasReimbursePerTrade > 0` 时单笔 gasReimburseIn+gasReimburseOut 不得超过该上限。 |
+| `setRelayer(address)` | write | 设置单一 relayer 地址（兼容旧接口）；0 表示不启用（仅 owner） |
+| `setRelayerAllowed(address account, bool allowed)` | write | 设置 relayer 白名单（多 relayer 防滥用）；仅 owner |
+| `setMaxGasReimbursePerTrade(uint256 _cap)` | write | 设置单笔 settleTrade 的 gas 报销上限（token 最小单位之和）；0 表示不设上限；仅 owner |
 
-**事件**：`TradeSettled`、`TradeSettledWithGasReimburse`（含 gas 代付时）、`RelayerSet`
+**事件**：`TradeSettled`、`TradeSettledWithGasReimburse`（含 gas 代付时）、`RelayerSet`、`RelayerAllowedSet`、`MaxGasReimbursePerTradeSet`
 
-**说明**：Phase 1 当前以 AMM 为主，Settlement 用于未来链下订单簿撮合后的结算；前端 DApp 直连 AMMPool 做 Swap。当买卖双方无原生代币付 gas 时，可由交易所（relayer）代付；gas 费卖方买方均摊，交易费与 gas 费扣完后再转给买家/卖家。
+**说明**：Settlement 用于链下订单簿撮合后的结算。当买卖双方无原生代币付 gas 时，可由 relayer 代付；gas 费卖方买方均摊。**Relayer 防滥用**：支持多 relayer 白名单（`isRelayer`）、单笔 gas 报销上限（`maxGasReimbursePerTrade`）。
 
 ### 2.4 FeeDistributor（手续费分配）
 
