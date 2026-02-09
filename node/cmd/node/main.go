@@ -49,6 +49,7 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "配置文件路径")
 	connectAddr := flag.String("connect", "", "连接到的节点 multiaddr")
 	rewardWallet := flag.String("reward-wallet", "", "领奖钱包地址（必填；可通过本参数、环境变量 REWARD_WALLET 或配置文件 reward_wallet 设置）")
+	modeRelay := flag.Bool("mode=relay", false, "轻量 relay 模式：仅 GossipSub + WebSocket，不启撮合引擎与存储，适合公共 relay 节点")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -73,6 +74,13 @@ func main() {
 		exitFatalf("领奖钱包地址含非十六进制字符: %q", w)
 	}
 	cfg.Node.RewardWallet = w
+
+	// --mode=relay：强制轻量 relay（只广播 + WS，不撮合、不落库）
+	if *modeRelay {
+		cfg.Node.Type = "relay"
+		cfg.Match.Pairs = nil
+		log.Print("已启用 --mode=relay：仅 GossipSub + WebSocket，不启撮合与存储")
+	}
 
 	// 监听地址（-port 覆盖配置）
 	listenAddrs := cfg.Node.Listen
@@ -132,13 +140,13 @@ func main() {
 		exitFatalf("OrderPublisher: %v", err)
 	}
 
-	// 5. 撮合引擎（match 节点或 relay 节点均可启用，relay = 中继 + 交易）
+	// 5. 撮合引擎（match 启用；relay 仅在配置了 pairs 时启用，--mode=relay 时 Pairs 已清空故不启）
 	var matchEngine *match.Engine
 	var router *match.Router
 	var registry *match.Registry
 	localPairs := make([]string, 0)
-	
-	enableMatch := (cfg.Node.Type == "match" || cfg.Node.Type == "relay") && len(cfg.Match.Pairs) > 0
+
+	enableMatch := cfg.Node.Type == "match" || (cfg.Node.Type == "relay" && len(cfg.Match.Pairs) > 0)
 	if enableMatch {
 		pairTokens := make(map[string]match.PairTokens)
 		for pair, pt := range cfg.Match.Pairs {
@@ -173,9 +181,9 @@ func main() {
 		}()
 	}
 
-	// 6. 存储（storage/relay 落库；match 启用撮合时也落库以便重启后恢复订单簿）
+	// 6. 存储（storage 或 带撮合的 relay/match 落库；--mode=relay 不落库）
+	needStore := cfg.Node.Type == "storage" || (cfg.Node.Type == "relay" && enableMatch) || (enableMatch && cfg.Node.Type == "match")
 	var store *storage.DB
-	needStore := cfg.Node.Type == "storage" || cfg.Node.Type == "relay" || (enableMatch && cfg.Node.Type == "match")
 	if needStore {
 		store, err = storage.Open(cfg.Node.DataDir)
 		if err != nil {
@@ -386,7 +394,7 @@ func (h *orderMatchHandler) OnNewOrder(order *storage.Order) error {
 	return h.processOrderLocally(order)
 }
 
-// processOrderLocally 本地处理订单（撮合）
+// processOrderLocally 本地处理订单（撮合或仅转发到 WS）
 func (h *orderMatchHandler) processOrderLocally(order *storage.Order) error {
 	if h.engine != nil {
 		h.engine.EnsurePair(order.Pair)
@@ -405,6 +413,9 @@ func (h *orderMatchHandler) processOrderLocally(order *storage.Order) error {
 				}
 			}
 		}
+	} else if h.ws != nil {
+		// 轻量 relay 模式：无撮合引擎时仍将新订单推给 WS 客户端
+		h.ws.BroadcastOrderStatus(order)
 	}
 	if h.store != nil {
 		_ = h.store.InsertOrder(order)

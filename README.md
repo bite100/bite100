@@ -1,19 +1,19 @@
 # P2P 去中心化交易所
 
-> **让普通人用手机浏览器，像用微信/支付宝一样简单地进行点对点代币交易**
+> **手机浏览器即用，无需节点、无需 App。** 打开链接 → 连钱包 → gasless 交易 → PWA 添加主屏幕。
 
-基于区块链与 P2P 网络的去中心化交易所项目。**Phase 3 已完成**：P2P 订单撮合、WebSocket 实时订单簿、链上结算。
+基于区块链与 P2P 网络的去中心化交易所。**采用路径 2**：浏览器前端 + 少量公共 relay 节点；用户零门槛，relay 由项目方/社区在 VPS 上运行（轻量模式：只广播 + WebSocket），去中心化程度随 relay 数量增加而提升。
 
 ## 🎯 项目愿景
 
-用**最小的门槛（手机浏览器）+ 真正的 P2P 撮合 + 可自定义的分成机制**，去挑战主流钱包"方便但中心化"的 Swap 体验。
+用**手机浏览器 + 公共 relay + 可自定义分成**，实现无托管、链上结算、真正可落地的 P2P 交易。
 
 **核心价值主张**：
-- ✅ **去中心化**：无托管、无 KYC、无平台跑路风险
-- ✅ **易用性**：手机浏览器即用，无需下载 App
-- ✅ **真正 P2P**：订单直接 peer-to-peer 匹配，不经过中心化路由
-- ✅ **低成本**：relayer 代付 gas，手续费可自定义分成
-- ✅ **开源透明**：代码开源，社区驱动
+- ✅ **去中心化**：无托管、无 KYC、链上结算、可自定义分成
+- ✅ **零门槛**：手机浏览器即用，无需安装节点、无需下载 App
+- ✅ **Gasless**：relayer 代付 gas，用户只需签名
+- ✅ **P2P 精神**：订单经 GossipSub 广播，relay 只转发不托管
+- ✅ **开源透明**：代码开源，任何人可跑 relay 获分成
 
 📖 **了解更多**：[项目价值与定位](./docs/项目价值与定位.md)
 
@@ -73,11 +73,15 @@ chmod +x scripts/start-dev.sh
 
 详细步骤见 [docs/快速开始.md](docs/快速开始.md)
 
+### 生产环境：Relay 列表 + wss
+
+前端支持多 relay 地址依次 fallback（`VITE_P2P_WS_URLS=wss://relay1.p2p-p2p.xyz/ws,wss://relay2...`）。Relay 节点可用 **`--mode=relay`** 轻量运行（仅 GossipSub + WebSocket），Nginx 反代 + Certbot 即可提供 wss。详见 [Relay 部署与 Nginx](docs/Relay部署与Nginx.md)。
+
 ---
 
 ## 使用方式
 
-**已放弃电脑端/桌面安装包**，请使用 **浏览器** 或 **PWA**（在手机/电脑浏览器中打开前端地址即可，支持「添加到主屏幕」）。
+**完全放弃电脑端**（无 Electron、无 Windows exe）。请使用 **手机/电脑浏览器** 打开前端，或 **PWA 添加到主屏幕**。无需自建节点、无需下载 App。
 
 ---
 
@@ -151,12 +155,11 @@ P2P/
 │   ├── Governance.sol       # DAO 治理
 │   └── CrossChainBridge.sol # 跨链桥接（LayerZero）
 ├── frontend/      # Web 前端（React + Vite + ethers）
-│   ├── PWA 支持            # 手机浏览器优先
-│   ├── Electron 桌面版     # Windows 客户端
-│   └── libp2p 集成         # P2P 订单撮合
+│   ├── PWA 支持            # 手机浏览器优先，relay 列表 + fallback
+│   └── 仅浏览器            # 无桌面版
 ├── node/          # P2P 节点（Go + libp2p）
-│   ├── MatchEngine         # 订单撮合引擎
-│   ├── GossipSub           # 订单广播
+│   ├── --mode=relay        # 轻量 relay：仅 GossipSub + WebSocket
+│   ├── MatchEngine         # 可选撮合引擎
 │   └── WebSocket API       # 实时订单簿
 ├── docs/          # 完整文档
 │   ├── 项目价值与定位.md    # 项目意义与差异化

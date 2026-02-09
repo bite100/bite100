@@ -8,11 +8,16 @@ export const NODE_API_URLS: string[] = _raw
   ? _raw.split(',').map((u) => u.trim().replace(/\/$/, '')).filter(Boolean)
   : []
 
-// P2P 配置（客户端 JS-libp2p + 可选 Go 节点桥接）
+// P2P 配置（路径 2：浏览器 + 公共 relay，支持多 relay fallback）
+const _wsRaw = (import.meta.env.VITE_P2P_WS_URLS ?? import.meta.env.VITE_P2P_WS_URL ?? '').trim()
+const _wsList = _wsRaw ? _wsRaw.split(',').map((u: string) => u.trim().replace(/\/$/, '')).filter(Boolean) : []
+
 export const P2P_CONFIG = {
-  /** WebSocket 地址（连接 Go 节点时用；纯客户端 P2P 可留空） */
-  WS_URL: import.meta.env.VITE_P2P_WS_URL || 'ws://localhost:8080/ws',
-  /** Go 节点 API 地址（可选后备；不设则纯浏览器直连） */
+  /** WebSocket 地址（单条，兼容旧逻辑；优先用 RELAY_WS_URLS 列表） */
+  WS_URL: _wsList[0] || import.meta.env.VITE_P2P_WS_URL || 'ws://localhost:8080/ws',
+  /** Relay WebSocket 列表（逗号分隔，依次尝试直至连接成功；生产示例 wss://relay1.p2p-p2p.xyz/ws,wss://relay2.p2p-p2p.xyz/ws） */
+  RELAY_WS_URLS: _wsList.length > 0 ? _wsList : [(import.meta.env.VITE_P2P_WS_URL || 'ws://localhost:8080/ws').toString().trim()],
+  /** Go 节点 API 地址（可选；不设则纯浏览器直连） */
   API_URL: import.meta.env.VITE_P2P_API_URL || 'http://localhost:8080',
   /** Bootstrap 节点 multiaddr 列表（逗号分隔，用于 DHT 发现；可选） */
   BOOTSTRAP_PEERS: (import.meta.env.VITE_P2P_BOOTSTRAP ?? '')

@@ -1,3 +1,5 @@
+import { P2P_CONFIG } from '../config'
+
 export type WSMessageType = 'orderbook_update' | 'trade' | 'order_status'
 
 export interface WSMessage {
@@ -6,22 +8,29 @@ export interface WSMessage {
   data: any
 }
 
+/** 多 relay fallback：按 RELAY_WS_URLS 列表依次尝试，断线后尝试下一个再重试 */
 export class P2PWebSocketClient {
   private ws: WebSocket | null = null
-  private reconnectTimer: NodeJS.Timeout | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private listeners: Map<WSMessageType, Set<(data: any) => void>> = new Map()
-  private url: string
-  
-  constructor(url: string) {
-    this.url = url
+  private urls: string[]
+  private currentIndex = 0
+
+  constructor(urls?: string[]) {
+    this.urls = urls?.length ? urls : [P2P_CONFIG.WS_URL]
   }
-  
+
+  private get currentUrl(): string {
+    return this.urls[this.currentIndex % this.urls.length]
+  }
+
   connect() {
     if (this.ws?.readyState === WebSocket.OPEN) return
-    
-    console.log('连接 P2P 节点 WebSocket:', this.url)
-    this.ws = new WebSocket(this.url)
-    
+
+    const url = this.currentUrl
+    console.log('连接 P2P Relay WebSocket:', url, `(${this.currentIndex + 1}/${this.urls.length})`)
+    this.ws = new WebSocket(url)
+
     this.ws.onopen = () => {
       console.log('P2P WebSocket 已连接')
       if (this.reconnectTimer) {
@@ -29,7 +38,7 @@ export class P2PWebSocketClient {
         this.reconnectTimer = null
       }
     }
-    
+
     this.ws.onmessage = (event) => {
       try {
         const msg: WSMessage = JSON.parse(event.data)
@@ -38,14 +47,21 @@ export class P2PWebSocketClient {
         console.error('解析 WebSocket 消息失败:', error)
       }
     }
-    
-    this.ws.onerror = (error) => {
-      console.error('WebSocket 错误:', error)
+
+    this.ws.onerror = () => {
+      // 错误时 onclose 会触发，在 onclose 里做 fallback
     }
-    
+
     this.ws.onclose = () => {
-      console.log('WebSocket 断开，5 秒后重连...')
-      this.reconnectTimer = setTimeout(() => this.connect(), 5000)
+      this.ws = null
+      if (this.urls.length > 1) {
+        this.currentIndex++
+        console.log('WebSocket 断开，尝试下一个 relay...')
+        this.reconnectTimer = setTimeout(() => this.connect(), 1500)
+      } else {
+        console.log('WebSocket 断开，5 秒后重连...')
+        this.reconnectTimer = setTimeout(() => this.connect(), 5000)
+      }
     }
   }
   
@@ -86,7 +102,5 @@ export class P2PWebSocketClient {
   }
 }
 
-// 全局实例
-export const p2pWS = new P2PWebSocketClient(
-  import.meta.env.VITE_P2P_WS_URL || 'ws://localhost:8080/ws'
-)
+// 全局实例（使用 config 中的 relay 列表 + fallback）
+export const p2pWS = new P2PWebSocketClient(P2P_CONFIG.RELAY_WS_URLS)
