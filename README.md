@@ -75,19 +75,9 @@ chmod +x scripts/start-dev.sh
 
 ---
 
-## 💻 Windows 客户端（像 YouTube 一样安装即用）
+## 使用方式
 
-希望**直接下载安装、双击打开**使用（类似 YouTube 桌面端）的用户：
-
-1. **从 GitHub 下载安装包**
-   - 打开 [https://github.com/P2P-P2P/p2p](https://github.com/P2P-P2P/p2p)
-   - 进入 **Releases**（右侧或顶部），下载最新版的 **P2P 交易所 Setup.exe**（或从 **Actions** → 最新一次 “Build Windows client” 运行 → **Artifacts** 下载 `P2P-Exchange-Windows-xxx` 中的 exe）
-2. **安装**
-   - 双击下载的 `.exe`，按提示选择安装目录并完成安装。
-3. **打开使用**
-   - 从开始菜单或桌面快捷方式打开 **「P2P 交易所」**，即可连钱包、存提、Swap、添加流动性，与网页版一致。
-
-若仓库暂无 Release，可到 **Actions** 标签页 → 选择最新的 **Build Windows client** 工作流运行 → 在 **Summary** 页底部 **Artifacts** 中下载 Windows 安装包。
+**已放弃电脑端/桌面安装包**，请使用 **浏览器** 或 **PWA**（在手机/电脑浏览器中打开前端地址即可，支持「添加到主屏幕」）。
 
 ---
 

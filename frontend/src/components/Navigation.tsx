@@ -1,6 +1,6 @@
 import './Navigation.css'
 
-export type Tab = 'vault' | 'orderbook' | 'swap' | 'bridge' | 'governance' | 'contribution'
+export type Tab = 'vault' | 'orderbook' | 'swap' | 'data' | 'bridge' | 'governance' | 'contribution'
 
 interface NavigationProps {
   activeTab: Tab
@@ -30,6 +30,12 @@ export function Navigation({ activeTab, onTabChange, account }: NavigationProps)
         onClick={() => onTabChange('swap')}
       >
         Swap
+      </button>
+      <button
+        className={`nav-tab ${activeTab === 'data' ? 'active' : ''}`}
+        onClick={() => onTabChange('data')}
+      >
+        数据
       </button>
       <button
         className={`nav-tab ${activeTab === 'bridge' ? 'active' : ''}`}

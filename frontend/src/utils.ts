@@ -1,50 +1,11 @@
+/** 工具函数：钱包 Provider、缓存、错误格式化等（仅浏览器/PWA） */
 import { BrowserProvider, type Eip1193Provider, type Signer } from 'ethers'
 
 const WIN = typeof window !== 'undefined' ? (window as unknown as { ethereum?: Eip1193Provider }) : null
 
 export function getEthereum(): Eip1193Provider | null {
-  // 在 Electron 中，等待扩展注入完成
-  if (isElectron() && typeof window !== 'undefined') {
-    // 直接访问 window.ethereum（扩展会注入）
-    const eth = (window as any).ethereum
-    if (eth) {
-      return eth as Eip1193Provider
-    }
-  }
   return WIN?.ethereum ?? null
 }
-
-/** 是否在 Electron 桌面版内运行（无浏览器扩展） */
-export function isElectron(): boolean {
-  return typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron')
-}
-
-/** 浏览器版本 URL */
-export const BROWSER_APP_URL = 'https://p2p-p2p.github.io/p2p/'
-
-/**
- * 在 Electron 环境中打开浏览器版本
- * @returns 是否成功打开浏览器
- */
-export async function openBrowserVersion(): Promise<boolean> {
-  if (!isElectron()) {
-    return false
-  }
-  
-  try {
-    const electronUtils = window.electronUtils
-    if (electronUtils && typeof electronUtils.openExternal === 'function') {
-      debug.log('🌐 正在打开浏览器版本...')
-      const result = await electronUtils.openExternal(BROWSER_APP_URL)
-      return result?.success === true
-    }
-  } catch (err) {
-    debug.error('打开浏览器失败:', err)
-  }
-  
-  return false
-}
-
 
 export function getProvider(): BrowserProvider | null {
   const ethereum = getEthereum()

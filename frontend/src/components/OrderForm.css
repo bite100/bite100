@@ -112,3 +112,12 @@
   font-size: 0.875rem;
   text-align: center;
 }
+
+.order-form-market-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.8125rem;
+  color: #6b7280;
+}
+.order-form-market-hint .text-muted { color: #9ca3af; }
+.order-form-market-hint .text-green { color: #059669; }
+.order-form-market-hint .text-red { color: #dc2626; }

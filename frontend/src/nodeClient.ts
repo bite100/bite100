@@ -4,16 +4,19 @@
  */
 import { NODE_API_URLS } from './config'
 
+/** 解析得到的节点 URL 列表（与 config 中 NODE_API_URLS 逻辑一致，含单 URL 兜底） */
+function getNodeUrls(): string[] {
+  if (NODE_API_URLS.length > 0) return NODE_API_URLS
+  const single = (import.meta.env.VITE_NODE_API_URL ?? '').trim().split(',')[0]?.trim().replace(/\/$/, '')
+  return single ? [single] : []
+}
+
 /** 对多个节点依次尝试同一请求，返回第一个成功结果 */
 export async function tryNodes<T>(
   request: (baseUrl: string) => Promise<T>
 ): Promise<{ data: T; baseUrl: string }> {
-  const urls = NODE_API_URLS.length > 0 ? NODE_API_URLS : []
-  if (urls.length === 0) {
-    const single = (import.meta.env.VITE_NODE_API_URL ?? '').trim().split(',')[0]?.replace(/\/$/, '')
-    if (single) return { data: await request(single), baseUrl: single }
-    throw new Error('未配置节点 API（VITE_NODE_API_URL）')
-  }
+  const urls = getNodeUrls()
+  if (urls.length === 0) throw new Error('未配置节点 API（VITE_NODE_API_URL）')
   let lastErr: unknown
   for (const baseUrl of urls) {
     try {

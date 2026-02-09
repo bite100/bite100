@@ -63,20 +63,16 @@ export function useChain() {
       }
 
       try {
-        // 尝试切换链
         await window.ethereum.request({
           method: 'wallet_switchEthereumChain',
           params: [{ chainId: `0x${chainId.toString(16)}` }],
         })
         setCurrentChainId(chainId)
-      } catch (error: any) {
-        // 如果链不存在，添加链
-        if (error.code === 4902) {
+      } catch (err: unknown) {
+        const code = err && typeof err === 'object' && 'code' in err ? (err as { code: number }).code : undefined
+        if (code === 4902) {
           const config = getChainConfig(chainId)
-          if (!config) {
-            throw new Error(`链 ${chainId} 不支持`)
-          }
-
+          if (!config) throw new Error(`链 ${chainId} 不支持`)
           await window.ethereum.request({
             method: 'wallet_addEthereumChain',
             params: [{
@@ -89,7 +85,7 @@ export function useChain() {
           })
           setCurrentChainId(chainId)
         } else {
-          throw error
+          throw err
         }
       }
     } finally {

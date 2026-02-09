@@ -1,13 +1,15 @@
 # P2P 节点配置（复制为 config.yaml 使用）
-# 启动: go run ./cmd/node 或 .\run.ps1（会读 config.yaml，不存在则用默认）
+# 领奖地址必填，可通过 reward_wallet、环境变量 REWARD_WALLET 或 -reward-wallet 设置
 node:
   type: relay   # storage | relay
   data_dir: ./data
   listen:
     - /ip4/0.0.0.0/tcp/4001
+  reward_wallet: ""   # 领奖钱包地址（0x 开头 42 字符），也可用 env REWARD_WALLET 或 -reward-wallet
 
 network:
-  bootstrap: []   # Bootstrap 节点，如: ["/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW..."]
+  # P2P 无中心。不填也能运行；填了则启动时自动连这些节点
+  bootstrap: []
   topics:         # GossipSub 订阅的 topic（为空则默认含 Phase 3.1 订单/成交主题）；Phase 3.3 可按 peer 限流
     - /p2p-exchange/sync/trades
     - /p2p-exchange/sync/orderbook
@@ -34,6 +36,7 @@ metrics:          # 贡献指标与证明（M3）
 
 api:              # Phase 3.5 前端：订单簿、下单/撤单、成交（空则不开 HTTP API）
   listen: ""      # 如 ":8080" 开启后前端可配置 NODE_API 连接
+  rate_limit_orders_per_minute: 0   # 每 IP 每分钟下单上限，0=不限制（Spam 防护，可设如 30）
 
 chain:            # 可选：从链上拉取历史成交
   rpc_url: ""         # 如 https://sepolia.infura.io/v3/...

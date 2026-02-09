@@ -1,0 +1,47 @@
+# 中继节点（可对外提供 API，供前端连接下单）
+# 用法: 复制为 config.yaml 后启动，或 Docker 挂载此文件
+# 前端配置 VITE_NODE_API_URL=http://本机IP:8080 即可连此节点
+
+node:
+  type: relay
+  data_dir: ./data
+  listen:
+    - /ip4/0.0.0.0/tcp/4001
+
+network:
+  # 可选。P2P 无中心：不填也能运行，本机先独立待命；填了则启动时自动连这些节点，互通订单/成交
+  bootstrap: []
+  topics:
+    - /p2p-exchange/sync/trades
+    - /p2p-exchange/sync/orderbook
+    - /p2p-exchange/order/new
+    - /p2p-exchange/order/cancel
+    - /p2p-exchange/trade/executed
+
+relay:
+  rate_limit_bytes_per_sec_per_peer: 0
+  rate_limit_msgs_per_sec_per_peer: 0
+
+storage:
+  retention_months: 2   # 中继也落库，便于订单簿/成交查询与交易
+
+# 可选：配置交易对后中继节点也参与撮合（中继 = 转发 + 交易）
+match:
+  pairs:
+    TKA/TKB:
+      token0: ""   # 如 Sepolia TKA 合约
+      token1: ""   # 如 Sepolia TKB 合约
+
+api:
+  listen: ":8080"   # 开启后前端可连 http://本机:8080 下单、查订单簿（中继无本地簿，订单通过 Gossip 转发）
+
+metrics:
+  proof_period_days: 7
+  proof_output_dir: ""
+
+chain:
+  rpc_url: ""
+  chain_id: 11155111
+  amm_pool: ""
+  token0: ""
+  token1: ""

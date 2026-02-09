@@ -1,5 +1,5 @@
 /**
- * Electron P2P 客户端（Node.js 环境）
+ * P2P 客户端（浏览器/Node 环境）
  * 使用 TCP transport，比浏览器 WebSocket 更稳定
  */
 import { createLibp2p, Libp2p } from 'libp2p'

@@ -5,24 +5,21 @@ import { OrderPublisher } from './orderPublisher'
 import { OrderSubscriber } from './orderSubscriber'
 import { MatchEngine } from './matchEngine'
 import { DatabaseManager, OrderStorage } from './storage'
-import { isBridgeAvailable, createBridgePublisher, startBridgeSubscriber } from './electronBridge'
 
-/**
- * P2P 管理器（单例）
- * 管理节点生命周期、订单发布/订阅、撮合引擎
- */
 /** 定时器 ID（用于 stop 时清理） */
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 const MS_PER_MINUTE = 60 * 1000
 
+/**
+ * P2P 管理器（单例）：管理节点生命周期、订单发布/订阅、撮合引擎（仅浏览器/PWA，无桌面版桥接）
+ */
 export class P2PManager {
   private node: Libp2p | null = null
-  private publisher: OrderPublisher | ReturnType<typeof createBridgePublisher> | null = null
+  private publisher: OrderPublisher | null = null
   private subscriber: OrderSubscriber | null = null
   private matchEngine: MatchEngine | null = null
   private isStarted = false
   private storageEnabled = false
-  private bridgeMode = false
   private cleanupIntervalId: ReturnType<typeof setInterval> | null = null
   private statsIntervalId: ReturnType<typeof setInterval> | null = null
 
@@ -55,23 +52,15 @@ export class P2PManager {
         console.log(`📦 从本地恢复 ${activeOrders.length} 个活跃订单到订单簿`)
       }
 
-      if (isBridgeAvailable()) {
-        this.bridgeMode = true
-        this.publisher = createBridgePublisher()
-        startBridgeSubscriber(this.matchEngine, this.storageEnabled, this.publisher)
-        this.isStarted = true
-        console.log('✅ P2P 桥接模式已启动（Electron → Go 节点）')
-      } else {
-        this.node = await createP2PNode({
-          bootstrapList: P2P_CONFIG.BOOTSTRAP_PEERS.length > 0 ? P2P_CONFIG.BOOTSTRAP_PEERS : undefined,
-        })
-        this.publisher = new OrderPublisher(this.node)
-        this.subscriber = new OrderSubscriber(this.node, this.matchEngine, this.storageEnabled, this.publisher)
-        await this.subscriber.start()
-        this.isStarted = true
-        console.log('✅ P2P 节点启动成功')
-      }
-      
+      this.node = await createP2PNode({
+        bootstrapList: P2P_CONFIG.BOOTSTRAP_PEERS.length > 0 ? P2P_CONFIG.BOOTSTRAP_PEERS : undefined,
+      })
+      this.publisher = new OrderPublisher(this.node)
+      this.subscriber = new OrderSubscriber(this.node, this.matchEngine, this.storageEnabled, this.publisher)
+      await this.subscriber.start()
+      this.isStarted = true
+      console.log('✅ P2P 节点启动成功')
+
       if (this.node) {
         this.node.addEventListener('peer:connect', (evt) => {
           const peerId = evt.detail.toString()
@@ -135,7 +124,6 @@ export class P2PManager {
     this.matchEngine = null
     this.isStarted = false
     this.storageEnabled = false
-    this.bridgeMode = false
 
     console.log('✅ P2P 节点已停止')
   }
@@ -165,7 +153,6 @@ export class P2PManager {
    * 获取节点 ID
    */
   getPeerId() {
-    if (this.bridgeMode) return 'bridge'
     return this.node?.peerId.toString()
   }
 
@@ -173,15 +160,14 @@ export class P2PManager {
    * 获取连接的 peer 数量
    */
   getPeerCount() {
-    if (this.bridgeMode) return 1
     return this.node?.getPeers().length ?? 0
   }
 
   /**
-   * 检查节点是否已启动（含桥接模式）
+   * 检查节点是否已启动
    */
   isReady() {
-    return this.isStarted && (this.node !== null || this.bridgeMode)
+    return this.isStarted && this.node !== null
   }
 
   /**

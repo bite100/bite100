@@ -4,6 +4,12 @@ Phase 2 节点软件：libp2p 网络接入，支持存储节点、中继节点�
 
 **重要**：**节点入网无任何条件**，无需白名单、无需质押、无需邀请，任何节点都可以自由加入网络。
 
+**领奖地址必填**：可通过启动参数 `-reward-wallet`、环境变量 `REWARD_WALLET` 或配置文件 `node.reward_wallet` 设置，未设置则节点拒绝启动。
+
+**Windows 图形界面**：可双击 `启动节点-GUI.bat` 或运行 `.\run-node-gui.ps1`，在弹出窗口中输入领奖钱包地址后点击「启动节点」即可运行（可选「记住地址」下次自动填充）。界面提供「检查更新」可拉取代码、重新构建并自动重启节点。
+
+**自动更新并自动重启**：双击 `自动更新.bat` 或运行 `.\update-and-restart.ps1`，会执行 `git pull`、重新 `go build -o node.exe`、停止当前节点进程并在新窗口重新启动节点（领奖地址从「记住地址」或环境变量 `REWARD_WALLET` 读取）。可放入 Windows 计划任务定时执行。
+
 ## M1：两节点连通
 
 ### 运行方式（任选其一，无需额外安装）
@@ -13,21 +19,21 @@ Phase 2 节点软件：libp2p 网络接入，支持存储节点、中继节点�
 ```bash
 cd node
 docker build -t p2p-node .
-docker run -it --rm -p 4001:4001 p2p-node
+docker run -it --rm -p 4001:4001 p2p-node -reward-wallet 0x你的领奖地址
 ```
 
 **方式二：一键脚本（自动选 Docker 或 Go）**
 
 ```powershell
-# Windows
+# Windows（-rewardWallet 必填）
 cd node
-.\run.ps1
+.\run.ps1 -rewardWallet 0x你的领奖地址
 ```
 
 ```bash
-# Linux / macOS
+# Linux / macOS（-reward-wallet 必填）
 cd node
-chmod +x run.sh && ./run.sh
+chmod +x run.sh && ./run.sh -reward-wallet 0x你的领奖地址
 ```
 
 **方式三：Go 源码**
@@ -35,7 +41,7 @@ chmod +x run.sh && ./run.sh
 ```bash
 cd node
 go mod tidy   # 首次运行需拉取依赖
-go run ./cmd/node
+go run ./cmd/node -reward-wallet 0x你的领奖地址
 ```
 
 **终端 1（节点 A，监听）**：任选上面一种方式启动。
@@ -57,7 +63,7 @@ go run ./cmd/node
 则节点 B 执行（把下面的地址换成你复制的、并把 0.0.0.0→127.0.0.1）：
 
 ```powershell
-.\run.ps1 -port 4002 -connect /ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAbc123...
+.\run.ps1 -rewardWallet 0x你的领奖地址 -port 4002 -connect /ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAbc123...
 ```
 
 **注意**：`12D3KooWAbc123...` 要换成节点 A 实际打印的 PeerID，不要写成字面量 `<PeerID>`。
@@ -72,12 +78,12 @@ go run ./cmd/node
 
 两节点连通后，可用 `-publishTopic` 和 `-publishMsg` 向 topic 发送消息，另一节点会打印收到的内容。
 
-**终端 1（节点 A）**：`.\run.ps1`，记录输出的 PeerID 和地址。
+**终端 1（节点 A）**：`.\run.ps1 -rewardWallet 0x你的领奖地址`，记录输出的 PeerID 和地址。
 
 **终端 2（节点 B）**：连接节点 A 并发送一条测试消息：
 
 ```powershell
-.\run.ps1 -port 4002 -connect /ip4/127.0.0.1/tcp/4001/p2p/<节点A的PeerID> -publishTopic /p2p-exchange/sync/trades -publishMsg "hello from B"
+.\run.ps1 -rewardWallet 0x你的领奖地址 -port 4002 -connect /ip4/127.0.0.1/tcp/4001/p2p/<节点A的PeerID> -publishTopic /p2p-exchange/sync/trades -publishMsg "hello from B"
 ```
 
 预期：节点 A 打印 `[/p2p-exchange/sync/trades] 来自 <B的PeerID>: 13 bytes`。

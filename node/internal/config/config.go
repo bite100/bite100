@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,7 +21,8 @@ type Config struct {
 
 // APIConfig HTTP API（Phase 3.5 前端：订单簿、下单/撤单、成交）
 type APIConfig struct {
-	Listen string `yaml:"listen"` // 如 ":8080"，空则不开 API
+	Listen                   string `yaml:"listen"`                       // 如 ":8080"，空则不开 API
+	RateLimitOrdersPerMinute uint64 `yaml:"rate_limit_orders_per_minute"` // 每 IP 每分钟下单上限，0=不限制（Spam 防护）
 }
 
 // RelayConfig 中继节点限流与抗 Sybil（Phase 3.3）
@@ -62,9 +64,10 @@ type ChainConfig struct {
 }
 
 type NodeConfig struct {
-	Type    string   `yaml:"type"`     // storage | relay | match
-	DataDir string   `yaml:"data_dir"` // 数据目录
-	Listen  []string `yaml:"listen"`   // 监听地址，如 /ip4/0.0.0.0/tcp/4001
+	Type         string   `yaml:"type"`          // storage | relay | match
+	DataDir      string   `yaml:"data_dir"`      // 数据目录
+	Listen       []string `yaml:"listen"`        // 监听地址，如 /ip4/0.0.0.0/tcp/4001
+	RewardWallet string   `yaml:"reward_wallet"` // 领奖地址（可选）；可由 env REWARD_WALLET 覆盖；或通过 -reward-wallet 传入
 }
 
 type NetworkConfig struct {
@@ -101,6 +104,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Metrics.ProofOutputDir == "" {
 		c.Metrics.ProofOutputDir = c.Node.DataDir + "/proofs"
+	}
+	if w := os.Getenv("REWARD_WALLET"); w != "" {
+		c.Node.RewardWallet = strings.TrimSpace(w)
 	}
 	return &c, nil
 }

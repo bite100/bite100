@@ -4,22 +4,90 @@ package api
 import (
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/P2P-P2P/p2p/node/internal/match"
 	"github.com/P2P-P2P/p2p/node/internal/storage"
-	"github.com/P2P-P2P/p2p/node/internal/sync"
+	syncpkg "github.com/P2P-P2P/p2p/node/internal/sync"
 )
+
+// orderRateLimiter 按 key（如 IP）滑动窗口限流，用于 API 下单 Spam 防护
+type orderRateLimiter struct {
+	mu     sync.Mutex
+	hits   map[string][]time.Time
+	limit  int
+	window time.Duration
+}
+
+func newOrderRateLimiter(perMinute int, window time.Duration) *orderRateLimiter {
+	if perMinute <= 0 {
+		return nil
+	}
+	return &orderRateLimiter{
+		hits:   make(map[string][]time.Time),
+		limit:  perMinute,
+		window: window,
+	}
+}
+
+func remoteIP(r *http.Request) string {
+	if x := r.Header.Get("X-Forwarded-For"); x != "" {
+		if i := strings.Index(x, ","); i > 0 {
+			x = strings.TrimSpace(x[:i])
+		} else {
+			x = strings.TrimSpace(x)
+		}
+		if x != "" {
+			return x
+		}
+	}
+	if x := r.Header.Get("X-Real-IP"); x != "" {
+		return strings.TrimSpace(x)
+	}
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if host != "" {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func (l *orderRateLimiter) Allow(key string) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	cut := now.Add(-l.window)
+	slice := l.hits[key]
+	// 去掉窗口外的记录
+	i := 0
+	for i < len(slice) && slice[i].Before(cut) {
+		i++
+	}
+	slice = slice[i:]
+	if len(slice) >= l.limit {
+		return false
+	}
+	l.hits[key] = append(slice, now)
+	return true
+}
 
 // Server HTTP API 服务
 type Server struct {
-	Store       *storage.DB
-	MatchEngine *match.Engine
-	Publish     func(topic string, data []byte) error
-	NodeType    string // storage | relay | match，用于前端展示
-	WSServer    *WSServer // WebSocket 服务器
+	Store                   *storage.DB
+	MatchEngine              *match.Engine
+	Publish                  func(topic string, data []byte) error
+	NodeType                 string // storage | relay | match，用于前端展示
+	RewardWallet             string // 领奖地址（VPS/Docker 下由 env REWARD_WALLET 配置，仅展示）
+	WSServer                 *WSServer // WebSocket 服务器
+	RateLimitOrdersPerMinute uint64    // 每 IP 每分钟下单上限，0=不限制（Spam 防护）
+	orderLimiter              *orderRateLimiter
 }
 
 // OrderbookResponse 订单簿 GET 响应
@@ -34,7 +102,10 @@ func (s *Server) Run(listen string) {
 	if listen == "" {
 		return
 	}
-	
+	if s.RateLimitOrdersPerMinute > 0 {
+		s.orderLimiter = newOrderRateLimiter(int(s.RateLimitOrdersPerMinute), time.Minute)
+		log.Printf("[api] 下单速率限制: 每 IP 每分钟 %d 笔", s.RateLimitOrdersPerMinute)
+	}
 	// 初始化 WebSocket 服务器
 	if s.WSServer == nil {
 		s.WSServer = NewWSServer()
@@ -87,7 +158,11 @@ func (s *Server) handleNode(w http.ResponseWriter, r *http.Request) {
 	if nodeType == "" {
 		nodeType = "relay"
 	}
-	_, _ = w.Write([]byte(`{"nodeType":"` + nodeType + `"}`))
+	out := map[string]string{"nodeType": nodeType}
+	if s.RewardWallet != "" {
+		out["rewardWallet"] = s.RewardWallet
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +260,14 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "publish not configured", http.StatusServiceUnavailable)
 		return
 	}
+	// Spam 防护：按 IP 速率限制
+	if s.orderLimiter != nil {
+		ip := remoteIP(r)
+		if !s.orderLimiter.Allow(ip) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+	}
 	var o storage.Order
 	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -194,9 +277,17 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing required fields", http.StatusBadRequest)
 		return
 	}
-	
-	// 验证订单签名（如果提供了签名）
-	if o.Signature != "" {
+	if o.Signature == "" {
+		http.Error(w, "signature required", http.StatusBadRequest)
+		return
+	}
+	// Replay/过期防护：拒绝已过期订单
+	if storage.OrderExpired(&o) {
+		http.Error(w, "order expired", http.StatusBadRequest)
+		return
+	}
+	// 验证订单签名（EIP-712，与前端 orderSigning 一致）
+	{
 		var pairTokens *match.PairTokens
 		if s.MatchEngine != nil {
 			pairTokens = s.MatchEngine.GetPairTokens(o.Pair)
@@ -217,7 +308,7 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "encode error", http.StatusInternalServerError)
 		return
 	}
-	if err := s.Publish(sync.TopicOrderNew, data); err != nil {
+	if err := s.Publish(syncpkg.TopicOrderNew, data); err != nil {
 		log.Printf("[api] publish order: %v", err)
 		http.Error(w, "publish failed", http.StatusInternalServerError)
 		return
@@ -241,7 +332,7 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "publish not configured", http.StatusServiceUnavailable)
 		return
 	}
-	var req sync.CancelRequest
+	var req syncpkg.CancelRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
@@ -280,7 +371,7 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "encode error", http.StatusInternalServerError)
 		return
 	}
-	if err := s.Publish(sync.TopicOrderCancel, data); err != nil {
+	if err := s.Publish(syncpkg.TopicOrderCancel, data); err != nil {
 		log.Printf("[api] publish cancel: %v", err)
 		http.Error(w, "publish failed", http.StatusInternalServerError)
 		return

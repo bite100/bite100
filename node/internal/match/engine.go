@@ -150,9 +150,12 @@ func (e *Engine) GetOrderbook(pair string) (bids, asks []*storage.Order) {
 	return bids, asks
 }
 
-// AddOrder 将订单加入订单簿（未撮合部分）；同 orderID 先移除再插入；返回是否插入成功
+// AddOrder 将订单加入订单簿（未撮合部分）；同 orderID 先移除再插入；返回是否插入成功；已过期订单不加入（Replay/过期防护）
 func (e *Engine) AddOrder(o *storage.Order) bool {
 	if o.OrderID == "" || o.Pair == "" || o.Side == "" || o.Price == "" || o.Amount == "" {
+		return false
+	}
+	if storage.OrderExpired(o) {
 		return false
 	}
 	e.mu.Lock()

@@ -3,7 +3,16 @@ package storage
 import (
 	"database/sql"
 	"strconv"
+	"time"
 )
+
+// OrderExpired 判断订单是否已过期（用于 Replay/过期防护）
+func OrderExpired(o *Order) bool {
+	if o == nil || o.ExpiresAt <= 0 {
+		return false
+	}
+	return time.Now().Unix() > o.ExpiresAt
+}
 
 // Order 订单（与 Phase3 设计文档 §2.2 对齐）
 type Order struct {

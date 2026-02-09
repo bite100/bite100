@@ -8,6 +8,10 @@ import { NODE_API_URL, NODE_API_URLS } from './config'
 import { formatError } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { nodeGet, nodePost } from './nodeClient'
+import { usePairMarketPrice } from './hooks/useTokenPrice'
+import { signOrder, signCancelOrder, generateOrderId } from './services/orderSigning'
+import { verifyOrderSignatureSignedData } from './services/orderVerification'
+import { TOKEN0_ADDRESS, TOKEN1_ADDRESS } from './config'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorDisplay } from './components/ErrorDisplay'
 import type { Signer } from 'ethers'
@@ -82,6 +86,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
   const [nodeType, setNodeType] = useState<string | null>(null)
   const [connectedNode, setConnectedNode] = useState<string | null>(null)
   const [fromCache, setFromCache] = useState<{ orderbook?: boolean; trades?: boolean; myOrders?: boolean }>({})
+  const { basePrice, quotePrice, loading: marketPriceLoading, error: marketPriceError } = usePairMarketPrice(pair)
 
   const fetchOrderbook = useCallback(async () => {
     if (!hasNodeApi()) return
@@ -176,25 +181,41 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
     try {
       const signer = await getSigner()
       if (!signer) throw new Error('请先连接钱包')
-      const nonce = Math.floor(Date.now() / 1000)
-      const priceStr = p.toFixed(18)
-      const amountStr = a.toFixed(18)
-      const orderId = buildOrderId(account, nonce, pair, side, priceStr, amountStr)
-      const sig = await signer.signMessage(ethers.getBytes(orderId))
-      const sigHex = ethers.hexlify(ethers.getBytes(sig))
+      const timestamp = Math.floor(Date.now() / 1000)
+      const expiresAt = timestamp + 86400
+      const amountInWei = ethers.parseUnits(amount, 18)
+      const priceWei = ethers.parseUnits(price, 18)
+      const amountOutWei = (BigInt(amountInWei.toString()) * BigInt(priceWei.toString())) / BigInt(1e18)
+      const orderId = generateOrderId()
+      const orderData = {
+        orderId,
+        userAddress: account,
+        tokenIn: TOKEN0_ADDRESS,
+        tokenOut: TOKEN1_ADDRESS,
+        amountIn: amountInWei.toString(),
+        amountOut: String(amountOutWei),
+        price: priceWei.toString(),
+        timestamp,
+        expiresAt,
+      }
+      const signature = await signOrder(orderData, signer)
+      const valid = await verifyOrderSignatureSignedData(orderData, signature)
+      if (!valid) {
+        throw new Error('订单签名验证失败，请重试')
+      }
       const order: Order = {
         orderId,
         trader: account,
         pair,
         side,
-        price: priceStr,
-        amount: amountStr,
+        price: orderData.price,
+        amount: orderData.amountIn,
         filled: '0',
         status: 'open',
-        nonce,
-        createdAt: nonce,
-        expiresAt: 0,
-        signature: sigHex,
+        nonce: timestamp,
+        createdAt: timestamp,
+        expiresAt,
+        signature,
       }
       await nodePost('/api/order', order)
       setPrice('')
@@ -214,8 +235,9 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
     try {
       const signer = await getSigner()
       if (!signer) throw new Error('请先连接钱包')
-      const sig = await signer.signMessage(ethers.getBytes(orderId))
-      await nodePost('/api/order/cancel', { orderId, signature: ethers.hexlify(ethers.getBytes(sig)) })
+      const timestamp = Math.floor(Date.now() / 1000)
+      const signature = await signCancelOrder(orderId, account, timestamp, signer)
+      await nodePost('/api/order/cancel', { orderId, signature, timestamp })
       setRefreshAt((x) => x + 1)
     } catch (e) {
       setError(formatError(e))
@@ -260,6 +282,21 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
           <option value="TKA/TKB">TKA/TKB</option>
         </select>
       </div>
+
+      {marketPriceLoading && <p className="market-ref-hint">市场参考价加载中…</p>}
+      {!marketPriceLoading && !marketPriceError && (basePrice || quotePrice) && (
+        <p className="market-ref-hint">
+          市场参考价：
+          {basePrice && <strong>${basePrice.usd.toFixed(4)}</strong>}
+          {basePrice && quotePrice && <span> / ${quotePrice.usd.toFixed(4)}</span>}
+          {basePrice?.usd_24h_change != null && (
+            <span className={basePrice.usd_24h_change >= 0 ? 'positive' : 'negative'}>
+              {' '}({basePrice.usd_24h_change >= 0 ? '+' : ''}{basePrice.usd_24h_change.toFixed(2)}% 24h)
+            </span>
+          )}
+          <span className="muted"> · P2P 零滑点限价 vs 主流 AMM 滑点 0.5%+</span>
+        </p>
+      )}
 
       <ErrorDisplay error={error} onDismiss={() => setError(null)} />
 

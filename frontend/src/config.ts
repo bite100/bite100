@@ -12,7 +12,7 @@ export const NODE_API_URLS: string[] = _raw
 export const P2P_CONFIG = {
   /** WebSocket 地址（连接 Go 节点时用；纯客户端 P2P 可留空） */
   WS_URL: import.meta.env.VITE_P2P_WS_URL || 'ws://localhost:8080/ws',
-  /** Go 节点 API 地址（可选后备；不设则纯浏览器/Electron 直连） */
+  /** Go 节点 API 地址（可选后备；不设则纯浏览器直连） */
   API_URL: import.meta.env.VITE_P2P_API_URL || 'http://localhost:8080',
   /** Bootstrap 节点 multiaddr 列表（逗号分隔，用于 DHT 发现；可选） */
   BOOTSTRAP_PEERS: (import.meta.env.VITE_P2P_BOOTSTRAP ?? '')

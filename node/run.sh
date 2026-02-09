@@ -1,6 +1,7 @@
 #!/bin/sh
 # P2P 节点启动脚本 - 优先 Docker，否则 Go
-# 用法: ./run.sh [ -connect <addr> ] [ -port 4002 ]
+# 领奖地址必填，否则节点拒绝启动。
+# 用法: ./run.sh -reward-wallet 0x你的地址 [ -connect <addr> ] [ -port 4002 ]
 cd "$(dirname "$0")"
 
 if command -v docker >/dev/null 2>&1; then

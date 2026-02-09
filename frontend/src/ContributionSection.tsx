@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { Contract, solidityPackedKeccak256 } from 'ethers'
+import { Contract } from 'ethers'
 import {
   CONTRIBUTOR_REWARD_ADDRESS,
   CONTRIBUTOR_REWARD_ABI,
@@ -8,6 +8,7 @@ import {
   CHAIN_ID,
 } from './config'
 import { getProvider, withSigner, formatTokenAmount, formatError, isValidAddress } from './utils'
+import { getLastTwoPeriods, periodToId, isPastClaimDeadline, formatScore } from './services/contributorRewardUtils'
 
 const ZERO = '0x0000000000000000000000000000000000000000'
 const isRewardDeployed = () =>
@@ -15,53 +16,6 @@ const isRewardDeployed = () =>
 
 const explorerBase = CHAIN_ID === 1 ? 'https://etherscan.io' : CHAIN_ID === 137 ? 'https://polygonscan.com' : 'https://sepolia.etherscan.io'
 const contributorRewardExplorerUrl = `${explorerBase}/address/${CONTRIBUTOR_REWARD_ADDRESS}`
-
-/** 贡献分为 1e18 精度，格式化为可读小数 */
-function formatScore(raw: string | bigint | undefined): string {
-  if (raw == null || raw === '') return '0'
-  try {
-    const n = typeof raw === 'string' ? BigInt(raw) : raw
-    return (Number(n) / 1e18).toFixed(6)
-  } catch {
-    return String(raw)
-  }
-}
-
-/** 最近两周（UTC 自然周）：[本周, 上周] */
-function getLastTwoPeriods(): string[] {
-  const toYMD = (d: Date) => d.toISOString().slice(0, 10)
-  const now = new Date()
-  const utcMon = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
-  const day = now.getUTCDay()
-  const daysSinceMon = (day + 6) % 7
-  utcMon.setUTCDate(utcMon.getUTCDate() - daysSinceMon)
-  const end = new Date(utcMon)
-  end.setUTCDate(end.getUTCDate() + 6)
-  const current = `${toYMD(utcMon)}_${toYMD(end)}`
-  const prevMon = new Date(utcMon)
-  prevMon.setUTCDate(prevMon.getUTCDate() - 7)
-  const prevEnd = new Date(prevMon)
-  prevEnd.setUTCDate(prevEnd.getUTCDate() + 6)
-  const previous = `${toYMD(prevMon)}_${toYMD(prevEnd)}`
-  return [current, previous]
-}
-
-/** 与合约 _periodId 一致：keccak256(abi.encodePacked(period)) */
-function periodToId(period: string): string {
-  return solidityPackedKeccak256(['string'], [period])
-}
-
-/** 周期字符串格式 YYYY-MM-DD_YYYY-MM-DD，取结束日 UTC 0 点 + 14 天为领取截止；超过则未领取不再发放 */
-const CLAIM_DEADLINE_DAYS = 14
-function isPastClaimDeadline(period: string): boolean {
-  const parts = period.split('_')
-  if (parts.length !== 2) return true
-  const endYMD = parts[1]
-  const endDate = new Date(endYMD + 'T23:59:59Z')
-  const deadline = new Date(endDate)
-  deadline.setUTCDate(deadline.getUTCDate() + CLAIM_DEADLINE_DAYS)
-  return Date.now() > deadline.getTime()
-}
 
 export type PeriodRecord = {
   period: string

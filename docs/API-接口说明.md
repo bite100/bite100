@@ -139,14 +139,14 @@ function addLiquidity(uint256 amount0, uint256 amount1)
 
 ### 2.6 ContributorReward（贡献奖励，Phase 2 M4）
 
-按周期收集贡献证明，按贡献分占比分配该周期奖励池。**领取截止**：Owner 可为周期设置结束时间（`setPeriodEndTimestamp`），周期结束超过 **14 天**后禁止领取，未领取不再发放；`claimable` 过期返回 0，`claimReward` 过期 revert。详见 [贡献奖励接口](./贡献奖励接口.md)。
+按周期收集贡献证明，按贡献分占比分配该周期奖励池。**价值按周期锁定**：每周期结算时确定「每贡献分价值」，之后任何时候领取均按该周期锁定价值计算；不设 14 天作废，未领部分一直有效。详见 [贡献奖励接口 §3.3](./贡献奖励接口.md)。
 
 | 方法 | 类型 | 说明 |
 |------|------|------|
 | `submitProof(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType, signature)` | write | 提交贡献证明（msg.sender 为领奖地址，signature 为 ECDSA 65 字节） |
 | `setPeriodReward(period, token, amount)` | write | Owner 注入某周期某代币奖励池 |
-| `setPeriodEndTimestamp(periodId, endTimestamp)` | write | Owner 设置某周期结束时间（Unix 秒）；设置后超过 endTimestamp+14 天禁止领取 |
-| `claimReward(period, token)` | write | 领取某周期某代币应得奖励（若已设结束时间且过期则 revert）；**每次领取不超过该周期奖励池的 10%**，可多次领取直到领完应得部分。如果启用按信誉分分配（`useReputationWeighting=true`），奖励按（贡献分 × 信誉分数/10000）分配 |
+| `setPeriodEndTimestamp(periodId, endTimestamp)` | write | （可选）Owner 设置某周期结束时间；新规则下领取不设 14 天作废，应得额度按周期锁定价值计算 |
+| `claimReward(period, token)` | write | 领取某周期某代币应得奖励；应得额度 = 该周期锁定的「每贡献分价值」× 我的贡献分，代币数量按**该周期结算时**价格计算，可一次或分次领取。若启用按信誉分分配（`useReputationWeighting=true`），奖励按（贡献分 × 信誉分数/10000）分配 |
 | `claimable(period, token, account)` | view | 查询可领取金额（过期返回 0） |
 | `getContributionScore(period, account)` | view | 查询某周期贡献分 |
 | `getPeriodTotalScore(period)` | view | 查询某周期总贡献分 |

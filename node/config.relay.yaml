@@ -6,6 +6,7 @@ node:
     - /ip4/0.0.0.0/tcp/4001
 
 network:
+  # P2P 无中心，不填也能运行；填了则启动时自动连
   bootstrap: []
   topics:
     - /p2p-exchange/sync/trades

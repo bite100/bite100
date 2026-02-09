@@ -1,0 +1,44 @@
+# 中继节点 - 电脑端一键部署，支持 Watchtower 自动更新
+# 用法（在仓库根目录执行）:
+#   docker compose -f scripts/relay/docker-compose.relay.yml up -d
+# 启用自动更新:
+#   docker compose -f scripts/relay/docker-compose.relay.yml --profile watchtower up -d
+#
+# 前端连接: VITE_NODE_API_URL=http://本机IP:8080
+
+version: '3.9'
+
+services:
+  p2p-relay:
+    build: ../../node
+    image: p2p-relay:latest
+    container_name: p2p-relay
+    restart: unless-stopped
+    ports:
+      - "4001:4001"   # libp2p
+      - "8080:8080"   # HTTP API + WebSocket
+    environment:
+      - REWARD_WALLET=${REWARD_WALLET:-}
+    volumes:
+      - relay-data:/app/data
+      - ../../node/config.relay-server.yaml:/app/config.yaml:ro
+    command: ["-config", "/app/config.yaml"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # 自动更新：每小时检查镜像并重建/重启（需先 build 或从 registry 拉取）
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 3600 --cleanup
+    restart: unless-stopped
+    profiles:
+      - watchtower
+
+volumes:
+  relay-data:

@@ -2,13 +2,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,16 +25,54 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 )
 
+// exitFatal 打印错误并退出；Windows 下等待按键避免窗口闪退
+func exitFatal(msg string) {
+	log.Print(msg)
+	if runtime.GOOS == "windows" {
+		fmt.Print("按 Enter 键退出...")
+		_, _ = bufio.NewReader(os.Stdin).ReadByte()
+	}
+	os.Exit(1)
+}
+
+func exitFatalf(format string, args ...interface{}) {
+	log.Printf(format, args...)
+	if runtime.GOOS == "windows" {
+		fmt.Print("按 Enter 键退出...")
+		_, _ = bufio.NewReader(os.Stdin).ReadByte()
+	}
+	os.Exit(1)
+}
+
 func main() {
 	port := flag.Int("port", 4001, "libp2p 监听端口")
 	configPath := flag.String("config", "config.yaml", "配置文件路径")
 	connectAddr := flag.String("connect", "", "连接到的节点 multiaddr")
+	rewardWallet := flag.String("reward-wallet", "", "领奖钱包地址（必填；可通过本参数、环境变量 REWARD_WALLET 或配置文件 reward_wallet 设置）")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("加载配置: %v", err)
+		exitFatalf("加载配置: %v", err)
 	}
+	// 领奖地址：命令行 > 环境变量 > 配置文件
+	w := strings.TrimSpace(*rewardWallet)
+	if w == "" {
+		w = strings.TrimSpace(cfg.Node.RewardWallet)
+	}
+	if w == "" {
+		exitFatal("未指定领奖钱包地址，节点拒绝启动。请通过 -reward-wallet、环境变量 REWARD_WALLET 或配置文件 node.reward_wallet 设置。")
+	}
+	if !strings.HasPrefix(w, "0x") || len(w) != 42 {
+		exitFatalf("领奖钱包地址格式错误：应为 0x 开头的 42 字符（0x+40 位十六进制），当前: %q", w)
+	}
+	for _, c := range w[2:] {
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
+		}
+		exitFatalf("领奖钱包地址含非十六进制字符: %q", w)
+	}
+	cfg.Node.RewardWallet = w
 
 	// 监听地址（-port 覆盖配置）
 	listenAddrs := cfg.Node.Listen
@@ -44,48 +86,67 @@ func main() {
 	// 1. 创建 libp2p Host
 	h, err := p2p.NewHost(listenAddrs, cfg.Node.DataDir)
 	if err != nil {
-		log.Fatalf("创建 Host: %v", err)
+		exitFatalf("创建 Host: %v", err)
 	}
 	log.Printf("节点启动 | PeerID: %s", h.ID())
+	log.Printf("  领奖地址: %s", cfg.Node.RewardWallet)
 	for _, a := range h.Addrs() {
 		log.Printf("  监听: %s/p2p/%s", a, h.ID())
 	}
 
-	// 2. 连接 -connect 节点
+	// 2. 连接节点（无中心：-connect 或 config network.bootstrap 均可，任一连上即可参与 Gossip）
 	if *connectAddr != "" {
 		if err := p2p.ConnectToPeer(ctx, h, *connectAddr); err != nil {
-			log.Printf("连接对端失败: %v", err)
+			log.Printf("连接 -connect 失败: %v", err)
 		} else {
-			log.Printf("已连接到远程节点，当前连接数: %d", len(h.Network().Peers()))
+			log.Printf("已连接 -connect，当前连接数: %d", len(h.Network().Peers()))
 		}
+	}
+	// bootstrap 并行连接，加快启动
+	for _, addrStr := range cfg.Network.Bootstrap {
+		if addrStr == "" {
+			continue
+		}
+		addrStr := addrStr
+		go func() {
+			if err := p2p.ConnectToPeer(ctx, h, addrStr); err != nil {
+				log.Printf("连接 bootstrap %q 失败: %v", addrStr, err)
+			} else {
+				log.Printf("已连接 bootstrap，当前连接数: %d", len(h.Network().Peers()))
+			}
+		}()
+	}
+	if len(cfg.Network.Bootstrap) > 0 {
+		time.Sleep(2 * time.Second) // 留时间让并行连接完成
 	}
 
 	// 3. GossipSub
 	ps, err := p2p.NewGossipSub(ctx, h)
 	if err != nil {
-		log.Fatalf("GossipSub: %v", err)
+		exitFatalf("GossipSub: %v", err)
 	}
 
 	// 4. 订单发布器（加入订单/撤单/成交主题）
 	orderPub, err := sync.NewOrderPublisher(h, ps)
 	if err != nil {
-		log.Fatalf("OrderPublisher: %v", err)
+		exitFatalf("OrderPublisher: %v", err)
 	}
 
-	// 5. 撮合引擎（仅 match 节点）
+	// 5. 撮合引擎（match 节点或 relay 节点均可启用，relay = 中继 + 交易）
 	var matchEngine *match.Engine
 	var router *match.Router
 	var registry *match.Registry
 	localPairs := make([]string, 0)
 	
-	if cfg.Node.Type == "match" && len(cfg.Match.Pairs) > 0 {
+	enableMatch := (cfg.Node.Type == "match" || cfg.Node.Type == "relay") && len(cfg.Match.Pairs) > 0
+	if enableMatch {
 		pairTokens := make(map[string]match.PairTokens)
 		for pair, pt := range cfg.Match.Pairs {
 			pairTokens[pair] = match.PairTokens{Token0: pt.Token0, Token1: pt.Token1}
 			localPairs = append(localPairs, pair)
 		}
 		matchEngine = match.NewEngine(pairTokens)
-		log.Printf("[match] 撮合引擎已启用，交易对: %d", len(pairTokens))
+		log.Printf("[match] 撮合引擎已启用（%s），交易对: %d", cfg.Node.Type, len(pairTokens))
 		
 		// 方案 B：初始化路由和注册表（分片按交易对）
 		localPeerID := h.ID().String()
@@ -112,14 +173,15 @@ func main() {
 		}()
 	}
 
-	// 6. 存储（storage 节点）
+	// 6. 存储（storage/relay 落库；match 启用撮合时也落库以便重启后恢复订单簿）
 	var store *storage.DB
-	if cfg.Node.Type == "storage" {
+	needStore := cfg.Node.Type == "storage" || cfg.Node.Type == "relay" || (enableMatch && cfg.Node.Type == "match")
+	if needStore {
 		store, err = storage.Open(cfg.Node.DataDir)
 		if err != nil {
-			log.Fatalf("打开存储: %v", err)
+			exitFatalf("打开存储: %v", err)
 		}
-		log.Printf("[storage] 已打开数据库")
+		log.Printf("[storage] 已打开数据库（%s）", cfg.Node.Type)
 	}
 
 	// 7. WebSocket 服务器（供前端订阅订单簿/成交）
@@ -137,9 +199,34 @@ func main() {
 	}
 	subscriber := sync.NewOrderSubscriber(ps, handler)
 	if err := subscriber.Start(ctx); err != nil {
-		log.Fatalf("OrderSubscriber: %v", err)
+		exitFatalf("OrderSubscriber: %v", err)
 	}
-	
+
+	// 订单簿持久化：从本地存储恢复 open/partial 订单到撮合引擎（跳过已过期）
+	if matchEngine != nil && store != nil && len(localPairs) > 0 {
+		restored := 0
+		for _, pair := range localPairs {
+			bids, asks, err := store.ListOrdersOpenByPair(pair, 500)
+			if err != nil {
+				log.Printf("[storage] 恢复订单簿 pair=%s: %v", pair, err)
+				continue
+			}
+			for _, o := range bids {
+				if !storage.OrderExpired(o) && matchEngine.AddOrder(o) {
+					restored++
+				}
+			}
+			for _, o := range asks {
+				if !storage.OrderExpired(o) && matchEngine.AddOrder(o) {
+					restored++
+				}
+			}
+		}
+		if restored > 0 {
+			log.Printf("[storage] 订单簿已从本地恢复，共 %d 笔", restored)
+		}
+	}
+
 	// 订阅节点注册消息（方案 B）
 	if registry != nil {
 		if err := subscribeMatchRegistry(ctx, ps, registry); err != nil {
@@ -158,11 +245,13 @@ func main() {
 
 	// 10. HTTP API
 	srv := &api.Server{
-		Store:       store,
-		MatchEngine: matchEngine,
-		Publish:     publishFn,
-		NodeType:    cfg.Node.Type,
-		WSServer:    wsServer,
+		Store:                   store,
+		MatchEngine:             matchEngine,
+		Publish:                 publishFn,
+		NodeType:                cfg.Node.Type,
+		RewardWallet:            cfg.Node.RewardWallet,
+		WSServer:                wsServer,
+		RateLimitOrdersPerMinute: cfg.API.RateLimitOrdersPerMinute,
 	}
 	if cfg.API.Listen != "" {
 		srv.Run(cfg.API.Listen)
@@ -268,7 +357,10 @@ func (h *orderMatchHandler) OnNewOrder(order *storage.Order) error {
 	if order == nil || order.OrderID == "" || order.Pair == "" {
 		return nil
 	}
-	
+	if storage.OrderExpired(order) {
+		log.Printf("[order/new] 已过期，跳过 orderId=%s expiresAt=%d", order.OrderID, order.ExpiresAt)
+		return nil
+	}
 	// 方案 B：路由订单（如果启用了路由）
 	if h.router != nil {
 		needForward, targetPeerID, err := h.router.RouteOrder(order)

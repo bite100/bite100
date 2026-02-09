@@ -5,12 +5,16 @@ import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
 import { OrderBookSection } from './OrderBookSection'
 import { CrossChainBridge } from './components/CrossChainBridge'
+import { LiquidityPoolInfo } from './components/LiquidityPoolInfo'
+import { RewardPoolInfo } from './components/RewardPoolInfo'
+import { UnifiedRewardClaim } from './components/UnifiedRewardClaim'
+import { AddNetworkButton } from './components/AddNetworkButton'
 import { Navigation, type Tab } from './components/Navigation'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorDisplay } from './components/ErrorDisplay'
 import { ChainSwitcher } from './components/ChainSwitcher'
 import { useChain } from './hooks/useChain'
-import { getEthereum, getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, isElectron, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL, debug, openBrowserVersion, BROWSER_APP_URL } from './utils'
+import { getEthereum, getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL, debug } from './utils'
 import './App.css'
 
 /** 治理模块错误边界：治理区报错时不影响整页 */
@@ -115,70 +119,20 @@ function App() {
     debug.log('🔗 开始连接钱包...')
     setError(null)
     setLoading(true)
-    
     try {
-      const isElectronEnv = isElectron()
-      debug.log('🔍 检查环境... 是否 Electron:', isElectronEnv)
-      
-      // 在 Electron 中，给扩展一些时间注入
-      if (isElectronEnv) {
-        debug.log('⏳ 等待 MetaMask 扩展注入...')
-        // 等待扩展注入（最多等待 2 秒）
-        for (let i = 0; i < 4; i++) {
-          const ethereum = getEthereum()
-          if (ethereum) {
-            debug.log('✅ MetaMask 扩展已检测到')
-            break
-          }
-          debug.log(`   等待中... (${i + 1}/4)`)
-          await new Promise(resolve => setTimeout(resolve, 500))
-        }
-      }
-      
       const ethereum = getEthereum()
-      debug.log('🔍 检查 window.ethereum:', typeof window !== 'undefined' ? typeof (window as any).ethereum : 'window undefined')
-      debug.log('🔍 getEthereum() 结果:', ethereum ? '存在' : '不存在')
-      
       if (!ethereum) {
-        let errorMsg = '请安装 MetaMask 或其他钱包扩展'
-        
-        if (isElectronEnv) {
-          // 检查 window.ethereum 是否存在（调试用）
-          const hasEthereum = typeof window !== 'undefined' && typeof (window as any).ethereum !== 'undefined'
-          debug.error('❌ MetaMask 未检测到')
-          debug.error('   调试信息: window.ethereum', hasEthereum ? '已存在' : '不存在')
-          
-          // 尝试打开浏览器版本
-          const browserOpened = await openBrowserVersion()
-          if (browserOpened) {
-            errorMsg = `桌面版无法检测到 MetaMask，已为您打开浏览器版本。\n\n浏览器版本地址：${BROWSER_APP_URL}\n\n如果浏览器版本也无法连接，请确保：\n1. 已在浏览器中安装 MetaMask\n2. MetaMask 已启用`
-          } else {
-            errorMsg = `桌面版无法检测到 MetaMask。\n\n请使用浏览器打开：${BROWSER_APP_URL}\n\n请确保：\n1. 已在 Chrome 或 Edge 中安装 MetaMask\n2. MetaMask 已启用\n3. 重启桌面应用\n\n调试信息：window.ethereum ${hasEthereum ? '已存在' : '不存在'}`
-          }
-        }
-        
-        setError(errorMsg)
+        setError('请安装 MetaMask 或其他钱包扩展')
+        setLoading(false)
         return
       }
-      
-      debug.log('✅ 开始请求账户...')
       const provider = getProvider()
       if (!provider) {
-        let errorMsg = '请安装 MetaMask 或其他钱包扩展'
-        
-        if (isElectronEnv) {
-          // 尝试打开浏览器版本
-          const browserOpened = await openBrowserVersion()
-          if (browserOpened) {
-            errorMsg = `桌面版无法创建 Provider，已为您打开浏览器版本。\n\n浏览器版本地址：${BROWSER_APP_URL}`
-          } else {
-            errorMsg = `桌面版需先在 Chrome 或 Edge 中安装 MetaMask。若已安装仍无法连接，请使用浏览器打开 ${BROWSER_APP_URL}`
-          }
-        }
-        
-        setError(errorMsg)
+        setError('请安装 MetaMask 或其他钱包扩展')
+        setLoading(false)
         return
       }
+      debug.log('✅ 开始请求账户...')
       const accounts = (await ethereum.request({ method: 'eth_requestAccounts' })) as string[]
       if (!accounts.length) {
         setError('未获取到账户')
@@ -211,7 +165,8 @@ function App() {
 
   const tokenAddr = tokenAddress.trim()
 
-  const fetchBalances = useCallback(async () => {
+  /** background: 为 true 时不设置全局 loading，避免链/账户变化或刷新时误显示「连接中」 */
+  const fetchBalances = useCallback(async (background = true) => {
     if (!account || !isValidAddress(tokenAddr) || !currentChainConfig) return
     const cacheKey = CACHE_KEYS.BALANCE + account + tokenAddr + currentChainConfig.chainId
     const cached = cacheGet<[string, string]>(cacheKey)
@@ -220,8 +175,10 @@ function App() {
       setWalletTokenBalance(cached[1])
       return
     }
-    setError(null)
-    setLoading(true)
+    if (!background) {
+      setError(null)
+      setLoading(true)
+    }
     try {
       const provider = getProvider()
       if (!provider) throw new Error('未检测到钱包')
@@ -239,9 +196,9 @@ function App() {
     } catch (e) {
       setVaultBalance('')
       setWalletTokenBalance('')
-      setError(formatError(e))
+      if (!background) setError(formatError(e))
     } finally {
-      setLoading(false)
+      if (!background) setLoading(false)
     }
   }, [account, tokenAddr, currentChainConfig])
 
@@ -531,28 +488,8 @@ function App() {
         <>
           <button 
             className="btn primary" 
-            onClick={async (e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              debug.log('🖱️ 点击连接钱包按钮')
-              if (loading) {
-                debug.log('⚠️ 正在连接中，忽略重复点击')
-                return
-              }
-              
-              // 如果是 Electron 环境且无法检测到钱包，直接打开浏览器
-              if (isElectron()) {
-                const ethereum = getEthereum()
-                if (!ethereum) {
-                  debug.log('🌐 Electron 环境未检测到钱包，打开浏览器版本')
-                  const browserOpened = await openBrowserVersion()
-                  if (browserOpened) {
-                    setError(`桌面版无法检测到 MetaMask，已为您打开浏览器版本。\n\n浏览器版本地址：${BROWSER_APP_URL}`)
-                    return
-                  }
-                }
-              }
-              
+            onClick={() => {
+              if (loading) return
               connectWallet().catch(err => {
                 debug.error('连接钱包异常:', err)
                 setError(formatError(err))
@@ -564,12 +501,11 @@ function App() {
           >
             {loading ? '连接中...' : '连接钱包'}
           </button>
-          {isElectron() && (
-            <p className="hint" style={{ marginTop: '0.5rem' }}>
-              桌面版需先在 Chrome 或 Edge 中安装 MetaMask，本应用会自动加载。若无法连接，请使用浏览器打开{' '}
-              <a href={BROWSER_APP_URL} target="_blank" rel="noopener noreferrer">p2p-p2p.github.io/p2p</a>。
-            </p>
-          )}
+          <AddNetworkButton chainId={currentChainId ?? undefined} className="add-network-below-connect" />
+          <div className="public-data-section" style={{ marginTop: '1rem' }}>
+            <LiquidityPoolInfo />
+            <RewardPoolInfo />
+          </div>
         </>
       ) : (
         <div className="card">
@@ -673,6 +609,13 @@ function App() {
             </>
           )}
 
+          {activeTab === 'data' && (
+            <div className="public-data-section">
+              <LiquidityPoolInfo />
+              <RewardPoolInfo />
+            </div>
+          )}
+
           {activeTab === 'orderbook' && (
             <OrderBookSection
               account={account}
@@ -732,7 +675,10 @@ function App() {
           )}
 
           {activeTab === 'contribution' && (
-            <ContributionSection account={account} />
+            <>
+              <UnifiedRewardClaim account={account} />
+              <ContributionSection account={account} />
+            </>
           )}
 
           {activeTab === 'bridge' && (

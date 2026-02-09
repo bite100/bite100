@@ -59,11 +59,15 @@ func ParseOrderbookSnapshot(data []byte) (*storage.OrderbookSnapshot, error) {
 	return &s, nil
 }
 
-// PersistOrderNew 存储节点：持久化新订单
+// PersistOrderNew 存储节点：持久化新订单（已过期订单不写入，Replay/过期防护）
 func PersistOrderNew(store *storage.DB, data []byte) {
 	o, err := ParseOrderNew(data)
 	if err != nil {
 		log.Printf("[order/new] 解析失败: %v", err)
+		return
+	}
+	if storage.OrderExpired(o) {
+		log.Printf("[order/new] 已过期，跳过 orderId=%s expiresAt=%d", o.OrderID, o.ExpiresAt)
 		return
 	}
 	if err := store.InsertOrder(o); err != nil {

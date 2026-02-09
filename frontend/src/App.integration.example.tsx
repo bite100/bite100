@@ -12,7 +12,7 @@ import { SETTLEMENT_ADDRESS, RPC_URL } from './config'
  * 完整的分层存储集成示例
  *
  * 广播订单 → IndexedDB pending → 收到订单撮合 → 广播 Match + 尝试 settleTrade
- * App 启动加载 pending 到 UI/内存；关浏览器/Electron 重开验证恢复；过期清理（expiry 过滤）
+ * App 启动加载 pending 到 UI/内存；关浏览器重开验证恢复；过期清理（expiry 过滤）
  */
 
 function AppContent() {

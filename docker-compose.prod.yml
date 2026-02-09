@@ -1,0 +1,72 @@
+# P2P 项目 - 生产级部署（单节点中枢 + 可选前端 + Watchtower 自动更新）
+# 用法: docker compose -f docker-compose.prod.yml --env-file .env up -d
+# 详见 docs/部署与使用说明.md、docs/主网上线与优化总览.md
+
+version: '3.9'
+
+services:
+  p2p-node:
+    build: ./node
+    image: p2p-node:latest
+    container_name: p2p-node-hub
+    restart: unless-stopped
+    ports:
+      - "4001:4001"   # libp2p P2P（对外暴露供其他节点连接）
+      - "8080:8080"   # WebSocket + HTTP API（前端连此）
+    environment:
+      - NODE_TYPE=match
+      - API_LISTEN=:8080
+      - NETWORK=${NETWORK:-sepolia}
+      - SEPOLIA_RPC_URL=${SEPOLIA_RPC_URL:-https://ethereum-sepolia.publicnode.com}
+      - REWARD_WALLET=${REWARD_WALLET:-}
+      - BOOTSTRAP_NODES=${BOOTSTRAP_NODES:-}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - node-data:/app/data
+      - ./node/config.yaml:/app/config.yaml
+    command: ["-config", "/app/config.yaml"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - p2p-network
+
+  # 可选：本地开发前端（连容器内 node WS）
+  frontend-dev:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_P2P_WS_URL=ws://p2p-node:8080/ws
+      - VITE_P2P_API_URL=http://p2p-node:8080
+      - VITE_NETWORK=${NETWORK:-sepolia}
+    depends_on:
+      p2p-node:
+        condition: service_healthy
+    command: npm run dev
+    profiles:
+      - dev
+    networks:
+      - p2p-network
+
+  # 自动更新镜像（每小时检查，更新后重启容器）
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 3600 --cleanup
+    restart: unless-stopped
+    profiles:
+      - watchtower
+    networks:
+      - p2p-network
+
+volumes:
+  node-data:
+
+networks:
+  p2p-network:
+    driver: bridge
