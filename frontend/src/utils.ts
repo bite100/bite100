@@ -3,12 +3,51 @@ import { BrowserProvider, type Eip1193Provider, type Signer } from 'ethers'
 
 const WIN =
   typeof window !== 'undefined'
-    ? (window as unknown as { ethereum?: Eip1193Provider; phantom?: { ethereum?: Eip1193Provider } })
+    ? (window as unknown as {
+        ethereum?: Eip1193Provider | Eip1193Provider[];
+        phantom?: { ethereum?: Eip1193Provider };
+        trustwallet?: Eip1193Provider;
+      })
     : null
 
+function normalizeProvider(p: unknown): Eip1193Provider | null {
+  if (!p) return null
+  if (Array.isArray(p)) return (p[0] as Eip1193Provider) ?? null
+  return p as Eip1193Provider
+}
+
 export function getEthereum(): Eip1193Provider | null {
-  // 优先使用标准 window.ethereum，其次尝试 Phantom 的 EVM provider
-  return WIN?.ethereum ?? WIN?.phantom?.ethereum ?? null
+  const raw =
+    WIN?.ethereum ??
+    (WIN as { trustwallet?: Eip1193Provider })?.trustwallet ??
+    WIN?.phantom?.ethereum ??
+    null
+  return normalizeProvider(raw)
+}
+
+/**
+ * 等待钱包注入（钱包 App 内打开时可能延迟注入）
+ * @param timeoutMs 最多等待毫秒数，默认 2500
+ */
+export function getEthereumAsync(timeoutMs = 2500): Promise<Eip1193Provider | null> {
+  const existing = getEthereum()
+  if (existing) return Promise.resolve(existing)
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs
+    const tick = () => {
+      const eth = getEthereum()
+      if (eth) {
+        resolve(eth)
+        return
+      }
+      if (Date.now() >= deadline) {
+        resolve(null)
+        return
+      }
+      setTimeout(tick, 200)
+    }
+    setTimeout(tick, 100)
+  })
 }
 
 export function getProvider(): BrowserProvider | null {

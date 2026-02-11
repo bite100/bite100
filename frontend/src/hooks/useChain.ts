@@ -1,28 +1,22 @@
 import { useState, useEffect, useCallback } from 'react'
 import { BrowserProvider } from 'ethers'
 import { DEFAULT_CHAIN_ID, getChainConfig, isChainSupported } from '../config/chains'
-import { debug } from '../utils'
+import { getEthereum, debug } from '../utils'
 
 export function useChain() {
   const [currentChainId, setCurrentChainId] = useState<number | null>(null)
   const [isConnecting, setIsConnecting] = useState(false)
 
-  // 初始化：检测当前链
   useEffect(() => {
-    if (!window.ethereum) return
+    const ethereum = getEthereum()
+    if (!ethereum) return
 
     const checkChain = async () => {
       try {
-        const provider = new BrowserProvider(window.ethereum)
+        const provider = new BrowserProvider(ethereum)
         const network = await provider.getNetwork()
         const chainId = Number(network.chainId)
-        
-        if (isChainSupported(chainId)) {
-          setCurrentChainId(chainId)
-        } else {
-          // 如果不支持，使用默认链
-          setCurrentChainId(DEFAULT_CHAIN_ID)
-        }
+        setCurrentChainId(isChainSupported(chainId) ? chainId : DEFAULT_CHAIN_ID)
       } catch (error) {
         debug.error('检测链失败:', error)
         setCurrentChainId(DEFAULT_CHAIN_ID)
@@ -31,39 +25,37 @@ export function useChain() {
 
     checkChain()
 
-    // 监听链切换
     const handleChainChanged = (chainId: string) => {
       const id = parseInt(chainId, 16)
-      if (isChainSupported(id)) {
-        setCurrentChainId(id)
-      }
+      if (isChainSupported(id)) setCurrentChainId(id)
     }
 
-    window.ethereum.on('chainChanged', handleChainChanged)
-
-    return () => {
-      window.ethereum?.removeListener('chainChanged', handleChainChanged)
+    const provider = ethereum as { on?: (e: string, cb: (v: string) => void) => void; removeListener?: (e: string, cb: (v: string) => void) => void }
+    if (typeof provider.on === 'function') {
+      provider.on('chainChanged', handleChainChanged)
+      return () => {
+        if (typeof provider.removeListener === 'function') {
+          provider.removeListener('chainChanged', handleChainChanged)
+        }
+      }
     }
   }, [])
 
-  // 切换链
   const switchChain = useCallback(async (chainId: number) => {
-    if (!window.ethereum) {
-      throw new Error('请安装 MetaMask 或其他 Web3 钱包')
+    const ethereum = getEthereum()
+    if (!ethereum) {
+      throw new Error('请安装 MetaMask、Trust 等钱包，或在钱包 App 内置浏览器中打开本页')
     }
 
     setIsConnecting(true)
     try {
-      const provider = new BrowserProvider(window.ethereum)
+      const provider = new BrowserProvider(ethereum)
       const currentNetwork = await provider.getNetwork()
       const currentChainId = Number(currentNetwork.chainId)
-
-      if (currentChainId === chainId) {
-        return
-      }
+      if (currentChainId === chainId) return
 
       try {
-        await window.ethereum.request({
+        await ethereum.request({
           method: 'wallet_switchEthereumChain',
           params: [{ chainId: `0x${chainId.toString(16)}` }],
         })
@@ -73,7 +65,7 @@ export function useChain() {
         if (code === 4902) {
           const config = getChainConfig(chainId)
           if (!config) throw new Error(`链 ${chainId} 不支持`)
-          await window.ethereum.request({
+          await ethereum.request({
             method: 'wallet_addEthereumChain',
             params: [{
               chainId: `0x${chainId.toString(16)}`,

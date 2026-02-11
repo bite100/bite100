@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { BrowserProvider } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig, getAddChainParams } from '../config/chains'
-import { debug } from '../utils'
+import { getEthereum, debug } from '../utils'
 import { ErrorDisplay } from './ErrorDisplay'
 import './ChainSwitcher.css'
 
@@ -18,14 +18,15 @@ export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherPr
   const currentChain = currentChainId ? getChainConfig(currentChainId) : null
 
   const switchChain = async (chainId: number) => {
-    if (!window.ethereum) {
-      setError('请安装 MetaMask 或其他 Web3 钱包')
+    const ethereum = getEthereum()
+    if (!ethereum) {
+      setError('请安装 MetaMask、Trust 等钱包，或在钱包 App 内置浏览器中打开本页')
       return
     }
 
     setSwitching(true)
     try {
-      const provider = new BrowserProvider(window.ethereum)
+      const provider = new BrowserProvider(ethereum)
       const currentChainId = await provider.getNetwork().then(n => Number(n.chainId))
 
       // 如果已经是目标链，直接返回
@@ -36,17 +37,15 @@ export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherPr
       }
 
       try {
-        // 尝试切换链
-        await window.ethereum.request({
+        await ethereum.request({
           method: 'wallet_switchEthereumChain',
           params: [{ chainId: `0x${chainId.toString(16)}` }],
         })
         onChainChange(chainId)
       } catch (error: any) {
-        // 如果链不存在，添加链
         if (error.code === 4902) {
           const params = getAddChainParams(chainId)
-          await window.ethereum.request({
+          await ethereum.request({
             method: 'wallet_addEthereumChain',
             params: [params],
           })
