@@ -1,25 +1,24 @@
 /**
  * 钱包 Deep Link：点击连接按钮后跳转到钱包 App 内置浏览器
- * MetaMask: https://link.metamask.io/dapp/{domain} (文档示例用域名，完整 URL 也可)
- * Trust Wallet: trust://browser?url={url}
- * Phantom: https://phantom.app/ul/v1/browse?url={url} (主要 Solana，EVM 可能不支持)
+ * MetaMask: https://link.metamask.io/dapp/{domain} (仅域名，完整 URL 会 404)
+ * Trust Wallet: https://link.trustwallet.com/open_url?coin_id=60&url={完整URL}
+ * Phantom: https://phantom.app/ul/v1/browse?url={完整URL} (主要 Solana，EVM 可能不支持)
  */
 
 function getCurrentUrl(): string {
   if (typeof window === 'undefined') return ''
-  const url = window.location.href
-  // MetaMask 文档示例用域名，但完整 URL 也可；Trust/Phantom 用完整 URL
-  return encodeURIComponent(url)
+  return encodeURIComponent(window.location.href)
 }
 
 function getCurrentDomain(): string {
   if (typeof window === 'undefined') return ''
+  // MetaMask 只用域名（hostname），不要协议和路径，否则 404
   return window.location.hostname
 }
 
 const DEEP_LINKS: Record<string, () => string> = {
   metamask: () => `https://link.metamask.io/dapp/${getCurrentDomain()}`,
-  trust: () => `trust://browser?url=${getCurrentUrl()}`,
+  trust: () => `https://link.trustwallet.com/open_url?coin_id=60&url=${getCurrentUrl()}`,
   phantom: () => `https://phantom.app/ul/v1/browse?url=${getCurrentUrl()}`,
 }
 
