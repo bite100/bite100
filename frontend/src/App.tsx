@@ -449,14 +449,8 @@ function App() {
         <>
           <div className="connect-buttons" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
             <ConnectButton />
-            <p className="hint" style={{ margin: 0, fontSize: '0.85rem' }}>
-              手机端：推荐在 MetaMask、Trust 等钱包 App 内置浏览器中打开，连接成功率 90%+；或通过 WalletConnect 扫码连接。
-            </p>
             <MobileConnectHint />
           </div>
-          <p className="hint" style={{ marginTop: '0.25rem', marginBottom: 0, fontSize: '0.8rem' }}>
-            支持主流 EVM 钱包：MetaMask、Rabby、Phantom（EVM 模式）、OKX、Bitget、imToken、Trust 等。
-          </p>
           <AddNetworkButton chainId={currentChainId ?? undefined} className="add-network-below-connect" />
           <div className="public-data-section" style={{ marginTop: '1rem' }}>
             <LiquidityPoolInfo />

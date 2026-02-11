@@ -1,7 +1,3 @@
-/**
- * 手机端连接引导：Deep Link 失败时的 fallback（清单 2.1）
- * 在手机端显示「复制链接」按钮，用户可粘贴到钱包 App 内置浏览器中打开
- */
 import { useState, useMemo } from 'react'
 
 function isMobile(): boolean {
@@ -18,8 +14,7 @@ export function MobileConnectHint() {
 
   const handleCopy = async () => {
     try {
-      const url = typeof window !== 'undefined' ? window.location.href : ''
-      await navigator.clipboard?.writeText(url)
+      await navigator.clipboard?.writeText(window.location.href ?? '')
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
@@ -28,18 +23,13 @@ export function MobileConnectHint() {
   }
 
   return (
-    <div className="mobile-connect-hint" style={{ marginTop: '0.25rem' }}>
-      <p style={{ fontSize: '0.75rem', color: '#888', marginBottom: '0.35rem' }}>
-        若已在钱包 App 内打开，请稍候几秒或刷新页面以检测钱包。
-      </p>
-      <button
-        type="button"
-        className="btn secondary"
-        onClick={handleCopy}
-        style={{ fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}
-      >
-        {copied ? '✓ 已复制' : '复制链接，在钱包 App 内置浏览器中打开'}
-      </button>
-    </div>
+    <button
+      type="button"
+      className="btn secondary"
+      onClick={handleCopy}
+      style={{ fontSize: '0.8rem', padding: '0.35rem 0.6rem' }}
+    >
+      {copied ? '✓ 已复制' : '复制链接'}
+    </button>
   )
 }

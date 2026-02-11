@@ -28,8 +28,8 @@ function transport(chainId: number) {
 
 const wcProjectId = import.meta.env.VITE_WC_PROJECT_ID
 
+// 移动端优先 WalletConnect（业内做法）；Trust 等内置浏览器由 index.html 将 trustwallet 同步到 ethereum
 const connectors = [
-  injected(),
   ...(wcProjectId
     ? [
         walletConnect({
@@ -38,6 +38,7 @@ const connectors = [
         }),
       ]
     : []),
+  injected(),
 ]
 
 export const wagmiConfig = createConfig({

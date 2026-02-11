@@ -13,6 +13,10 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // 移动端/扩展：Trust 注入在 window.trustwallet，Phantom 在 window.phantom.ethereum，Wagmi 只读 window.ethereum
+      (function(){var w=typeof window!=="undefined"?window:null;if(!w||w.ethereum)return;try{if(w.trustwallet){w.ethereum=w.trustwallet;}else if(w.phantom&&w.phantom.ethereum){w.ethereum=w.phantom.ethereum;}}catch(e){}})();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
