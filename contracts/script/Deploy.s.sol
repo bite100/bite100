@@ -157,19 +157,12 @@ contract Deploy is Script {
     }
 
     /// @notice 仅部署 ContributorReward（贡献证明与按周期分配奖励）
-    /// 可选：DEVELOPER_ADDRESS（上线奖励 5 万贡献分地址，默认同 deployer）, LAUNCH_PERIOD（周期名，默认 "launch"）
-    /// 上线奖励可自由流通：不受周期结束时间限制，可随时领取（需先注入奖励池 setPeriodReward）
     function runContributorReward() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
         vm.startBroadcast(deployerPrivateKey);
         ContributorReward contributorReward = new ContributorReward();
-        address developer = vm.envOr("DEVELOPER_ADDRESS", deployer);
-        string memory launchPeriod = vm.envOr("LAUNCH_PERIOD", string("launch"));
-        contributorReward.setContributionScore(launchPeriod, developer, 50000e18);
         vm.stopBroadcast();
         console.log("ContributorReward", address(contributorReward));
-        console.log("Developer launch reward: 50000 contribution score set for", developer);
         console.log("Note: Inject reward pool via setPeriodReward to enable claiming");
     }
 
@@ -247,11 +240,6 @@ contract Deploy is Script {
         ChainConfig chainConfig = new ChainConfig();
         tokenRegistry.setGovernance(address(gov));
         chainConfig.setGovernance(address(gov));
-
-        // 上线奖励：给开发者地址设置 5 万贡献分（第一个周期，可自由流通，不受周期结束时间限制）
-        string memory launchPeriod = vm.envOr("LAUNCH_PERIOD", string("launch"));
-        contributorReward.setContributionScore(launchPeriod, developer, 50000e18);
-        // 注意：需后续通过 setPeriodReward 注入奖励池后，开发者才能领取；周期未设置结束时间，可随时领取
 
         vm.stopBroadcast();
 

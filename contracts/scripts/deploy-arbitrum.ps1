@@ -109,10 +109,6 @@ contract DeployArbitrum is Script {
         tokenRegistry.setGovernance(address(gov));
         chainConfig.setGovernance(address(gov));
         
-        // 11. 上线奖励
-        string memory launchPeriod = vm.envOr("LAUNCH_PERIOD", string("launch"));
-        contributorReward.setContributionScore(launchPeriod, developer, 50000e18);
-        
         vm.stopBroadcast();
         
         console.log("=== Arbitrum 部署完成 ===");

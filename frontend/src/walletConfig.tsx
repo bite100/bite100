@@ -1,24 +1,61 @@
 /**
  * Wagmi 配置：多链 + 注入钱包（MetaMask 等）
  * 与 frontend/src/config/chains.ts 对齐
- * 清单 3.1：RPC 轮询/fallback，主 RPC 失败时自动切换
  *
- * 移动端：Trust 注入在 window.trustwallet，Phantom 在 window.phantom.ethereum；
- * index.html 会尽早同步到 window.ethereum，此处再同步一次应对缓存旧 HTML。
+ * 移动端：主流钱包注入在各自 key 下（trustwallet、phantom、okxwallet、bitget 等），
+ * 需同步到 window.ethereum 供 EIP-1193/Wagmi 检测。
  */
 import { createConfig } from 'wagmi'
 import { fallback, http } from 'viem'
 import { arbitrum, base, bsc, mainnet, optimism, polygon, sepolia } from 'wagmi/chains'
 import { injected, walletConnect } from '@wagmi/connectors'
 
-/** 将 Trust/Phantom 等同步到 window.ethereum，供 EIP-1193 检测；连接前可再调一次应对延迟注入 */
+type Win = {
+  ethereum?: unknown
+  trustwallet?: unknown
+  phantom?: { ethereum?: unknown }
+  okxwallet?: unknown
+  bitget?: unknown
+  tokenpocket?: unknown
+  imToken?: unknown
+  onekey?: unknown
+  safepal?: unknown
+  rabby?: unknown
+  coinbaseWallet?: unknown
+}
+
+/** 主流钱包注入 key 的检测顺序（先检测的优先同步到 ethereum） */
+const MOBILE_PROVIDER_KEYS: (keyof Win)[] = [
+  'trustwallet',
+  'phantom', // 使用 w.phantom?.ethereum
+  'okxwallet',
+  'bitget',
+  'tokenpocket',
+  'imToken',
+  'onekey',
+  'safepal',
+  'rabby',
+  'coinbaseWallet',
+]
+
+/** 将主流钱包 provider 同步到 window.ethereum，供 EIP-1193 检测；连接前可再调一次应对延迟注入 */
 export function syncMobileProvider(): void {
   if (typeof window === 'undefined') return
-  const w = window as unknown as { ethereum?: unknown; trustwallet?: unknown; phantom?: { ethereum?: unknown } }
+  const w = window as unknown as Win
   if (w.ethereum) return
   try {
-    if (w.trustwallet) w.ethereum = w.trustwallet
-    else if (w.phantom?.ethereum) w.ethereum = w.phantom.ethereum
+    if (w.phantom?.ethereum) {
+      w.ethereum = w.phantom.ethereum
+      return
+    }
+    for (const k of MOBILE_PROVIDER_KEYS) {
+      if (k === 'phantom') continue
+      const v = w[k]
+      if (v && typeof (v as { request?: unknown }).request === 'function') {
+        w.ethereum = v
+        return
+      }
+    }
   } catch (_) {}
 }
 syncMobileProvider()

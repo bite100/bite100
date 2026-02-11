@@ -14,8 +14,8 @@
   <body>
     <div id="root"></div>
     <script>
-      // 移动端/扩展：Trust 注入在 window.trustwallet，Phantom 在 window.phantom.ethereum，Wagmi 只读 window.ethereum
-      (function(){var w=typeof window!=="undefined"?window:null;if(!w||w.ethereum)return;try{if(w.trustwallet){w.ethereum=w.trustwallet;}else if(w.phantom&&w.phantom.ethereum){w.ethereum=w.phantom.ethereum;}}catch(e){}})();
+      // 主流钱包注入同步到 window.ethereum（Trust/Phantom/OKX/Bitget/TokenPocket/imToken/OneKey/SafePal/Rabby/Coinbase）
+      (function(){var w=typeof window!=="undefined"?window:null;if(!w||w.ethereum)return;try{if(w.trustwallet){w.ethereum=w.trustwallet;}else if(w.phantom&&w.phantom.ethereum){w.ethereum=w.phantom.ethereum;}else if(w.okxwallet){w.ethereum=w.okxwallet;}else if(w.bitget){w.ethereum=w.bitget;}else if(w.tokenpocket){w.ethereum=w.tokenpocket;}else if(w.imToken){w.ethereum=w.imToken;}else if(w.onekey){w.ethereum=w.onekey;}else if(w.safepal){w.ethereum=w.safepal;}else if(w.rabby){w.ethereum=w.rabby;}else if(w.coinbaseWallet){w.ethereum=w.coinbaseWallet;}}catch(e){}})();
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>

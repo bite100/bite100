@@ -10,7 +10,6 @@ import { CrossChainBridge } from './components/CrossChainBridge'
 import { LiquidityPoolInfo } from './components/LiquidityPoolInfo'
 import { RewardPoolInfo } from './components/RewardPoolInfo'
 import { UnifiedRewardClaim } from './components/UnifiedRewardClaim'
-import { NodeLaunchRewards } from './components/NodeLaunchRewards'
 import { MerkleAirdropClaim } from './components/MerkleAirdropClaim'
 import { AddNetworkButton } from './components/AddNetworkButton'
 import { MobileConnectHint } from './components/MobileConnectHint'
@@ -674,7 +673,6 @@ function App() {
 
           {activeTab === 'contribution' && (
             <>
-              <NodeLaunchRewards account={account} />
               <UnifiedRewardClaim account={account} />
               <MerkleAirdropClaim account={account} />
               <ContributionSection account={account} />
