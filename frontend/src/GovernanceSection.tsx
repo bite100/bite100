@@ -242,11 +242,9 @@ export function GovernanceSection({ account }: { account: string | null }) {
           自动刷新（30秒）
         </label>
       </h3>
-      {loading ? (
-        <p className="hint">加载中…</p>
-      ) : proposals.length === 0 ? (
-        <p className="hint">暂无提案</p>
-      ) : (
+      {loading && <p className="hint">加载中…</p>}
+      {!loading && proposals.length === 0 && <p className="hint">暂无提案</p>}
+      {!loading && proposals.length > 0 && (
         <>
           <div className="proposal-list">
             {proposals
@@ -254,37 +252,37 @@ export function GovernanceSection({ account }: { account: string | null }) {
               .map((p, i) => {
                 const actualIndex = (currentPage - 1) * proposalsPerPage + i
                 const weight = votingWeights.get(actualIndex)
-            const now = Date.now()
-            const votingEnds = Number(p.votingEndsAt) * 1000
-            const executableAt = Number(p.executableAt) * 1000
-            const isVoting = votingEnds > now
-            const isPassed = Number(p.yesCount) > Math.floor(Number(p.activeCount) / 2)
-            const canExecute = !p.executed && !isVoting && isPassed && now >= executableAt
-            const waitingTimelock = !p.executed && !isVoting && isPassed && now < executableAt
-            
-            let statusText = ''
-            let statusColor = ''
-            if (p.executed) {
-              statusText = '✅ 已执行'
-              statusColor = 'green'
-            } else if (isVoting) {
-              statusText = '⏳ 投票中'
-              statusColor = 'blue'
-            } else if (canExecute) {
-              statusText = '✅ 可执行'
-              statusColor = 'green'
-            } else if (waitingTimelock) {
-              const waitHours = Math.ceil((executableAt - now) / (1000 * 60 * 60))
-              statusText = `⏰ 等待 Timelock（${waitHours} 小时后可执行）`
-              statusColor = 'orange'
-            } else if (!isPassed) {
-              statusText = '❌ 未通过'
-              statusColor = 'red'
-            } else {
-              statusText = '⏳ 等待中'
-              statusColor = 'gray'
-            }
-            
+                const now = Date.now()
+                const votingEnds = Number(p.votingEndsAt) * 1000
+                const executableAt = Number(p.executableAt) * 1000
+                const isVoting = votingEnds > now
+                const isPassed = Number(p.yesCount) > Math.floor(Number(p.activeCount) / 2)
+                const canExecute = !p.executed && !isVoting && isPassed && now >= executableAt
+                const waitingTimelock = !p.executed && !isVoting && isPassed && now < executableAt
+
+                let statusText = ''
+                let statusColor = ''
+                if (p.executed) {
+                  statusText = '✅ 已执行'
+                  statusColor = 'green'
+                } else if (isVoting) {
+                  statusText = '⏳ 投票中'
+                  statusColor = 'blue'
+                } else if (canExecute) {
+                  statusText = '✅ 可执行'
+                  statusColor = 'green'
+                } else if (waitingTimelock) {
+                  const waitHours = Math.ceil((executableAt - now) / (1000 * 60 * 60))
+                  statusText = `⏰ 等待 Timelock（${waitHours} 小时后可执行）`
+                  statusColor = 'orange'
+                } else if (!isPassed) {
+                  statusText = '❌ 未通过'
+                  statusColor = 'red'
+                } else {
+                  statusText = '⏳ 等待中'
+                  statusColor = 'gray'
+                }
+
                 return (
                   <div key={actualIndex} className="proposal-item">
                     <div className="row">
@@ -309,63 +307,70 @@ export function GovernanceSection({ account }: { account: string | null }) {
                         </span>
                       </div>
                     )}
-                <div className="row">
-                  <span className="label">目标</span>
-                  <span className="value mono">{shortAddress(p.target, 10, 8)}</span>
-                </div>
-                {isVoting && (
-                  <div className="row vote-buttons-row">
-                    <span className="label">投票</span>
-                    <span className="value">
-                      <button
-                        type="button"
-                        className="btn primary vote-btn vote-yes"
-                        onClick={() => handleVote(actualIndex, true)}
-                        disabled={loadingVote || !account}
-                        title="请在钱包中确认，完成投票"
-                      >
-                        {loadingVote && parseInt(voteProposalId, 10) === actualIndex ? '处理中…' : '支持'}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn secondary vote-btn vote-no"
-                        onClick={() => handleVote(actualIndex, false)}
-                        disabled={loadingVote || !account}
-                        title="请在钱包中确认，完成投票"
-                      >
-                        {loadingVote && parseInt(voteProposalId, 10) === actualIndex ? '处理中…' : '反对'}
-                      </button>
-                    </span>
+                    <div className="row">
+                      <span className="label">目标</span>
+                      <span className="value mono">{shortAddress(p.target, 10, 8)}</span>
+                    </div>
+                    {isVoting && (
+                      <div className="row vote-buttons-row">
+                        <span className="label">投票</span>
+                        <span className="value">
+                          <button
+                            type="button"
+                            className="btn primary vote-btn vote-yes"
+                            onClick={() => handleVote(actualIndex, true)}
+                            disabled={loadingVote || !account}
+                            title="请在钱包中确认，完成投票"
+                          >
+                            {loadingVote && parseInt(voteProposalId, 10) === actualIndex ? '处理中…' : '支持'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn secondary vote-btn vote-no"
+                            onClick={() => handleVote(actualIndex, false)}
+                            disabled={loadingVote || !account}
+                            title="请在钱包中确认，完成投票"
+                          >
+                            {loadingVote && parseInt(voteProposalId, 10) === actualIndex ? '处理中…' : '反对'}
+                          </button>
+                        </span>
+                      </div>
+                    )}
+                    {waitingTimelock && (
+                      <div className="row">
+                        <span className="label">可执行时间</span>
+                        <span className="value">{new Date(executableAt).toLocaleString('zh-CN')}</span>
+                      </div>
+                    )}
+                    {canExecute && (
+                      <div className="row" style={{ marginTop: '8px' }}>
+                        <button
+                          className="btn primary"
+                          onClick={() => {
+                            setExecProposalId(String(actualIndex))
+                            handleExecute()
+                          }}
+                          disabled={loadingExec}
+                          style={{ fontSize: '0.9em', padding: '4px 12px' }}
+                        >
+                          {loadingExec && parseInt(execProposalId, 10) === actualIndex ? '执行中...' : '立即执行'}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-                {waitingTimelock && (
-                  <div className="row">
-                    <span className="label">可执行时间</span>
-                    <span className="value">{new Date(executableAt).toLocaleString('zh-CN')}</span>
-                  </div>
-                )}
-                {canExecute && (
-                  <div className="row" style={{ marginTop: '8px' }}>
-                    <button
-                      className="btn primary"
-                      onClick={() => {
-                        setExecProposalId(String(actualIndex))
-                        handleExecute()
-                      }}
-                      disabled={loadingExec}
-                      style={{ fontSize: '0.9em', padding: '4px 12px' }}
-                    >
-                      {loadingExec && parseInt(execProposalId, 10) === actualIndex ? '执行中...' : '立即执行'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )
+                )
               })}
-            </div>
-          )}
+          </div>
           {proposals.length > proposalsPerPage && (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', marginTop: '1rem' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                gap: '0.5rem',
+                marginTop: '1rem',
+              }}
+            >
               <button
                 className="btn secondary"
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
