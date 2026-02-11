@@ -1,0 +1,30 @@
+# 推送到 main 后自动将 P2P 节点部署到 Fly.io
+# 前置：在 Fly 上已 fly launch 过该应用，并在仓库 Settings → Secrets 中配置：
+#   FLY_API_TOKEN - Fly.io 的 API Token（在 https://fly.io/user/personal_access_tokens 创建）
+#   FLY_APP_NAME  - 可选，Fly 应用名（如 p2p-node），不填则用 fly.toml 里的 app
+name: Deploy node to Fly.io
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'node/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        working-directory: node
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl deploy --remote-only
+        # 若未设 FLY_APP_NAME，fly.toml 中的 app 会生效；若设了可加: --app ${{ secrets.FLY_APP_NAME }}

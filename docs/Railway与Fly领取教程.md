@@ -27,7 +27,7 @@
 ### 4. 下一步
 
 - 账号有了之后，按 [部署-Railway与Fly.md#二节点railway-部署](./部署-Railway与Fly.md#二节点railway-部署)：
-  - New Project → Deploy from GitHub repo → 选仓库 → **Root Directory 填 `node`** → Variables 里加 `REWARD_WALLET` → Settings 里开 Public Networking 暴露 **8080**。
+  - New Project → Deploy from GitHub repo → 选仓库 → **Root Directory 必须填 `node`**（否则会报「Railpack 无法确定如何构建」）→ Variables 里加 `REWARD_WALLET` → Settings 里开 Public Networking 暴露 **8080**。
 
 ---
 

@@ -49,7 +49,7 @@
 - **📘 完整指南**：[P2P节点整合交易撮合指南](./docs/P2P节点整合交易撮合指南.md)（步步详解）
 - **🏗️ 概念与架构**：[概念设计文档](./docs/概念设计文档.md) · [技术架构说明](./docs/技术架构说明.md)
 - **🔌 API 接口**：[API-接口说明](./docs/API-接口说明.md)
-- **🚢 部署指南**：[部署与使用说明](./docs/部署与使用说明.md) · [主网部署指南](./docs/主网部署指南.md) · [主网试运行指南](./docs/主网试运行指南.md)
+- **🚢 部署指南**：[部署与使用说明](./docs/部署与使用说明.md) · [主网部署指南](./docs/主网部署指南.md) · [主网试运行指南](./docs/主网试运行指南.md) · [部署 Railway 与 Fly](./docs/部署-Railway与Fly.md)（**推送到 main 后交易所网站自动更新**）
 - **📦 模块文档**：[contracts/README.md](./contracts/README.md) · [frontend/README.md](./frontend/README.md) · [node/README.md](./node/README.md)
 
 ---
@@ -74,6 +74,10 @@ chmod +x scripts/start-dev.sh
 启动后访问：http://localhost:5173
 
 详细步骤见 [快速开始](docs/快速开始.md)。
+
+### 线上发布：推送到仓库即更新网站
+
+代码推送到 **`main`** 后，GitHub Actions 会自动构建并发布到 **GitHub Pages**，**交易所网站会更新为最新版本**，无需手动打包。详见 [部署-Railway与Fly](./docs/部署-Railway与Fly.md)（含 Railway/Fly 节点部署与「日常更新流程」）。
 
 ### 生产环境：Relay 列表 + wss
 
