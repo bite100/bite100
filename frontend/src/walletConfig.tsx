@@ -11,7 +11,8 @@ import { fallback, http } from 'viem'
 import { arbitrum, base, bsc, mainnet, optimism, polygon, sepolia } from 'wagmi/chains'
 import { injected, walletConnect } from '@wagmi/connectors'
 
-function syncMobileProvider(): void {
+/** 将 Trust/Phantom 等同步到 window.ethereum，供 EIP-1193 检测；连接前可再调一次应对延迟注入 */
+export function syncMobileProvider(): void {
   if (typeof window === 'undefined') return
   const w = window as unknown as { ethereum?: unknown; trustwallet?: unknown; phantom?: { ethereum?: unknown } }
   if (w.ethereum) return
@@ -42,8 +43,8 @@ function transport(chainId: number) {
 
 const wcProjectId = import.meta.env.VITE_WC_PROJECT_ID
 
-// 移动端优先 WalletConnect（业内做法）；Trust 等内置浏览器由 index.html 将 trustwallet 同步到 ethereum
-const connectors = [
+// 移动端优先 WalletConnect；Trust 等内置浏览器由 index.html 同步到 ethereum
+export const connectors = [
   ...(wcProjectId
     ? [
         walletConnect({

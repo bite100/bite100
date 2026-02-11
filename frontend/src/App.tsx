@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
 import { Contract } from 'ethers'
 import { useConnection, useDisconnect } from 'wagmi'
-import { ConnectButton } from '@rainbow-me/rainbowkit'
+import { StandardConnect } from './components/StandardConnect'
 import { CHAIN_ID, VAULT_ABI, ERC20_ABI, AMM_ABI, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
@@ -447,8 +447,8 @@ function App() {
 
       {!account ? (
         <>
-          <div className="connect-buttons" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
-            <ConnectButton />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
+            <StandardConnect />
             <MobileConnectHint />
           </div>
           <AddNetworkButton chainId={currentChainId ?? undefined} className="add-network-below-connect" />
