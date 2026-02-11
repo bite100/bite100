@@ -3,63 +3,51 @@
  * 与 orderSigning.ts 及节点 internal/match/signature.go 结构一致，防止订单伪造
  */
 import { ethers } from 'ethers'
-import type { OrderData } from './orderSigning'
+import {
+  EIP712_DOMAIN,
+  ORDER_TYPES,
+  CANCEL_TYPES,
+  ZERO_ADDRESS,
+  type OrderData,
+} from './orderSigningTypes'
 
-const DOMAIN = {
-  name: '比特100',
-  version: '1',
-  chainId: 11155111,
-  verifyingContract: '0x0000000000000000000000000000000000000000' as const,
-}
+export type { OrderData } from './orderSigningTypes'
 
-const ORDER_TYPES = {
-  Order: [
-    { name: 'orderId', type: 'string' },
-    { name: 'userAddress', type: 'address' },
-    { name: 'tokenIn', type: 'address' },
-    { name: 'tokenOut', type: 'address' },
-    { name: 'amountIn', type: 'uint256' },
-    { name: 'amountOut', type: 'uint256' },
-    { name: 'price', type: 'uint256' },
-    { name: 'timestamp', type: 'uint256' },
-    { name: 'expiresAt', type: 'uint256' },
-  ],
-}
-
-const CANCEL_TYPES = {
-  CancelOrder: [
-    { name: 'orderId', type: 'string' },
-    { name: 'userAddress', type: 'address' },
-    { name: 'timestamp', type: 'uint256' },
-  ],
+function toMessage(orderData: OrderData) {
+  return {
+    orderId: orderData.orderId,
+    userAddress: orderData.userAddress,
+    tokenIn: orderData.tokenIn || ZERO_ADDRESS,
+    tokenOut: orderData.tokenOut || ZERO_ADDRESS,
+    amountIn: orderData.amountIn,
+    amountOut: orderData.amountOut,
+    price: orderData.price,
+    timestamp: orderData.timestamp,
+    expiresAt: orderData.expiresAt,
+  }
 }
 
 /**
  * 验证订单签名（与 orderSigning 的 OrderData 一致）
- * @param orderData 签名时的订单数据（含 userAddress, tokenIn, tokenOut, amountIn, amountOut, price, timestamp, expiresAt）
+ * @param orderData 签名时的订单数据
  * @param signature 0x 前缀的签名
+ * @param options.checkExpiry 是否拒绝已过期订单（默认 true，Replay 防护）
  * @returns 验证通过返回 true
  */
 export async function verifyOrderSignatureSignedData(
   orderData: OrderData,
-  signature: string
+  signature: string,
+  options?: { checkExpiry?: boolean }
 ): Promise<boolean> {
   try {
     if (!signature || !orderData.userAddress) return false
+    if (options?.checkExpiry !== false && orderData.expiresAt > 0) {
+      if (orderData.expiresAt < Math.floor(Date.now() / 1000)) return false
+    }
     const recovered = await ethers.verifyTypedData(
-      DOMAIN,
+      EIP712_DOMAIN,
       ORDER_TYPES,
-      {
-        orderId: orderData.orderId,
-        userAddress: orderData.userAddress,
-        tokenIn: orderData.tokenIn || '0x0000000000000000000000000000000000000000',
-        tokenOut: orderData.tokenOut || '0x0000000000000000000000000000000000000000',
-        amountIn: orderData.amountIn,
-        amountOut: orderData.amountOut,
-        price: orderData.price,
-        timestamp: orderData.timestamp,
-        expiresAt: orderData.expiresAt,
-      },
+      toMessage(orderData),
       signature
     )
     return recovered.toLowerCase() === orderData.userAddress.toLowerCase()
@@ -80,7 +68,7 @@ export async function verifyCancelSignature(
   try {
     if (!signature || !userAddress) return false
     const recovered = await ethers.verifyTypedData(
-      DOMAIN,
+      EIP712_DOMAIN,
       CANCEL_TYPES,
       { orderId, userAddress, timestamp },
       signature

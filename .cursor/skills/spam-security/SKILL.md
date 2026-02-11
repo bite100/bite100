@@ -26,7 +26,7 @@ description: 安全与防滥用：订单签名验证、Replay/过期防护、Rel
 
 - docs/信誉机制说明.md、信誉分配示例.md
 - docs/节点入网说明.md
-- docs/功能增加与改进总结.md §三 可改进的痛点
+- docs/优化与改进总览.md §可改进的痛点
 
 ## 优化注意
 

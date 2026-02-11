@@ -46,7 +46,7 @@ description: Guides work on the 比特100 (Bit 100) codebase: doc structure, con
 
 ## 写代码时的原则
 
-- **结合整个项目来考虑**：写代码时要结合整个项目（前端、节点 Go、合约、脚本、文档）一起考虑，避免只改一处导致前后端/节点/文档不一致。例如：节点 API 与前端 nodeClient、订单签名与 orderSigning/orderVerification、配置与 config.example/relay 配置、新增功能与 功能增加与改进总结/设计文档 的同步。
+- **结合整个项目来考虑**：写代码时要结合整个项目（前端、节点 Go、合约、脚本、文档）一起考虑，避免只改一处导致前后端/节点/文档不一致。例如：节点 API 与前端 nodeClient、订单签名与 orderSigning/orderVerification、配置与 config.example/relay 配置、新增功能与 优化与改进总览/设计文档 的同步。
 - **用户功能足够简单**：不懂合约、不懂技术的用户打开交易所，应能直接投票、交易、提案。面向用户的功能要：用大白话、最少步骤、最少术语；隐藏合约地址、calldata、maker/taker 等技术概念；投票用「支持/反对」大按钮；提案用模板式引导；交易用「选币→填数量→点买卖」流程。参见 [优化与改进清单 §〇 新手友好原则](docs/优化与改进清单.md#〇新手友好原则贯穿所有功能)。
 
 ## 术语一致
@@ -57,7 +57,7 @@ description: Guides work on the 比特100 (Bit 100) codebase: doc structure, con
 
 ## 功能模块 Skill 索引（防止优化跑偏）
 
-优化或修改某功能时，先查阅对应 skill，确保不破坏不可变约束：
+优化或修改某功能时，**先查阅对应 skill**，确保不破坏不可变约束。
 
 | 功能 | Skill | 路径 |
 |------|-------|------|
@@ -76,3 +76,25 @@ description: Guides work on the 比特100 (Bit 100) codebase: doc structure, con
 | 贡献证明 | contribution-proof | .cursor/skills/contribution-proof/ |
 | 数据保留 | data-retention | .cursor/skills/data-retention/ |
 | 安全与防滥用 | spam-security | .cursor/skills/spam-security/ |
+
+## 按功能优化：代码与文档入口
+
+全项目按功能优化时，按上表找到对应 Skill 后，再查下表定位主要代码与文档（每项详细约束见各 Skill 内「代码位置」「相关文档」）。
+
+| 功能 | 主要代码位置 | 相关文档（部分） |
+|------|--------------|------------------|
+| 订单签名 | frontend/services/orderSigning.ts、orderVerification.ts；node/internal/match/signature.go | API-接口说明、贡献奖励接口、公开API文档 |
+| 链上结算 | contracts/src/Settlement.sol；node/internal/settlement/；frontend 结算调用 | API-接口说明、技术架构说明 |
+| 资金托管 | contracts/src/Vault.sol；frontend 存提流程与 ABI | API-接口说明 |
+| AMM/Swap | contracts/src/AMMPool*.sol；frontend Swap/流动性组件 | API-接口说明 |
+| 手续费与治理 | contracts/src/FeeDistributor.sol、Governance*.sol；frontend GovernanceSection、governanceUtils | API-接口说明、治理部署与提案执行指南 |
+| 贡献分 | contracts/src/ContributorReward.sol；node/internal/reward/、metrics/；frontend UnifiedRewardClaim、contributorRewardUtils | 贡献奖励接口、贡献分领取机制实现指南 |
+| 订单簿与撮合 | node/internal/match/、storage/、sync/；frontend OrderBookSection、OrderForm、nodeClient、wsClient | 技术架构说明、P2P节点整合交易撮合指南 |
+| P2P 节点与中继 | node/internal/p2p/、relay/；config.example.yaml | 节点部署、Relay部署与Nginx、节点发现与Bootstrap |
+| 前端主流程 | frontend/src/App.tsx、walletConfig、config/chains、ChainSwitcher、ErrorDisplay | 部署与使用说明、前端验证-订单簿 |
+| 跨链桥接 | contracts/src/CrossChainBridge.sol；frontend CrossChainBridge | 跨链桥接完整指南 |
+| PWA 与移动端 | frontend/public/manifest.webmanifest、sw.js；frontend ServiceWorkerUpdate、MobileConnectHint | 手机端开发指南、手机端架构与数据保存策略 |
+| 节点 API | node/internal/api/；frontend nodeClient.ts、wsClient.ts | API-接口说明、公开API文档、节点部署 |
+| 贡献证明 | node/internal/metrics/、reward/；contracts ContributorReward；证明 payload/签名 | 贡献奖励接口、Phase2-设计文档 |
+| 数据保留 | node/internal/storage/（retention、清理逻辑） | Phase2-设计文档、技术架构说明、概念设计文档 |
+| 安全与防滥用 | 订单验签、过期拒绝、relayer 限流、node relay 信誉 | 技术架构说明、优化与改进清单 |

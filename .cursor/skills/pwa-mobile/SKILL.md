@@ -24,7 +24,7 @@ description: PWA、manifest、Service Worker、移动端适配、离线支持。
 ## 相关文档
 
 - docs/手机端开发指南.md
-- docs/功能增加与改进总结.md §4.1 PWA 完善
+- docs/优化与改进总览.md §PWA 完善
 
 ## 优化注意
 
