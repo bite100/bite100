@@ -2,11 +2,25 @@
  * Wagmi 配置：多链 + 注入钱包（MetaMask 等）
  * 与 frontend/src/config/chains.ts 对齐
  * 清单 3.1：RPC 轮询/fallback，主 RPC 失败时自动切换
+ *
+ * 移动端：Trust 注入在 window.trustwallet，Phantom 在 window.phantom.ethereum；
+ * index.html 会尽早同步到 window.ethereum，此处再同步一次应对缓存旧 HTML。
  */
 import { createConfig } from 'wagmi'
 import { fallback, http } from 'viem'
 import { arbitrum, base, bsc, mainnet, optimism, polygon, sepolia } from 'wagmi/chains'
 import { injected, walletConnect } from '@wagmi/connectors'
+
+function syncMobileProvider(): void {
+  if (typeof window === 'undefined') return
+  const w = window as unknown as { ethereum?: unknown; trustwallet?: unknown; phantom?: { ethereum?: unknown } }
+  if (w.ethereum) return
+  try {
+    if (w.trustwallet) w.ethereum = w.trustwallet
+    else if (w.phantom?.ethereum) w.ethereum = w.phantom.ethereum
+  } catch (_) {}
+}
+syncMobileProvider()
 
 // 每链主 RPC + 备用 RPC（fallback 时自动切换）
 const RPC_URLS: Record<number, string[]> = {

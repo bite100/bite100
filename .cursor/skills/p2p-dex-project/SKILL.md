@@ -40,6 +40,7 @@ description: Guides work on the 比特100 (Bit 100) codebase: doc structure, con
 
 ## 文档与提交约定
 
+- **不要主动写文档**：不主动新建文档（如 README、xxx指南.md、xxx说明.md）或做大段文档增改。**如需写/改文档，须经用户明确同意后再写**。
 - 设计类文档放在 docs/，文件名可用中文（如 概念设计文档.md、规划与路线图.md）。
 - 更新阶段状态或优先级时，改 docs/规划与路线图.md；若涉及 Phase 3/4 细节，改或引用 docs/Phase3-设计文档.md。
 - 合约/接口/贡献证明有变更时，同步更新 API-接口说明.md、贡献奖励接口.md 或 技术架构说明.md，避免文档与实现脱节。
