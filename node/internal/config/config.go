@@ -21,8 +21,9 @@ type Config struct {
 
 // APIConfig HTTP API（Phase 3.5 前端：订单簿、下单/撤单、成交）
 type APIConfig struct {
-	Listen                   string `yaml:"listen"`                       // 如 ":8080"，空则不开 API
-	RateLimitOrdersPerMinute uint64 `yaml:"rate_limit_orders_per_minute"` // 每 IP 每分钟下单上限，0=不限制（Spam 防护）
+	Listen                   string   `yaml:"listen"`                       // 如 ":8080"，空则不开 API
+	RateLimitOrdersPerMinute uint64   `yaml:"rate_limit_orders_per_minute"` // 每 IP 每分钟下单上限，0=不限制（Spam 防护）
+	BlockedTraders           []string `yaml:"blocked_traders"`              // 黑名单：拒绝这些地址的下单/撤单（Spam 防护）
 }
 
 // RelayConfig 中继节点限流与抗 Sybil（Phase 3.3）
@@ -56,11 +57,12 @@ type StorageConfig struct {
 
 // ChainConfig 链 RPC（可选，用于拉取历史成交）
 type ChainConfig struct {
-	RPCURL   string `yaml:"rpc_url"`
-	ChainID  int64  `yaml:"chain_id"`
-	AMMPool  string `yaml:"amm_pool"`  // AMMPool 合约地址
-	Token0   string `yaml:"token0"`    // token0 地址（用于 pair 标识）
-	Token1   string `yaml:"token1"`    // token1 地址
+	RPCURL          string   `yaml:"rpc_url"`
+	ChainID         int64    `yaml:"chain_id"`
+	AMMPool         string   `yaml:"amm_pool"`          // AMMPool 合约地址
+	Token0          string   `yaml:"token0"`            // token0 地址（用于 pair 标识）
+	Token1          string   `yaml:"token1"`            // token1 地址
+	RelayerEndpoints []string `yaml:"relayer_endpoints"` // §12.3 多 Relayer：API 地址列表，按轮询选择
 }
 
 type NodeConfig struct {
@@ -71,8 +73,10 @@ type NodeConfig struct {
 }
 
 type NetworkConfig struct {
-	Bootstrap []string `yaml:"bootstrap"` // Bootstrap 节点 multiaddr
-	Topics    []string `yaml:"topics"`    // 订阅的 GossipSub topic
+	Bootstrap    []string `yaml:"bootstrap"`              // Bootstrap 节点 multiaddr
+	Topics       []string `yaml:"topics"`                 // 订阅的 GossipSub topic
+	UseTor       bool     `yaml:"use_tor"`                // 12.1：是否经 Tor SOCKS 代理出站，隐藏节点 IP
+	TorSocksAddr string   `yaml:"tor_socks_addr"`         // Tor SOCKS5 代理地址，默认 127.0.0.1:9050
 }
 
 // Load 从 path 加载 YAML；若文件不存在返回默认配置
@@ -107,6 +111,9 @@ func Load(path string) (*Config, error) {
 	}
 	if w := os.Getenv("REWARD_WALLET"); w != "" {
 		c.Node.RewardWallet = strings.TrimSpace(w)
+	}
+	if c.Network.UseTor && c.Network.TorSocksAddr == "" {
+		c.Network.TorSocksAddr = "127.0.0.1:9050"
 	}
 	return &c, nil
 }

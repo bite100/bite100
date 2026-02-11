@@ -1,0 +1,4 @@
+{
+  "summary": "本回合解决 forge build/test 报错“Identifier already declared: IERC20”。原因是项目自带的 src/interfaces/IERC20.sol 与 OpenZeppelin 的 IERC20 重名、且 CrossChainBridge 引入了 OZ 的 SafeERC20，从而在同一编译单元出现两个 IERC20 定义。已将核心合约（Vault、Settlement、AMMPool、AMMPoolWithLiquidityReward、FeeDistributor、MerkleDistributor、ContributorReward、NodeRewards）全部改为直接 import '@openzeppelin/contracts/token/ERC20/IERC20.sol'，同时重写 src/mock/MockERC20.sol 为继承 OpenZeppelin ERC20，避免自定义 IERC20。这样只保留 OZ 的 IERC20 定义，消除重复标识符。",
+  "current_status": "Solidity 源码已更新为统一使用 OpenZeppelin 的 IERC20/ ERC20，mock 代币也基于 OZ ERC20 实现。用户需要在 /d/P2P/contracts 目录重新执行 forge build 和 forge test 验证编译及测试是否全部通过，如仍有报错需查看新的输出。"
+}

@@ -1,0 +1,35 @@
+.sw-update-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  background: #1e40af;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  font-size: 0.875rem;
+}
+
+.sw-update-text {
+  flex: 1;
+  text-align: center;
+}
+
+.sw-update-btn {
+  padding: 0.375rem 0.75rem;
+  background: #3b82f6;
+  border: 1px solid #60a5fa;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: opacity 0.2s;
+}
+
+.sw-update-btn:hover {
+  opacity: 0.9;
+}

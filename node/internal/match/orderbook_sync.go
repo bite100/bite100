@@ -5,11 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/P2P-P2P/p2p/node/internal/storage"
 )
+
+// TopicSyncOrderbook compact level 快照广播主题（与 sync.TopicSyncOrderbook 一致）
+const TopicSyncOrderbook = "/p2p-exchange/sync/orderbook"
+
+// TopicOrderbookRequest 完整订单簿请求主题
+const TopicOrderbookRequest = "/p2p-exchange/consensus/orderbook-request"
+
+// OrderbookRequest 完整订单簿请求消息
+type OrderbookRequest struct {
+	Pair        string `json:"pair"`
+	RequesterID string `json:"requesterId"`
+}
 
 // OrderbookSync 订单簿同步消息（方案 C）
 type OrderbookSync struct {
@@ -78,48 +92,51 @@ func (m *OrderbookSyncManager) syncAllPairs() {
 	}
 }
 
-// syncPair 同步单个交易对
+// syncPair 同步单个交易对（§12.2 内存订单簿+增量：例行只发元数据，compact level 快照单独广播）
 func (m *OrderbookSyncManager) syncPair(pair string) {
 	if m.engine == nil {
 		return
 	}
-	
+
 	// 获取订单簿
 	bids, asks := m.engine.GetOrderbook(pair)
-	
+
 	// 计算快照哈希
 	snapshotHash := m.calculateSnapshotHash(pair, bids, asks)
-	
+
 	// 更新共识引擎的订单簿哈希
 	m.consensusEngine.UpdateOrderbookHash(pair, bids, asks)
-	
-	// 如果是 Leader，广播同步消息
+
 	if m.consensusEngine.isLeader() {
+		// 例行同步：仅发元数据（hash/metadata），减少序列化与网络开销
 		syncMsg := &OrderbookSync{
 			Pair:         pair,
 			SnapshotHash: snapshotHash,
-			MerkleRoot:   snapshotHash, // 简化：使用快照哈希作为 Merkle 根
-			Bids:         bids,
-			Asks:         asks,
+			MerkleRoot:   snapshotHash,
+			Bids:         nil, // 不随例行同步发送完整订单
+			Asks:         nil,
 			Timestamp:    time.Now().Unix(),
 			LeaderID:     m.localPeerID,
 		}
-		
 		data, err := json.Marshal(syncMsg)
 		if err != nil {
 			log.Printf("[sync] 序列化同步消息失败: %v", err)
-			return
+		} else {
+			topic := "/p2p-exchange/consensus/orderbook-sync"
+			if err := m.publish(topic, data); err != nil {
+				log.Printf("[sync] 广播同步消息失败: %v", err)
+			}
 		}
-		
-		topic := "/p2p-exchange/consensus/orderbook-sync"
-		if err := m.publish(topic, data); err != nil {
-			log.Printf("[sync] 广播同步消息失败: %v", err)
-			return
+
+		// §12.2 compact level 快照：广播到 sync/orderbook，供显示/API 消费
+		if snapshot := OrdersToLevelSnapshot(pair, bids, asks); snapshot != nil {
+			snapData, err := json.Marshal(snapshot)
+			if err == nil {
+				_ = m.publish(TopicSyncOrderbook, snapData)
+			}
 		}
-		
-		log.Printf("[sync] 广播订单簿同步 pair=%s hash=%s", pair, snapshotHash)
 	}
-	
+
 	m.mu.Lock()
 	m.lastSyncTime[pair] = time.Now().Unix()
 	m.mu.Unlock()
@@ -164,27 +181,126 @@ func (m *OrderbookSyncManager) HandleSync(syncMsg *OrderbookSync) error {
 	return nil
 }
 
-// applySync 应用同步数据
+// applySync 应用同步数据（清单 1.2 订单簿状态不一致：收到 Leader 快照后替换本地订单簿）
 func (m *OrderbookSyncManager) applySync(syncMsg *OrderbookSync) {
 	if m.engine == nil {
 		return
 	}
-	
-	// TODO: 实现订单簿合并逻辑
-	// 这里简化处理：清空本地订单簿，使用同步的数据
 	log.Printf("[sync] 应用同步数据 pair=%s bids=%d asks=%d", syncMsg.Pair, len(syncMsg.Bids), len(syncMsg.Asks))
-	
-	// 注意：实际应该合并而不是替换，这里简化处理
+	m.engine.ReplaceOrderbook(syncMsg.Pair, syncMsg.Bids, syncMsg.Asks)
 	m.mu.Lock()
 	m.syncedPairs[syncMsg.Pair] = true
 	m.lastSyncTime[syncMsg.Pair] = time.Now().Unix()
 	m.mu.Unlock()
 }
 
-// requestFullOrderbook 请求完整订单簿
+// requestFullOrderbook 请求完整订单簿（发布到 orderbook-request，Leader 收到后回传完整 sync）
 func (m *OrderbookSyncManager) requestFullOrderbook(pair string) {
-	// TODO: 实现请求完整订单簿的逻辑
-	log.Printf("[sync] 请求完整订单簿 pair=%s", pair)
+	req := &OrderbookRequest{Pair: pair, RequesterID: m.localPeerID}
+	data, err := json.Marshal(req)
+	if err != nil {
+		log.Printf("[sync] 序列化 orderbook 请求失败: %v", err)
+		return
+	}
+	if err := m.publish(TopicOrderbookRequest, data); err != nil {
+		log.Printf("[sync] 发布 orderbook 请求失败: %v", err)
+		return
+	}
+	log.Printf("[sync] 已请求完整订单簿 pair=%s", pair)
+}
+
+// HandleOrderbookRequest 处理收到的 orderbook 请求（由主节点订阅 orderbook-request 后调用）
+func (m *OrderbookSyncManager) HandleOrderbookRequest(req *OrderbookRequest) {
+	if req == nil || req.Pair == "" {
+		return
+	}
+	if !m.consensusEngine.isLeader() {
+		return
+	}
+	bids, asks := m.engine.GetOrderbook(req.Pair)
+	snapshotHash := m.calculateSnapshotHash(req.Pair, bids, asks)
+	syncMsg := &OrderbookSync{
+		Pair:         req.Pair,
+		SnapshotHash: snapshotHash,
+		MerkleRoot:   snapshotHash,
+		Bids:         bids,
+		Asks:         asks,
+		Timestamp:    time.Now().Unix(),
+		LeaderID:     m.localPeerID,
+	}
+	data, err := json.Marshal(syncMsg)
+	if err != nil {
+		return
+	}
+	topic := "/p2p-exchange/consensus/orderbook-sync"
+	if err := m.publish(topic, data); err != nil {
+		log.Printf("[sync] 回传完整订单簿失败: %v", err)
+		return
+	}
+	log.Printf("[sync] 已回传完整订单簿 pair=%s bids=%d asks=%d", req.Pair, len(bids), len(asks))
+}
+
+// OrdersToLevelSnapshot 将订单列表聚合为 compact level 快照 [price, totalQty]（§12.2）
+func OrdersToLevelSnapshot(pair string, bids, asks []*storage.Order) *storage.OrderbookSnapshot {
+	if pair == "" {
+		return nil
+	}
+	now := time.Now().Unix()
+	snap := &storage.OrderbookSnapshot{Pair: pair, SnapshotAt: now}
+
+	agg := func(orders []*storage.Order) []storage.OrderbookLevel {
+		type level struct {
+			price string
+			qty   *big.Float
+		}
+		m := make(map[string]*big.Float)
+		for _, o := range orders {
+			if o == nil || o.Price == "" {
+				continue
+			}
+			amt := bigNew(o.Amount)
+			filled := bigNew(o.Filled)
+			left := new(big.Float).Sub(amt, filled)
+			if left.Cmp(big.NewFloat(0)) <= 0 {
+				continue
+			}
+			if m[o.Price] == nil {
+				m[o.Price] = new(big.Float)
+			}
+			m[o.Price].Add(m[o.Price], left)
+		}
+		var levels []level
+		for p, q := range m {
+			levels = append(levels, level{price: p, qty: q})
+		}
+		sort.Slice(levels, func(i, j int) bool {
+			pi, pj := bigNew(levels[i].price), bigNew(levels[j].price)
+			return pi.Cmp(pj) < 0
+		})
+		out := make([]storage.OrderbookLevel, 0, len(levels))
+		for _, l := range levels {
+			q := l.qty.Text('f', 18)
+			out = append(out, storage.OrderbookLevel{l.price, q})
+		}
+		return out
+	}
+
+	// bids: 价格降序
+	bidLevels := agg(bids)
+	sort.Slice(bidLevels, func(i, j int) bool {
+		pi, pj := bigNew(bidLevels[i][0]), bigNew(bidLevels[j][0])
+		return pi.Cmp(pj) > 0
+	})
+	snap.Bids = bidLevels
+
+	// asks: 价格升序
+	askLevels := agg(asks)
+	sort.Slice(askLevels, func(i, j int) bool {
+		pi, pj := bigNew(askLevels[i][0]), bigNew(askLevels[j][0])
+		return pi.Cmp(pj) < 0
+	})
+	snap.Asks = askLevels
+	return snap
 }
 
 // calculateSnapshotHash 计算订单簿快照哈希

@@ -15,6 +15,7 @@ contract GovernanceTest is Test {
     Settlement settlement;
     ContributorReward reward;
     AMMPool pool;
+    FeeDistributor fd;
 
     address owner;
     address alice;
@@ -27,7 +28,7 @@ contract GovernanceTest is Test {
 
         gov = new Governance();
         Vault vault = new Vault();
-        FeeDistributor fd = new FeeDistributor();
+        fd = new FeeDistributor();
         settlement = new Settlement(address(vault), address(fd));
         reward = new ContributorReward();
         MockERC20 t0 = new MockERC20("T0", "T0", 1e24);
@@ -37,6 +38,7 @@ contract GovernanceTest is Test {
         settlement.setGovernance(address(gov));
         pool.setGovernance(address(gov));
         reward.setGovernance(address(gov));
+        fd.setGovernance(address(gov));
     }
 
     function test_CreateAndExecuteProposal() public {
@@ -99,6 +101,34 @@ contract GovernanceTest is Test {
         vm.warp(block.timestamp + 8 days);
         gov.execute(pid);
         assertEq(settlement.feeBps(), 10);
+    }
+
+    /// @notice 5.1 Governance 提案：通过提案设置 FeeDistributor 手续费分成（setRecipients）
+    function test_GovernanceProposal_FeeDistributorSetRecipients() public {
+        address[] memory accounts = new address[](2);
+        accounts[0] = alice;
+        accounts[1] = bob;
+        uint16[] memory shareBps = new uint16[](2);
+        shareBps[0] = 6000; // 60%
+        shareBps[1] = 4000; // 40%
+
+        bytes memory callData = abi.encodeWithSelector(FeeDistributor.setRecipients.selector, accounts, shareBps);
+        bytes32 root = _singleAddressRoot(alice);
+
+        vm.warp(8 days);
+        uint256 pid = gov.createProposal(address(fd), callData, root, 1);
+
+        vm.prank(alice);
+        gov.vote(pid, true, _singleAddressProof(alice));
+
+        vm.warp(block.timestamp + 8 days);
+        gov.execute(pid);
+
+        assertEq(fd.recipients(0).account, alice);
+        assertEq(fd.recipients(0).shareBps, 6000);
+        assertEq(fd.recipients(1).account, bob);
+        assertEq(fd.recipients(1).shareBps, 4000);
+        assertEq(fd.totalShareBps(), 10000);
     }
 
     function _singleAddressRoot(address a) internal pure returns (bytes32) {

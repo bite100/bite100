@@ -1,0 +1,4 @@
+{
+  "summary": "新增《Railway与Fly领取教程》文档（docs/Railway与Fly领取教程.md），分步说明 Railway 与 Fly.io 的注册与免费领取：官网链接、用 GitHub 登录、免绑卡说明、免费额度说明、Fly CLI 安装命令（Windows/macOS/Linux），以及「没有 GitHub 怎么办」；并在《部署-Railway与Fly》文首增加指向该领取教程的链接。",
+  "current_status": "用户可按《Railway与Fly领取教程》完成账号注册与免费领取，再按《部署-Railway与Fly》部署 P2P 节点；前端继续用 GitHub Pages。"
+}

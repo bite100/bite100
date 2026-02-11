@@ -1,0 +1,12 @@
+# Prometheus 配置 - 抓取 P2P 节点 /metrics
+# 配合 docker-compose.prod.yml --profile monitoring 使用
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'p2p-node'
+    static_configs:
+      - targets: ['p2p-node:8080']
+    metrics_path: '/metrics'

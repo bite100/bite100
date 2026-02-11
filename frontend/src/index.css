@@ -23,8 +23,7 @@ body {
   padding-right: max(1rem, env(safe-area-inset-right));
   padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
   padding-top: max(1rem, env(safe-area-inset-top));
-  max-width: 480px;
-  margin: 0 auto;
+  max-width: 100%;
 }
 @media (min-width: 480px) {
   #root {

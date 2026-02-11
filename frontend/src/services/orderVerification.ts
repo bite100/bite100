@@ -6,7 +6,7 @@ import { ethers } from 'ethers'
 import type { OrderData } from './orderSigning'
 
 const DOMAIN = {
-  name: 'P2P DEX',
+  name: '比特100',
   version: '1',
   chainId: 11155111,
   verifyingContract: '0x0000000000000000000000000000000000000000' as const,

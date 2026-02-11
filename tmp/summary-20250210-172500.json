@@ -1,0 +1,4 @@
+{
+  "summary": "实现 §12.2 确定性撮合与 Epoch：在 engine.go 中为 OrderBook 增加 FIFO/价格优先规则文档；新增 match/epoch.go（EpochID、EpochDurationSec、CurrentEpochID）供 relayer 按时间窗口分组成交；新增 MatchBatch(takers) 对多笔 taker 按 pair+CreatedAt+OrderID 确定性排序后依次撮合；补充 TestEpochID、TestMatchBatch 单元测试；清单标记完成。",
+  "current_status": "§12.2 高性能订单簿两项（内存订单簿+增量、确定性撮合与 Epoch）已实现。后续可做：§12.3 其他架构增强、§5.4 每周自动领取、清单其余待办项。"
+}

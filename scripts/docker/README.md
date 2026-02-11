@@ -77,9 +77,22 @@
 
 ---
 
-## 三、说明
+## 三、监控（Prometheus + Grafana）
+
+启用监控时使用 `--profile monitoring`：
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env --profile monitoring up -d
+```
+
+会启动 Prometheus（9090）和 Grafana（3000）。访问 http://localhost:3000 登录 Grafana（默认 admin/admin），预置的「P2P 节点监控」仪表板可查看撮合 TPS、延迟等指标。
+
+---
+
+## 四、说明
 
 - **领奖地址**：必须在 `.env` 中设置 `REWARD_WALLET`，否则节点会拒绝启动。
 - **数据持久化**：节点数据在 volume `node-data`，更新与重启不会丢失。
+- **Grafana 密码**：可通过 `.env` 设置 `GRAFANA_ADMIN_PASSWORD` 修改默认 admin 密码。
 - **日志**：`docker compose -f docker-compose.prod.yml logs -f p2p-node` 查看节点日志。
 - **仅更新不重启**：若只想拉代码并重建镜像、不立刻重启，可自行去掉脚本中的 `up -d --force-recreate`，仅保留 `build`。

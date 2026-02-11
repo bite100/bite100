@@ -1,0 +1,4 @@
+{
+  "summary": "按清单 1.1 从第一步继续写代码：1) 订单簿同步已在上一轮完成；2) 实现 GossipSub 延迟优化：在 node/internal/p2p/host.go 中 NewGossipSub 使用 pubsub.WithGossipSubParams，将 HeartbeatInterval 从 1s 降为 500ms、HeartbeatInitialDelay 50ms、FanoutTTL 30s。已通过 go build，清单已标记 GossipSub 延迟为已实现。",
+  "current_status": "清单 1.1 性能瓶颈三项：订单簿同步✅、GossipSub 延迟✅、Spam 防护（签名/限流已做，信誉机制/黑名单待做）。下一步可做 1.1 Spam 防护剩余项或 1.2 一致性问题。"
+}

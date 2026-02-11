@@ -50,13 +50,13 @@ contract Governance {
         owner = msg.sender;
     }
 
-    /// @notice 创建提案；任意 (target, callData) 均可，如手续费、上币、流通链等
-    function createProposal(
+    /// @notice 内部：创建提案的核心逻辑；供外部接口与扩展合约复用
+    function _createProposal(
         address target,
         bytes calldata callData,
         bytes32 merkleRoot,
         uint256 activeCount
-    ) external returns (uint256 proposalId) {
+    ) internal returns (uint256 proposalId) {
         require(target != address(0), "Governance: zero target");
         require(merkleRoot != bytes32(0), "Governance: zero root");
         require(activeCount > 0, "Governance: zero active");
@@ -87,17 +87,17 @@ contract Governance {
         emit ProposalCreated(proposalId, target, activeCount);
     }
 
-    /// @notice 创建多步骤提案；支持在一个提案中执行多个操作（如先设置 A，再设置 B）
+    /// @notice 内部：创建多步骤提案的核心逻辑；供外部接口与扩展合约复用
     /// @param targets 目标合约地址数组
     /// @param callDataArray 调用数据数组（与 targets 长度一致）
     /// @param merkleRoot 活跃集的默克尔根
     /// @param activeCount 活跃集地址数量
-    function createMultiStepProposal(
+    function _createMultiStepProposal(
         address[] calldata targets,
         bytes[] calldata callDataArray,
         bytes32 merkleRoot,
         uint256 activeCount
-    ) external returns (uint256 proposalId) {
+    ) internal returns (uint256 proposalId) {
         require(targets.length > 0, "Governance: empty targets");
         require(targets.length == callDataArray.length, "Governance: length mismatch");
         require(targets.length <= 10, "Governance: too many steps"); // 限制最多 10 步
@@ -143,12 +143,32 @@ contract Governance {
         emit MultiStepProposalCreated(proposalId, targets, activeCount);
     }
 
-    /// @notice 投票；voter 需提供默克尔证明以证明在活跃集内
-    function vote(
+    /// @notice 创建提案；任意 (target, callData) 均可，如手续费、上币、流通链等
+    function createProposal(
+        address target,
+        bytes calldata callData,
+        bytes32 merkleRoot,
+        uint256 activeCount
+    ) external returns (uint256 proposalId) {
+        return _createProposal(target, callData, merkleRoot, activeCount);
+    }
+
+    /// @notice 创建多步骤提案；支持在一个提案中执行多个操作（如先设置 A，再设置 B）
+    function createMultiStepProposal(
+        address[] calldata targets,
+        bytes[] calldata callDataArray,
+        bytes32 merkleRoot,
+        uint256 activeCount
+    ) external returns (uint256 proposalId) {
+        return _createMultiStepProposal(targets, callDataArray, merkleRoot, activeCount);
+    }
+
+    /// @notice 内部：投票核心逻辑，供外部接口与扩展合约复用
+    function _vote(
         uint256 proposalId,
         bool support,
         bytes32[] calldata proof
-    ) external {
+    ) internal {
         Proposal storage p = proposals[proposalId];
         require(block.timestamp < p.votingEndsAt, "Governance: voting ended");
         require(!hasVoted[proposalId][msg.sender], "Governance: already voted");
@@ -166,14 +186,23 @@ contract Governance {
         emit Voted(proposalId, msg.sender, support);
     }
 
+    /// @notice 投票；voter 需提供默克尔证明以证明在活跃集内
+    function vote(
+        uint256 proposalId,
+        bool support,
+        bytes32[] calldata proof
+    ) external virtual {
+        _vote(proposalId, support, proof);
+    }
+
     /// @notice 设置执行延迟（Timelock）；仅 owner 可调用
     function setTimelockDelay(uint256 _delay) external onlyOwner {
         require(_delay >= MIN_TIMELOCK_DELAY, "Governance: delay too short");
         timelockDelay = _delay;
     }
 
-    /// @notice 执行提案；通过条件：yesCount > activeCount / 2；需等待 Timelock 延迟
-    function execute(uint256 proposalId) external {
+    /// @notice 内部：执行提案核心逻辑，供外部接口与扩展合约复用
+    function _execute(uint256 proposalId) internal {
         Proposal storage p = proposals[proposalId];
         require(block.timestamp >= p.votingEndsAt, "Governance: voting not ended");
         require(block.timestamp >= p.executableAt, "Governance: timelock not passed");
@@ -202,6 +231,11 @@ contract Governance {
         }
 
         emit ProposalExecuted(proposalId);
+    }
+
+    /// @notice 执行提案；通过条件：yesCount > activeCount / 2；需等待 Timelock 延迟
+    function execute(uint256 proposalId) external virtual {
+        _execute(proposalId);
     }
 
     function getProposal(uint256 proposalId) external view returns (

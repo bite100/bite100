@@ -1,0 +1,4 @@
+{
+  "summary": "项目改名为「比特100」：更新了前端用户可见名称（index.html title、App.tsx h1、manifest.webmanifest、package.json productName、electron-builder.yml、sw.js）；更新了 EIP-712 订单签名 domain（orderSigning.ts、orderVerification.ts、node/internal/match/signature.go）；更新了 README、contracts/README、frontend/README、docs/README、快速开始、主网/Polygon 部署指南、启动脚本、docker-compose.prod.yml、.cursor/skills 项目协作指南等核心文档。",
+  "current_status": "项目品牌名称已全面更新为「比特100」。注意：EIP-712 domain 变更后，此前已签名的订单将无法验证，若有链上/链下待处理订单需重新签名。"
+}

@@ -79,3 +79,38 @@ func (r *Reputation) Prune(olderThan time.Duration) {
 		}
 	}
 }
+
+// ReputationExportRow §12.3 声誉/防 Sybil：单节点导出行，供 reputation-updater 使用
+type ReputationExportRow struct {
+	PeerID         string  `json:"peerId"`
+	Address        string  `json:"address"`         // 奖励钱包（需外部提供 peer→address 映射）
+	BytesRelayed   uint64  `json:"bytesRelayed"`
+	Violations     uint64  `json:"violations"`
+	ActiveDays     float64 `json:"activeDays"`
+	ReputationScore uint64 `json:"reputationScore"`
+}
+
+// ExportForReputationUpdater 导出为 reputation-updater 所需格式
+// peerToAddress：peer ID 字符串 → 奖励钱包地址；仅导出有地址映射的 peer
+func (r *Reputation) ExportForReputationUpdater(peerToAddress map[string]string, activeDuration time.Duration) []ReputationExportRow {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []ReputationExportRow
+	for id, s := range r.peer {
+		addr, ok := peerToAddress[id.String()]
+		if !ok || addr == "" {
+			continue
+		}
+		activeDays := activeDuration.Hours() / 24
+		score := ReputationScore(s, activeDuration)
+		out = append(out, ReputationExportRow{
+			PeerID:          id.String(),
+			Address:         addr,
+			BytesRelayed:    s.BytesRelayed,
+			Violations:      s.Violations,
+			ActiveDays:      activeDays,
+			ReputationScore: score,
+		})
+	}
+	return out
+}

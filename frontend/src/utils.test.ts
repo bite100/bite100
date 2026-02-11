@@ -84,6 +84,13 @@ describe('formatError', () => {
     expect(formatError({ message: 'User rejected' })).toBe('您已拒绝签名或切换网络')
     expect(formatError({ reason: 'denied' })).toBe('您已拒绝签名或切换网络')
   })
+  it('returns 未检测到钱包 for connector not found', () => {
+    expect(formatError({ message: 'Connector not found' })).toContain('未检测到钱包')
+    expect(formatError({ message: 'connector missing' })).toContain('未检测到钱包')
+  })
+  it('returns 连接超时 for timeout errors', () => {
+    expect(formatError({ message: 'Connection timeout' })).toContain('连接超时')
+  })
   it('returns 网络相关 for fetch/network errors', () => {
     expect(formatError({ message: 'fetch failed' })).toContain('网络异常')
     expect(formatError({ message: 'Failed to fetch' })).toContain('网络异常')

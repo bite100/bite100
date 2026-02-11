@@ -7,6 +7,7 @@ import { usePairMarketPrice } from '../hooks/useTokenPrice'
 import { TOKEN0_ADDRESS, TOKEN1_ADDRESS } from '../config'
 import { getProvider } from '../utils'
 import { FeeDisplay } from './FeeDisplay'
+import { ErrorDisplay } from './ErrorDisplay'
 import './OrderForm.css'
 
 interface OrderFormProps {
@@ -21,20 +22,21 @@ export function OrderForm({ pair, onSuccess }: OrderFormProps) {
   const [amount, setAmount] = useState('')
   const [loading, setLoading] = useState(false)
   const { basePrice, quotePrice, loading: priceLoading, error: priceError } = usePairMarketPrice(pair)
+  const [error, setError] = useState<unknown>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!price || !amount) {
-      alert('请输入价格和数量')
+      setError('请输入价格和数量')
       return
     }
     if (!isConnected) {
-      alert('P2P 节点未连接，请稍候')
+      setError('P2P 节点未连接，请稍候')
       return
     }
     const provider = getProvider()
     if (!provider) {
-      alert('请安装 MetaMask 并连接')
+      setError('请安装 MetaMask 并连接')
       return
     }
 
@@ -83,13 +85,13 @@ export function OrderForm({ pair, onSuccess }: OrderFormProps) {
         signature,
       })
 
-      alert('订单已提交到 P2P 网络')
+      setError(null)
       setPrice('')
       setAmount('')
       onSuccess?.()
     } catch (error) {
       console.error('提交订单失败:', error)
-      alert('提交订单失败: ' + (error as Error).message)
+      setError(error)
     } finally {
       setLoading(false)
     }
@@ -98,6 +100,7 @@ export function OrderForm({ pair, onSuccess }: OrderFormProps) {
   return (
     <form className="order-form" onSubmit={handleSubmit}>
       <h3>下单 - {pair}</h3>
+      <ErrorDisplay error={error} onDismiss={() => setError(null)} />
       
       <div className="side-selector">
         <button
@@ -140,6 +143,11 @@ export function OrderForm({ pair, onSuccess }: OrderFormProps) {
             <span className="text-muted"> · P2P 零滑点限价 vs 主流 AMM 滑点 0.5%+</span>
           </p>
         )}
+        {!priceLoading && priceError && (
+          <p className="order-form-market-hint text-muted">
+            市场参考价服务暂时不可用，不影响下单。
+          </p>
+        )}
       </div>
       
       <div className="form-group">
@@ -153,7 +161,11 @@ export function OrderForm({ pair, onSuccess }: OrderFormProps) {
           required
         />
       </div>
-      
+      {price && amount && !Number.isNaN(Number(price)) && !Number.isNaN(Number(amount)) && Number(price) > 0 && Number(amount) > 0 && (
+        <p className="order-summary">
+          以 <strong>{price}</strong> 的价格{side === 'buy' ? '买入' : '卖出'} <strong>{amount}</strong> 个 {pair.split('/')[0]}
+        </p>
+      )}
       <button
         type="submit"
         className={`submit-btn ${side}`}

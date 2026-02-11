@@ -148,7 +148,7 @@ go run ./cmd/submitproof -proof ./data/proofs/proof_2025-02-01_2025-02-08.json -
 - **Phase 3.1**：Gossip 主题 `/p2p-exchange/order/new`、`/order/cancel`、`/trade/executed`、`/sync/orderbook`；存储节点订阅后持久化订单（orders 表）、成交（trades）、订单簿快照，并按保留期清理（默认两周）。
 - **Phase 3.2**：撮合节点（`node.type: match`）订阅 order/new、order/cancel，维护内存订单簿，Price-Time 撮合，广播 /trade/executed；需在 `match.pairs` 中配置交易对与链上代币（token0/token1）以便成交含结算字段。链上结算需 Settlement owner 调用 `settleTrade`（可用 cast 或单独 settler）。
 - **Phase 3.3**：中继节点限流与信誉（抗 Sybil 基础）。`relay.rate_limit_bytes_per_sec_per_peer` / `rate_limit_msgs_per_sec_per_peer` 非 0 时启用按 peer 限流，超限丢弃并记违规；所有中继节点记录每 peer 的转发量与违规次数（信誉），供后续降权或踢出。主题划分沿用 `network.topics`，可按需按 pair 拆子主题。
-- 支持项：`node.type`（storage|relay|match）、`node.data_dir`、`node.listen`；`network.bootstrap`、`network.topics`；`relay.rate_limit_*`（Phase 3.3）；`storage.retention_months`；`match.pairs`；`metrics.proof_period_days`、`metrics.proof_output_dir`；`chain.*`（可选）。
+- 支持项：`node.type`（storage|relay|match）、`node.data_dir`、`node.listen`；`network.bootstrap`、`network.topics`；`network.use_tor`、`network.tor_socks_addr`（12.1 节点可选 Tor 出口）；`relay.rate_limit_*`（Phase 3.3）；`storage.retention_months`；`match.pairs`；`metrics.proof_period_days`、`metrics.proof_output_dir`；`chain.*`（可选）。
 - 启动时加 `-config <path>` 指定配置文件。
 - **节点发现**：`network.bootstrap` 填写稳定节点的 multiaddr（如 `/ip4/公网IP/tcp/4001/p2p/<PeerID>`），启动时会连接并加入 DHT；无 Bootstrap 时也可用 `-connect <multiaddr>` 直连。多区域/多运营商连通性说明见 [节点发现与 Bootstrap](../docs/节点发现与Bootstrap.md)。
 

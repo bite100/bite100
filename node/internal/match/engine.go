@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/P2P-P2P/p2p/node/internal/metrics"
 	"github.com/P2P-P2P/p2p/node/internal/storage"
 )
 
@@ -115,7 +116,12 @@ func (e *Engine) addMatchStats(trades []*storage.Trade) {
 	}
 }
 
-// OrderBook 单交易对订单簿：买盘价格降序时间升序，卖盘价格升序时间升序
+// OrderBook 单交易对订单簿
+//
+// §12.2 确定性撮合：FIFO/价格优先
+// - Bids：买盘，按价格降序、同价按 CreatedAt 升序（FIFO）
+// - Asks：卖盘，按价格升序、同价按 CreatedAt 升序（FIFO）
+// 撮合时：taker 买则吃 asks 最低价；taker 卖则吃 bids 最高价；同价先到先得
 type OrderBook struct {
 	Pair string
 	Bids []*storage.Order // 买盘，按价格降序、时间升序
@@ -201,6 +207,72 @@ func (e *Engine) AddOrder(o *storage.Order) bool {
 	return true
 }
 
+// ReplaceOrderbook 用给定买卖盘替换某交易对的订单簿（用于 1.2 订单簿同步）；跳过已过期订单
+func (e *Engine) ReplaceOrderbook(pair string, bids, asks []*storage.Order) {
+	if pair == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// 清除该 pair 下原有订单的 orderIDToPair
+	if ob, ok := e.pairs[pair]; ok {
+		for _, o := range ob.Bids {
+			delete(e.orderIDToPair, o.OrderID)
+		}
+		for _, o := range ob.Asks {
+			delete(e.orderIDToPair, o.OrderID)
+		}
+	}
+	ob := &OrderBook{Pair: pair}
+	for _, o := range bids {
+		if o == nil || o.OrderID == "" || storage.OrderExpired(o) {
+			continue
+		}
+		amount := bigNew(o.Amount)
+		filled := bigNew(o.Filled)
+		left := new(big.Float).Sub(amount, filled)
+		if left.Cmp(big.NewFloat(0)) <= 0 {
+			continue
+		}
+		o2 := *o
+		o2.Filled = "0"
+		o2.Amount = left.Text('f', 18)
+		ob.Bids = append(ob.Bids, &o2)
+		e.orderIDToPair[o.OrderID] = pair
+	}
+	for _, o := range asks {
+		if o == nil || o.OrderID == "" || storage.OrderExpired(o) {
+			continue
+		}
+		amount := bigNew(o.Amount)
+		filled := bigNew(o.Filled)
+		left := new(big.Float).Sub(amount, filled)
+		if left.Cmp(big.NewFloat(0)) <= 0 {
+			continue
+		}
+		o2 := *o
+		o2.Filled = "0"
+		o2.Amount = left.Text('f', 18)
+		ob.Asks = append(ob.Asks, &o2)
+		e.orderIDToPair[o.OrderID] = pair
+	}
+	sort.Slice(ob.Bids, func(i, j int) bool {
+		pi, pj := bigNew(ob.Bids[i].Price), bigNew(ob.Bids[j].Price)
+		if pi.Cmp(pj) != 0 {
+			return pi.Cmp(pj) > 0
+		}
+		return ob.Bids[i].CreatedAt < ob.Bids[j].CreatedAt
+	})
+	sort.Slice(ob.Asks, func(i, j int) bool {
+		pi, pj := bigNew(ob.Asks[i].Price), bigNew(ob.Asks[j].Price)
+		if pi.Cmp(pj) != 0 {
+			return pi.Cmp(pj) < 0
+		}
+		return ob.Asks[i].CreatedAt < ob.Asks[j].CreatedAt
+	})
+	e.pairs[pair] = ob
+}
+
 // RemoveOrder 从订单簿移除订单（撤单）；若 pair 为空则按 orderID 查找
 func (e *Engine) RemoveOrder(pair, orderID string) bool {
 	e.mu.Lock()
@@ -247,6 +319,8 @@ func removeOrderFromBook(ob *OrderBook, orderID string) bool {
 
 // Match 用 taker 订单与对手盘撮合，返回成交列表并更新订单簿内订单的 filled/status
 func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
+	t0 := time.Now()
+	defer func() { metrics.RecordMatch(len(trades), time.Since(t0)) }()
 	if taker.OrderID == "" || taker.Pair == "" || taker.Side == "" || taker.Price == "" || taker.Amount == "" {
 		return nil
 	}
@@ -265,10 +339,11 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 		return nil
 	}
 	now := time.Now().Unix()
-	tradeIDGen := 0
-	genTradeID := func() string {
-		tradeIDGen++
-		return fmt.Sprintf("%s-%d-%d", taker.OrderID, now, tradeIDGen)
+	// 确定性 TradeID：相同输入产生相同 ID，便于多节点共识时结果一致（清单 1.2 撮合结果不一致）
+	tradeSeq := 0
+	genTradeID := func(makerOrderID string) string {
+		tradeSeq++
+		return fmt.Sprintf("%s-%s-%d", taker.OrderID, makerOrderID, tradeSeq)
 	}
 
 	if taker.Side == "buy" {
@@ -296,7 +371,7 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 			amountIn := qty
 			amountOut := new(big.Float).Mul(qty, price)
 			t := &storage.Trade{
-				TradeID:      genTradeID(),
+				TradeID:      genTradeID(maker.OrderID),
 				Pair:         taker.Pair,
 				MakerOrderID: maker.OrderID,
 				TakerOrderID: taker.OrderID,
@@ -352,7 +427,7 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 			amountIn := qty
 			amountOut := new(big.Float).Mul(qty, price)
 			t := &storage.Trade{
-				TradeID:      genTradeID(),
+				TradeID:      genTradeID(maker.OrderID),
 				Pair:         taker.Pair,
 				MakerOrderID: maker.OrderID,
 				TakerOrderID: taker.OrderID,
@@ -393,6 +468,31 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 	if len(trades) > 0 {
 		log.Printf("[match] pair=%s taker=%s 成交 %d 笔", taker.Pair, taker.OrderID, len(trades))
 		e.addMatchStats(trades)
+	}
+	return trades
+}
+
+// MatchBatch §12.2 Epoch 内批量撮合：对多笔 taker 按 pair+CreatedAt+OrderID 确定性排序后依次撮合
+// 返回所有成交，供 relayer 按 Epoch 分组后调用 settleTradesBatch
+func (e *Engine) MatchBatch(takers []*storage.Order) (trades []*storage.Trade) {
+	if len(takers) == 0 {
+		return nil
+	}
+	// 确定性排序：pair 升序、CreatedAt 升序、OrderID 升序
+	sorted := make([]*storage.Order, len(takers))
+	copy(sorted, takers)
+	sort.Slice(sorted, func(i, j int) bool {
+		a, b := sorted[i], sorted[j]
+		if a.Pair != b.Pair {
+			return a.Pair < b.Pair
+		}
+		if a.CreatedAt != b.CreatedAt {
+			return a.CreatedAt < b.CreatedAt
+		}
+		return a.OrderID < b.OrderID
+	})
+	for _, t := range sorted {
+		trades = append(trades, e.Match(t)...)
 	}
 	return trades
 }

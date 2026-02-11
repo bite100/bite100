@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Contract, Interface } from 'ethers'
 import { GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, GOVERNANCE_ABI } from './config'
 import { getProvider, shortAddress, withSigner as withSignerUtil, formatError } from './utils'
+import { feePercentToBps } from './services/governanceUtils'
 
 const ZERO = '0x0000000000000000000000000000000000000000'
 const isGovDeployed = () =>
@@ -32,7 +33,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
   const [execProposalId, setExecProposalId] = useState('0')
   const [loadingExec, setLoadingExec] = useState(false)
   // Create form (setFeeBps preset)
-  const [createFeeBps, setCreateFeeBps] = useState('8')
+  const [createFeePercent, setCreateFeePercent] = useState('0.08') // 手续费%，如 0.08 = 0.08%
   const [createMerkleRoot, setCreateMerkleRoot] = useState('')
   const [createActiveCount, setCreateActiveCount] = useState('1')
   const [loadingCreate, setLoadingCreate] = useState(false)
@@ -106,19 +107,21 @@ export function GovernanceSection({ account }: { account: string | null }) {
     })
   }, [])
 
-  const handleVote = useCallback(async () => {
+  const handleVote = useCallback(async (proposalId: number, support: boolean) => {
     if (!account || !isGovDeployed()) return
     let proof: string[]
     try {
       proof = JSON.parse(voteProof) as string[]
     } catch {
-      setError('proof 需为 JSON 数组，如 [] 或 ["0x...","0x..."]')
+      setError('proof 需为 JSON 数组。若在活跃集内，可先尝试 []；否则运行 merkletool -proof-for 您的地址 获取')
       return
     }
     setError(null)
+    setVoteProposalId(String(proposalId))
+    setVoteSupport(support)
     setLoadingVote(true)
     try {
-      await withSigner((gov) => gov.vote(parseInt(voteProposalId, 10), voteSupport, proof).then((tx) => tx.wait()))
+      await withSigner((gov) => gov.vote(proposalId, support, proof).then((tx) => tx.wait()))
       await fetchProposals()
       setVoteProof('[]')
     } catch (e) {
@@ -126,7 +129,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     } finally {
       setLoadingVote(false)
     }
-  }, [account, voteProposalId, voteSupport, voteProof, fetchProposals, withSigner])
+  }, [account, voteProof, fetchProposals, withSigner])
 
   const handleExecute = useCallback(async () => {
     if (!account || !isGovDeployed()) return
@@ -146,17 +149,17 @@ export function GovernanceSection({ account }: { account: string | null }) {
     if (!account || !isGovDeployed()) return
     const root = createMerkleRoot.trim().toLowerCase()
     if (!/^0x[0-9a-f]{64}$/.test(root)) {
-      setError('merkleRoot 需为 32 字节 hex（0x + 64 位十六进制）')
+      setError('请填写活跃集证明（merkleRoot），需先用 merkletool 生成')
       return
     }
     const activeCount = parseInt(createActiveCount, 10)
     if (activeCount < 1) {
-      setError('activeCount 至少为 1')
+      setError('活跃集人数至少为 1')
       return
     }
-    const feeBps = parseInt(createFeeBps, 10)
-    if (feeBps < 1 || feeBps > 10000) {
-      setError('feeBps 需在 1～10000 之间')
+    const feeBps = feePercentToBps(createFeePercent)
+    if (feeBps === null) {
+      setError('手续费比例需在 0.01～100 之间')
       return
     }
     setError(null)
@@ -172,7 +175,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     } finally {
       setLoadingCreate(false)
     }
-  }, [account, createFeeBps, createMerkleRoot, createActiveCount, fetchProposals, withSigner])
+  }, [account, createFeePercent, createMerkleRoot, createActiveCount, fetchProposals, withSigner])
 
   if (!isGovDeployed()) {
     return (
@@ -186,7 +189,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
   return (
     <div className="card vault-section governance-section">
       <h2>治理</h2>
-      <p className="hint">查看提案、投票、执行。活跃集与 proof 由 merkletool 生成，见 node/scripts/governance-merkletool-example.md</p>
+      <p className="hint">查看提案、投票、执行。参与投票需在活跃集内，proof 由 merkletool 生成。</p>
 
       <h3 className="gov-sub">提案列表</h3>
       {loading ? (
@@ -247,6 +250,31 @@ export function GovernanceSection({ account }: { account: string | null }) {
                   <span className="label">目标</span>
                   <span className="value mono">{shortAddress(p.target, 10, 8)}</span>
                 </div>
+                {isVoting && (
+                  <div className="row vote-buttons-row">
+                    <span className="label">投票</span>
+                    <span className="value">
+                      <button
+                        type="button"
+                        className="btn primary vote-btn vote-yes"
+                        onClick={() => handleVote(i, true)}
+                        disabled={loadingVote || !account}
+                        title="请在钱包中确认，完成投票"
+                      >
+                        {loadingVote && parseInt(voteProposalId, 10) === i ? '处理中…' : '支持'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn secondary vote-btn vote-no"
+                        onClick={() => handleVote(i, false)}
+                        disabled={loadingVote || !account}
+                        title="请在钱包中确认，完成投票"
+                      >
+                        {loadingVote && parseInt(voteProposalId, 10) === i ? '处理中…' : '反对'}
+                      </button>
+                    </span>
+                  </div>
+                )}
                 {waitingTimelock && (
                   <div className="row">
                     <span className="label">可执行时间</span>
@@ -276,29 +304,33 @@ export function GovernanceSection({ account }: { account: string | null }) {
       <button className="btn secondary" onClick={fetchProposals} disabled={loading}>刷新</button>
 
       <h3 className="gov-sub">投票</h3>
-      <div className="input-row">
-        <input
-          type="text"
-          placeholder="提案 ID"
-          value={voteProposalId}
-          onChange={(e) => setVoteProposalId(e.target.value)}
-          className="input"
+      <p className="hint">参与投票需在活跃集内。上方每个「投票中」的提案旁可直接点「支持」「反对」；若提示需 proof，请运行 <code>go run ./cmd/merkletool -proof-for 您的地址</code> 获取后粘贴下方。</p>
+      <details className="vote-advanced">
+        <summary>高级：手动填写 proof</summary>
+        <textarea
+          placeholder='proof JSON，如 [] 或 ["0x...","0x..."]'
+          value={voteProof}
+          onChange={(e) => setVoteProof(e.target.value)}
+          className="input proof-input"
+          rows={2}
         />
-        <label className="vote-support">
-          <input type="checkbox" checked={voteSupport} onChange={(e) => setVoteSupport(e.target.checked)} />
-          赞成
-        </label>
-      </div>
-      <textarea
-        placeholder='proof JSON，如 [] 或 ["0x...","0x..."]'
-        value={voteProof}
-        onChange={(e) => setVoteProof(e.target.value)}
-        className="input proof-input"
-        rows={2}
-      />
-      <button className="btn secondary" onClick={handleVote} disabled={loadingVote || !account}>
-        {loadingVote ? '处理中…' : '投票'}
-      </button>
+        <div className="input-row">
+          <input
+            type="text"
+            placeholder="提案 ID"
+            value={voteProposalId}
+            onChange={(e) => setVoteProposalId(e.target.value)}
+            className="input"
+          />
+          <label className="vote-support">
+            <input type="checkbox" checked={voteSupport} onChange={(e) => setVoteSupport(e.target.checked)} />
+            赞成
+          </label>
+        </div>
+        <button className="btn secondary" onClick={() => { const id = parseInt(voteProposalId, 10); if (!Number.isNaN(id)) handleVote(id, voteSupport) }} disabled={loadingVote || !account}>
+          {loadingVote ? '处理中…' : '投票'}
+        </button>
+      </details>
 
       <h3 className="gov-sub">执行</h3>
       <div className="input-row">
@@ -314,36 +346,50 @@ export function GovernanceSection({ account }: { account: string | null }) {
         </button>
       </div>
 
-      <h3 className="gov-sub">创建提案（改 Settlement 费率）</h3>
-      <p className="hint">需先用 merkletool 生成 merkleRoot、activeCount</p>
-      <div className="input-row">
-        <input
-          type="number"
-          placeholder="feeBps (1-10000)"
-          value={createFeeBps}
-          onChange={(e) => setCreateFeeBps(e.target.value)}
-          className="input"
-        />
-        <input
-          type="number"
-          placeholder="activeCount"
-          value={createActiveCount}
-          onChange={(e) => setCreateActiveCount(e.target.value)}
-          className="input"
-        />
+      <h3 className="gov-sub">创建提案</h3>
+      <p className="hint">模板：调整手续费。填写手续费比例后，在下方高级选项中粘贴 merkletool 生成的证明。</p>
+      <div className="proposal-create-form">
+        <div className="form-group">
+          <label>新手续费比例（%）</label>
+          <input
+            type="number"
+            step="0.01"
+            min="0.01"
+            max="100"
+            placeholder="如 0.08 表示 0.08%"
+            value={createFeePercent}
+            onChange={(e) => setCreateFeePercent(e.target.value)}
+            className="input"
+          />
+        </div>
+        {createFeePercent && !Number.isNaN(parseFloat(createFeePercent)) && parseFloat(createFeePercent) > 0 && parseFloat(createFeePercent) <= 100 && (
+          <p className="proposal-preview">本提案将把手续费改为 {createFeePercent}%</p>
+        )}
+        <details className="proposal-create-advanced">
+          <summary>高级：活跃集证明（需 merkletool 生成）</summary>
+          <div className="input-row">
+            <input
+              type="number"
+              placeholder="活跃集人数"
+              value={createActiveCount}
+              onChange={(e) => setCreateActiveCount(e.target.value)}
+              className="input"
+            />
+          </div>
+          <div className="input-row">
+            <input
+              type="text"
+              placeholder="merkleRoot（0x + 64 位十六进制）"
+              value={createMerkleRoot}
+              onChange={(e) => setCreateMerkleRoot(e.target.value)}
+              className="input"
+            />
+          </div>
+        </details>
+        <button className="btn primary" onClick={handleCreate} disabled={loadingCreate || !account}>
+          {loadingCreate ? '处理中…' : '提交提案'}
+        </button>
       </div>
-      <div className="input-row">
-        <input
-          type="text"
-          placeholder="merkleRoot (0x + 64 hex)"
-          value={createMerkleRoot}
-          onChange={(e) => setCreateMerkleRoot(e.target.value)}
-          className="input"
-        />
-      </div>
-      <button className="btn secondary" onClick={handleCreate} disabled={loadingCreate || !account}>
-        {loadingCreate ? '处理中…' : '创建提案'}
-      </button>
 
       {error && <p className="error">{error}</p>}
     </div>

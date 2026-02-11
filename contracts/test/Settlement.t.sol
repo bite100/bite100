@@ -92,4 +92,45 @@ contract SettlementTest is Test {
         assertEq(tokenA.balanceOf(exchange), 0.5e18);
         assertEq(tokenB.balanceOf(exchange), 0.5e18);
     }
+
+    /// @notice Relayer 防滥用：白名单 isRelayer 可调用 settleTrade
+    function test_SettleTrade_IsRelayerWhitelist() public {
+        address whitelistRelayer = makeAddr("whitelistRelayer");
+        settlement.setRelayerAllowed(whitelistRelayer, true);
+        uint256 amountIn = 100e18;
+        uint256 amountOut = 100e18;
+        vm.prank(whitelistRelayer);
+        settlement.settleTrade(maker, taker, address(tokenA), address(tokenB), amountIn, amountOut, 0, 0);
+        assertEq(vault.balanceOf(address(tokenB), maker), 99.99e18);
+        assertEq(vault.balanceOf(address(tokenA), taker), 99.99e18);
+    }
+
+    /// @notice Relayer 防滥用：maxGasReimbursePerTrade 超限 revert
+    function test_SettleTrade_MaxGasReimburseCap() public {
+        address exchange = makeAddr("exchange");
+        settlement.setRelayer(exchange);
+        settlement.setMaxGasReimbursePerTrade(0.5e18); // 单笔 gas 报销上限 0.5e18
+        uint256 amountIn = 100e18;
+        uint256 amountOut = 100e18;
+        uint256 gasIn = 0.3e18;
+        uint256 gasOut = 0.3e18; // gasIn + gasOut = 0.6e18 > 0.5e18
+        vm.prank(exchange);
+        vm.expectRevert("Settlement: gas reimburse cap");
+        settlement.settleTrade(maker, taker, address(tokenA), address(tokenB), amountIn, amountOut, gasIn, gasOut);
+    }
+
+    /// @notice Relayer 防滥用：maxGasReimbursePerTrade 等于上限可成功
+    function test_SettleTrade_MaxGasReimburseAtCap() public {
+        address exchange = makeAddr("exchange");
+        settlement.setRelayer(exchange);
+        settlement.setMaxGasReimbursePerTrade(0.5e18);
+        uint256 amountIn = 100e18;
+        uint256 amountOut = 100e18;
+        uint256 gasIn = 0.25e18;
+        uint256 gasOut = 0.25e18; // gasIn + gasOut = 0.5e18 == cap
+        vm.prank(exchange);
+        settlement.settleTrade(maker, taker, address(tokenA), address(tokenB), amountIn, amountOut, gasIn, gasOut);
+        assertEq(tokenA.balanceOf(exchange), 0.25e18);
+        assertEq(tokenB.balanceOf(exchange), 0.25e18);
+    }
 }

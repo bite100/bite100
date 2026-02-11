@@ -14,7 +14,7 @@ import (
 
 var (
 	domainSeparator = apitypes.TypedDataDomain{
-		Name:    "P2P DEX",
+		Name:    "比特100",
 		Version: "1",
 		ChainId: math.NewHexOrDecimal256(11155111), // Sepolia
 	}

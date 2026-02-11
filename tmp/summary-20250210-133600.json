@@ -1,0 +1,4 @@
+{
+  "summary": "按清单实现 7.1 集成测试：在 node/internal/match/restore_test.go 中新增 TestRestoreAndMatch，覆盖 storage 持久化 -> RestoreOrdersFromStore 恢复订单簿 -> Match(taker) 撮合 -> 验证成交的端到端流程。更新清单中测试覆盖说明。",
+  "current_status": "7.1 集成测试已添加（TestRestoreAndMatch）。待办：5.3/5.4 标记、合约审计、Gas 优化、Docker Compose 等。"
+}

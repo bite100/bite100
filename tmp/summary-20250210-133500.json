@@ -1,0 +1,4 @@
+{
+  "summary": "按清单从第一步写代码：实现 8.1 性能监控 MatchEngine TPS 与延迟指标。新增 node/internal/metrics/match.go（p2p_match_trades_total counter、p2p_match_latency_seconds histogram），在 engine.Match() 中调用 metrics.RecordMatch，API server 增加 /metrics 端点暴露 Prometheus 指标。同步将 go.mod 中 prometheus/client_golang 提升为直接依赖。更新清单：2.3 价格参考、3.1 自动添加网络、5.2 手续费透明化、8.1 监控（MatchEngine TPS/延迟）均标为已实现或部分完成。",
+  "current_status": "8.1 MatchEngine Prometheus 指标已实现；清单多项已补标。待办：Grafana 仪表板、订单广播/链上结算延迟、集成测试、合约审计等。"
+}

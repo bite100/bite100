@@ -2,7 +2,7 @@ import { ethers } from 'ethers'
 
 // EIP-712 域分隔符
 const DOMAIN = {
-  name: 'P2P DEX',
+  name: '比特100',
   version: '1',
   chainId: 11155111,  // Sepolia
   verifyingContract: '0x0000000000000000000000000000000000000000',  // 可选

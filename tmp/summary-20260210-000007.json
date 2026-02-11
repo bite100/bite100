@@ -1,0 +1,8 @@
+{
+  "summary": "为用户说明了如何使用 GitHub Pages 免费部署前端：通过 GitHub Settings 将 Pages Source 设为 GitHub Actions，并在仓库中添加一个 pages.yml 工作流，构建 frontend 子目录下的 Vite/React 前端并将 dist 目录作为 Pages 站点部署；同时提示如仓库名非根域名时需要在 Vite 配置中设置 base 为 /repo-name/。",
+  "current_status": "项目尚未真正创建 GitHub Actions 工作流文件，但用户已获得完整的 GitHub Pages 部署步骤和示例 yml，可以在仓库中添加该工作流后自动将 main 分支的前端构建并发布到 GitHub Pages。"
+}
+{
+  "summary": "围绕上线奖励 / NodeRewards + 防 Sybil 流程，前端新增了节点绑定与上线奖励统一展示组件 NodeLaunchRewards：通过环境变量或链配置读取 NodeRewards 地址，展示当前钱包的开发者积分、节点积分与总积分（按 1 积分≈1 USDT），支持一键调用 claimRewards 领取上线奖励，并提供输入节点 ID 后调用 bindAndRegister 的界面来绑定最多 3 个节点，配合已存在的 UnifiedRewardClaim 和 MerkleAirdropClaim 完成上线奖励在前端的聚合展示。",
+  "current_status": "比特100 前端的“贡献”标签页现在依次展示 NodeLaunchRewards（NodeRewards 上线奖励 + 节点绑定）、UnifiedRewardClaim（周期贡献奖励 + 手续费分成）以及 MerkleAirdropClaim（Merkle 空投），而 NodeRewards 合约本身已在合约层支持 1 钱包最多绑定 3 节点、通过 allocatePoints 分配上线积分与 claimRewards 领取；离线 snapshot 与 allocatePoints 调用仍按文档通过脚本与治理执行，但前端展示和绑定/领取入口已经就绪。"
+}

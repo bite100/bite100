@@ -26,12 +26,12 @@ contract GovernanceExtended is Governance {
     // ContributorReward 合约地址（用于查询贡献分和信誉分）
     address public contributorReward;
 
-    // 提案分类常量
-    string public constant CATEGORY_PARAM = "参数调整";
-    string public constant CATEGORY_TOKEN = "上币";
-    string public constant CATEGORY_UPGRADE = "合约升级";
-    string public constant CATEGORY_TREASURY = "资金管理";
-    string public constant CATEGORY_OTHER = "其他";
+    // 提案分类常量（使用 Unicode 字符串避免非 ASCII 报错）
+    string public constant CATEGORY_PARAM = unicode"参数调整";
+    string public constant CATEGORY_TOKEN = unicode"上币";
+    string public constant CATEGORY_UPGRADE = unicode"合约升级";
+    string public constant CATEGORY_TREASURY = unicode"资金管理";
+    string public constant CATEGORY_OTHER = unicode"其他";
 
     event ProposalMetadataSet(
         uint256 indexed proposalId,
@@ -62,7 +62,7 @@ contract GovernanceExtended is Governance {
         string memory description,
         string memory category
     ) external returns (uint256 proposalId) {
-        proposalId = createProposal(target, callData, merkleRoot, activeCount);
+        proposalId = _createProposal(target, callData, merkleRoot, activeCount);
         
         proposalMetadata[proposalId] = ProposalMetadata({
             title: title,
@@ -85,7 +85,7 @@ contract GovernanceExtended is Governance {
         string memory ipfsHash,
         string memory category
     ) external returns (uint256 proposalId) {
-        proposalId = createProposal(target, callData, merkleRoot, activeCount);
+        proposalId = _createProposal(target, callData, merkleRoot, activeCount);
         
         proposalMetadata[proposalId] = ProposalMetadata({
             title: title,
@@ -108,7 +108,7 @@ contract GovernanceExtended is Governance {
         string memory description,
         string memory category
     ) external returns (uint256 proposalId) {
-        proposalId = createMultiStepProposal(targets, callDataArray, merkleRoot, activeCount);
+        proposalId = _createMultiStepProposal(targets, callDataArray, merkleRoot, activeCount);
         
         proposalMetadata[proposalId] = ProposalMetadata({
             title: title,
@@ -289,12 +289,12 @@ contract GovernanceExtended is Governance {
         bool support,
         bytes32[] calldata proof
     ) public override whenNotCancelled(proposalId) {
-        super.vote(proposalId, support, proof);
+        _vote(proposalId, support, proof);
     }
 
     /// @notice 重写执行函数，添加取消检查
     function execute(uint256 proposalId) public override whenNotCancelled(proposalId) {
-        super.execute(proposalId);
+        _execute(proposalId);
     }
 
     /// @notice 设置 ContributorReward 地址

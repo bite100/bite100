@@ -1,0 +1,4 @@
+{
+  "summary": "本回合修复 GovernanceExtended 编译错误：在扩展合约中直接调用基类 external 函数 createProposal/createMultiStepProposal 导致“Undeclared identifier”。已在 Governance.sol 中抽取内部核心逻辑为 _createProposal 和 _createMultiStepProposal（internal），外部接口 createProposal/createMultiStepProposal 仅简单调用内部函数。随后将 GovernanceExtended 中的调用改为使用 _createProposal 和 _createMultiStepProposal，从而避免标识符解析问题并支持扩展合约复用治理创建逻辑。",
+  "current_status": "治理相关合约现已通过 internal 助手函数共享提案创建逻辑，避免 external 函数在派生合约中的可见性问题。用户需要在 /d/P2P/contracts 目录重新运行 forge build 和 forge test 以确认所有编译和单测是否通过，如仍有报错则需查看新的输出。"
+}

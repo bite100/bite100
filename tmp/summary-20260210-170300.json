@@ -1,0 +1,4 @@
+{
+  "summary": "本回合指导用户继续安装 LayerZero 依赖，forge install 在克隆 https://github.com/LayerZero-Labs/oapp-evm 时弹出 Git 凭证对话框被用户取消，导致 git clone 失败并提示输入 GitHub 用户名。准备改用在 Git Bash 里直接在提示处回车跳过凭证，或改用只读 https URL 并手动 git clone 到 lib/oapp-evm。",
+  "current_status": "foundry.toml 已配置 solc 0.8.20，GovernanceExtended 中文字符串已改为 unicode 字面量；forge install 尚未成功拉取 oapp-evm 仓库，需要用户在 Username/Password 提示时直接回车跳过凭证或按照说明手动 clone 到 lib/oapp-evm，然后再运行 forge build/forge test。"
+}

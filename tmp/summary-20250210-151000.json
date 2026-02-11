@@ -1,0 +1,4 @@
+{
+  "summary": "按清单实现 10.2 Merkle Airdrop：1) 新增 contracts/src/MerkleDistributor.sol（claim、setMerkleRoot、emergencyWithdraw）；2) 新增 node/cmd/merkle-distributor 工具，从 CSV(address,amount) 生成 merkleRoot、totalAmount、proof；3) 清单已更新。",
+  "current_status": "10.2 Merkle Airdrop 已实现（合约 + 生成工具）。"
+}

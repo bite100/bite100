@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { BrowserProvider } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig, getAddChainParams } from '../config/chains'
 import { debug } from '../utils'
+import { ErrorDisplay } from './ErrorDisplay'
 import './ChainSwitcher.css'
 
 interface ChainSwitcherProps {
@@ -12,12 +13,13 @@ interface ChainSwitcherProps {
 export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [switching, setSwitching] = useState(false)
+  const [error, setError] = useState<unknown>(null)
 
   const currentChain = currentChainId ? getChainConfig(currentChainId) : null
 
   const switchChain = async (chainId: number) => {
     if (!window.ethereum) {
-      alert('请安装 MetaMask 或其他 Web3 钱包')
+      setError('请安装 MetaMask 或其他 Web3 钱包')
       return
     }
 
@@ -55,7 +57,7 @@ export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherPr
       }
     } catch (error: any) {
       debug.error('切换链失败:', error)
-      alert(`切换链失败: ${error.message || '未知错误'}`)
+      setError(error)
     } finally {
       setSwitching(false)
       setIsOpen(false)
@@ -64,6 +66,7 @@ export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherPr
 
   return (
     <div className="chain-switcher">
+      <ErrorDisplay error={error} onDismiss={() => setError(null)} className="chain-switcher-error" />
       <button
         className="chain-switcher-button"
         onClick={() => setIsOpen(!isOpen)}

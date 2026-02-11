@@ -1,0 +1,4 @@
+{
+  "summary": "按用户要求更新设定和 SKILL：1) docs/优化与改进清单.md 新增 §〇 新手友好原则，涵盖交易、投票、提案、存提、奖励领取；2) p2p-dex-project SKILL 增加「用户功能足够简单」原则；3) frontend-ux、fee-governance、orderbook-match、vault-deposit-withdraw、contributor-reward 等 SKILL 补充新手友好相关指引。",
+  "current_status": "新手友好原则已写入设定与各功能 SKILL，后续开发/优化将遵循该原则。"
+}

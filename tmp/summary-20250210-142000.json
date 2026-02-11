@@ -1,0 +1,4 @@
+{
+  "summary": "按清单实现 10.1 节点绑定钱包 - 前端/CLI 绑定：在 scripts/vps/install-vps.sh 中增加交互式领奖地址输入；支持环境变量 REWARD_WALLET 非交互写入；地址格式校验（0x 开头 42 字符）；已更新清单与 scripts/vps/README.md。",
+  "current_status": "10.1 配置文件绑定、前端/CLI 绑定已在清单中标记完成。"
+}

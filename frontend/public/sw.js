@@ -1,8 +1,14 @@
-/* P2P 交易所 - 最小 Service Worker，支持安装到主屏与更新 */
-const CACHE_NAME = 'p2p-exchange-v1'
+/* 比特100 - Service Worker，支持安装到主屏与更新 */
+const CACHE_NAME = 'bit100-sw-v1'
 
 self.addEventListener('install', (event) => {
-  self.skipWaiting()
+  /* 新版本进入 waiting 状态，由客户端在用户点击「刷新」后触发 skipWaiting */
+})
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+  }
 })
 
 self.addEventListener('activate', (event) => {

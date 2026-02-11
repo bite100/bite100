@@ -1,0 +1,4 @@
+{
+  "summary": "按用户要求实现了「先试 Railway 或 Fly.io 部署节点、前端继续用 GitHub Pages」：1) 节点在无 config 时默认监听 :8080（main.go 中若 cfg.API.Listen 为空则设为 :8080）；2) 新增 node/fly.toml 供 Fly.io 部署（cd node && fly launch / fly deploy，REWARD_WALLET 用 fly secrets set）；3) 新增 docs/部署-Railway与Fly.md 写明 Railway（根目录选 node、设 REWARD_WALLET、暴露 8080）与 Fly 步骤及前端连节点方式；4) frontend-pages.yml 构建时传入可选 VITE_NODE_API_URL、VITE_BASE（Secrets），便于 Pages 前端连云节点并支持非根路径。",
+  "current_status": "P2P 节点可凭现有 node/Dockerfile 部署到 Railway 或 Fly.io，前端继续由 GitHub Pages 托管；文档与 workflow 已就绪，用户按文档操作即可用 GitHub 登录、不绑卡试用。"
+}

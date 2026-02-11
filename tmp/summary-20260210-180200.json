@@ -1,0 +1,4 @@
+{
+  "summary": "本回合继续修复编译错误：1）GovernanceExtended 重写了 Governance 的 vote/execute，但基类函数未标记 virtual，导致“Trying to override non-virtual function”错误，已在 Governance.sol 中将 vote 和 execute 标记为 external virtual，使得扩展合约的 public override 实现合法；2）CrossChainBridge 使用 _origin.srcEid 字段，而 OApp stub 中 Origin 结构体字段名为 srcChainId，已将其改为 srcEid，与 CrossChainBridge 一致以消除成员访问错误。",
+  "current_status": "治理和跨链桥相关的函数签名与 stub 结构体字段已对齐，理论上应消除当前的 override 与 struct 字段名编译错误。用户需要在 /d/P2P/contracts 目录再次运行 forge build 和 forge test 验证是否全部通过，如仍有报错需查看新的输出。"
+}

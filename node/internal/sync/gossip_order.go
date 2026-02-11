@@ -9,11 +9,12 @@ import (
 
 // Phase 3.1 Gossip 主题（与 Phase3-设计文档 §2.5、技术架构说明 §3.3 对齐）
 const (
-	TopicOrderNew      = "/p2p-exchange/order/new"
-	TopicOrderCancel   = "/p2p-exchange/order/cancel"
-	TopicTradeExecuted = "/p2p-exchange/trade/executed"
-	TopicSyncOrderbook = "/p2p-exchange/sync/orderbook"
-	TopicMatchRegister = "/p2p-exchange/match/register" // 方案 B：节点注册
+	TopicOrderNew          = "/p2p-exchange/order/new"
+	TopicOrderCancel       = "/p2p-exchange/order/cancel"
+	TopicTradeExecuted     = "/p2p-exchange/trade/executed"
+	TopicSyncOrderbook     = "/p2p-exchange/sync/orderbook"
+	TopicMatchRegister     = "/p2p-exchange/match/register"     // 方案 B：节点注册
+	TopicOrderbookRequest  = "/p2p-exchange/consensus/orderbook-request" // §12.2 完整订单簿请求
 )
 
 // CancelRequest 撤单请求（orderId + signature + timestamp）
@@ -57,6 +58,21 @@ func ParseOrderbookSnapshot(data []byte) (*storage.OrderbookSnapshot, error) {
 		return nil, err
 	}
 	return &s, nil
+}
+
+// OrderbookRequest 完整订单簿请求（§12.2，与 match.OrderbookRequest 一致）
+type OrderbookRequest struct {
+	Pair        string `json:"pair"`
+	RequesterID string `json:"requesterId"`
+}
+
+// ParseOrderbookRequest 解析 orderbook-request 消息
+func ParseOrderbookRequest(data []byte) (*OrderbookRequest, error) {
+	var r OrderbookRequest
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // PersistOrderNew 存储节点：持久化新订单（已过期订单不写入，Replay/过期防护）

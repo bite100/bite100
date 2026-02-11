@@ -1,0 +1,4 @@
+{
+  "summary": "为项目 15 个主要功能模块创建了独立的 skill，防止后续优化跑偏：order-signing、settlement-chain、vault-deposit-withdraw、amm-swap、fee-governance、contributor-reward、orderbook-match、p2p-node-relay、frontend-ux、cross-chain-bridge、pwa-mobile、node-api、contribution-proof、data-retention、spam-security。每个 skill 包含：不可变约束、代码位置、相关文档、优化注意事项。主项目 skill (p2p-dex-project) 已添加功能模块 Skill 索引表。",
+  "current_status": "比特100 项目已完成功能模块 skill 体系搭建，共 15 个 feature skill + 1 个主项目 skill。后续修改任意功能时，Agent 可自动匹配对应 skill，确保不破坏约定约束。"
+}

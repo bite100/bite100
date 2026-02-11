@@ -1,0 +1,4 @@
+{
+  "summary": "按清单实现 6.1/7.1 订单签名验证单元测试：新增 node/internal/match/signature_test.go，包含 TestVerifyOrderSignature、TestVerifyOrderSignature_missingSig、TestVerifyCancelSignature，覆盖 EIP-712 订单/撤单签名验证。更新清单 6.1、7.1 对应项。",
+  "current_status": "6.1 订单签名验证已补充单元测试。7.1 测试覆盖已扩展至 signature 包。"
+}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./interfaces/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title NodeRewards 上线激励（开发者积分 + 节点积分 + 统一领取 + 防 Sybil 基础）
 /// @notice 与 ContributorReward 并列：本合约仅负责「主网上线时」的 devPoints/nodePoints 分配与 claim；周期贡献奖励仍走 ContributorReward
@@ -9,6 +9,8 @@ import "./interfaces/IERC20.sol";
 contract NodeRewards {
     address public owner;
     IERC20 public usdt;
+    /// @notice Settlement 合约地址，可调用 depositFounderReward 将批量结算 gas 节省 25% 记为创始人积分
+    address public settlement;
 
     mapping(address => uint256) public devPoints;
     mapping(address => uint256) public nodePoints;
@@ -19,6 +21,8 @@ contract NodeRewards {
     event PointsAllocated(address indexed wallet, uint256 devAmount, uint256 nodeAmount);
     event RewardsClaimed(address indexed wallet, uint256 total);
     event NodeBound(address indexed wallet, bytes32 nodeId);
+    event FounderRewardDeposited(address indexed founder, uint256 usdtAmount6, uint256 points);
+    event SettlementSet(address indexed settlement);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "NodeRewards: not owner");
@@ -28,6 +32,26 @@ contract NodeRewards {
     constructor(address _usdt) {
         owner = msg.sender;
         usdt = IERC20(_usdt);
+    }
+
+    /// @notice 设置 Settlement 地址（仅 owner）；Settlement 可调用 depositFounderReward
+    function setSettlement(address _settlement) external onlyOwner {
+        settlement = _settlement;
+        emit SettlementSet(_settlement);
+    }
+
+    /// @notice 批量结算 gas 节省 25% 以 USDT 转入并记为创始人积分（1 USDT = 1 积分）；仅 Settlement 可调用
+    /// @param founder 创始人地址
+    /// @param usdtAmount6 USDT 数量（6 位小数）
+    function depositFounderReward(address founder, uint256 usdtAmount6) external {
+        require(msg.sender == settlement && settlement != address(0), "NodeRewards: not settlement");
+        require(founder != address(0) && usdtAmount6 > 0, "NodeRewards: invalid input");
+        require(IERC20(usdt).transferFrom(msg.sender, address(this), usdtAmount6), "NodeRewards: transfer failed");
+        uint256 points = usdtAmount6 / 1e6;
+        if (points > 0) {
+            devPoints[founder] += points;
+            emit FounderRewardDeposited(founder, usdtAmount6, points);
+        }
     }
 
     /// @notice 绑定钱包并登记节点（前端/节点调用）；防 Sybil：每钱包最多绑定 MAX_NODES_PER_WALLET 个节点

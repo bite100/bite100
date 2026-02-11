@@ -1,0 +1,23 @@
+# Fly.io 部署 P2P 节点
+# 用法：在 node 目录执行 fly launch（首次）或 fly deploy
+# 部署前在 Fly 控制台或 CLI 设置 Secret: REWARD_WALLET=0x你的领奖地址
+
+app = "p2p-node"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# 领奖地址必填：部署后执行 fly secrets set REWARD_WALLET=0x你的地址
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

@@ -1,6 +1,6 @@
 # Polygon 主网部署指南
 
-本文档说明如何将 P2P 交易所部署到 **Polygon 主网**（chainId 137）。Polygon 使用 MATIC 作为 gas，部署与交易费用通常低于 Ethereum 主网。
+本文档说明如何将 比特100 部署到 **Polygon 主网**（chainId 137）。Polygon 使用 MATIC 作为 gas，部署与交易费用通常低于 Ethereum 主网。
 
 ---
 

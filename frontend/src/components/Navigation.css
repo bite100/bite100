@@ -2,7 +2,7 @@
   display: flex;
   gap: 0.5rem;
   margin-bottom: 1rem;
-  border-bottom: 1px solid #27272a;
+  border-bottom: 1px solid #111827;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -12,7 +12,7 @@
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  color: #a1a1aa;
+  color: #9ca3af;
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
@@ -22,12 +22,12 @@
 }
 
 .nav-tab:hover {
-  color: #e4e4e7;
+  color: #f9fafb;
 }
 
 .nav-tab.active {
-  color: #3b82f6;
-  border-bottom-color: #3b82f6;
+  color: #f0b90b;
+  border-bottom-color: #f0b90b;
 }
 
 @media (max-width: 640px) {

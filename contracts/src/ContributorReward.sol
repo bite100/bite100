@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./interfaces/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title ContributorReward 贡献奖励（按周期、按贡献分分配固定总量）
 /// @notice 节点提交贡献证明（ECDSA 签名），合约按贡献分占比发放该周期奖励池；与 FeeDistributor 并列，不扩展 FeeDistributor
@@ -30,7 +30,7 @@ contract ContributorReward {
     uint256 private constant WEIGHT_STORAGE = 25;
     uint256 private constant WEIGHT_LIQUIDITY = 20;
     uint256 private constant WEIGHT_RELAY = 15;
-    /// 周期结束超过此时长（秒）后禁止领取，未领取不再发放
+    /// 原设计：周期结束超过此时长（秒）后禁止领取；当前实现已取消截止时间限制，常量保留仅为兼容
     uint256 public constant CLAIM_DEADLINE_SECONDS = 14 days;
 
     /// 是否启用按信誉分分配（true：按信誉分加权分配；false：仅用信誉阈值作为门槛）
@@ -40,7 +40,7 @@ contract ContributorReward {
     /// account => 信誉分数（基于转发量、违规次数等计算，范围 0-10000）
     mapping(address => uint256) public reputationScore;
 
-    /// periodId => 该周期结束时间（Unix 秒，UTC 周期结束日 23:59:59）；0 表示未设置，不校验截止（兼容旧数据）
+    /// periodId => 该周期结束时间（Unix 秒，UTC 周期结束日 23:59:59）；当前实现不再据此限制领取，仅作为元数据存储
     mapping(bytes32 => uint256) public periodEndTimestamp;
 
     /// periodId => 该周期总贡献分
@@ -238,21 +238,17 @@ contract ContributorReward {
         emit PeriodRewardSet(pid, token, amount);
     }
 
-    /// @notice 设置某周期结束时间（Unix 秒）；周期结束超过 14 天后禁止领取，未领取不再发放
+    /// @notice 设置某周期结束时间（Unix 秒）；当前实现不再据此限制领取，仅作为元数据存储
     function setPeriodEndTimestamp(bytes32 periodId, uint256 endTimestamp) external onlyOwner {
         periodEndTimestamp[periodId] = endTimestamp;
         emit PeriodEndTimestampSet(periodId, endTimestamp);
     }
 
-    /// @notice 领取某周期某代币的应得奖励；若该周期已设置结束时间且超过结束+14天则禁止领取
+    /// @notice 领取某周期某代币的应得奖励；当前实现不再设置领取截止时间
     /// @notice 每次领取不超过该周期奖励池的 10%，可多次领取直到领完应得部分
     /// @notice 如果启用信誉加权分配（useReputationWeighting=true），奖励按（贡献分 * 信誉分数/10000）分配
     function claimReward(string calldata period, address token) external {
         bytes32 pid = _periodId(period);
-        uint256 endTs = periodEndTimestamp[pid];
-        if (endTs != 0) {
-            require(block.timestamp <= endTs + CLAIM_DEADLINE_SECONDS, "ContributorReward: claim deadline passed");
-        }
         
         // 检查信誉阈值（如果启用）
         if (reputationThreshold > 0) {
@@ -297,11 +293,9 @@ contract ContributorReward {
     }
     
 
-    /// @notice 查询某账户在某周期某代币上可领取金额；若已过领取截止则返回 0
+    /// @notice 查询某账户在某周期某代币上可领取金额；当前实现不再设置领取截止时间
     function claimable(string calldata period, address token, address account) external view returns (uint256) {
         bytes32 pid = _periodId(period);
-        uint256 endTs = periodEndTimestamp[pid];
-        if (endTs != 0 && block.timestamp > endTs + CLAIM_DEADLINE_SECONDS) return 0;
         
         uint256 myScore = contributionScore[pid][account];
         if (myScore == 0) return 0;

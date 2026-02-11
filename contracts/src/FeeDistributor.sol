@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./interfaces/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title FeeDistributor 手续费分配
 /// @notice 接收手续费：开发者固定 5% 自动转至开发者地址；其余按比例由接收方 claim
 contract FeeDistributor {
     address public owner;
+    /// @notice 治理合约地址，可执行提案设置手续费分成（setRecipients/setDeveloperAddress）
+    address public governance;
     address public vault; // 若手续费先入 Vault 再转本合约，可不用；若直接转本合约则需记录
 
     /// @notice 开发者地址，收取手续费的固定 1%，无需手动领取
@@ -33,9 +35,15 @@ contract FeeDistributor {
     event RecipientSet(uint256 index, address account, uint16 shareBps);
     event Claimed(address indexed account, address indexed token, uint256 amount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event GovernanceSet(address indexed governance);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "FeeDistributor: not owner");
+        _;
+    }
+
+    modifier onlyOwnerOrGovernance() {
+        require(msg.sender == owner || (governance != address(0) && msg.sender == governance), "FeeDistributor: not auth");
         _;
     }
 
@@ -43,22 +51,33 @@ contract FeeDistributor {
         owner = msg.sender;
     }
 
-    /// @notice 设置分配对象（会覆盖原有列表）
-    function setRecipients(address[] calldata accounts, uint16[] calldata shareBps) external onlyOwner {
-        require(accounts.length == shareBps.length, "FeeDistributor: length mismatch");
-        delete recipients;
-        totalShareBps = 0;
-        for (uint256 i = 0; i < accounts.length; i++) {
-            require(accounts[i] != address(0), "FeeDistributor: zero address");
-            totalShareBps += shareBps[i];
-            recipients.push(Recipient(accounts[i], shareBps[i]));
-            emit RecipientSet(i, accounts[i], shareBps[i]);
-        }
-        require(totalShareBps <= (developerAddress == address(0) ? 10000 : 10000 - DEVELOPER_SHARE_BPS), "FeeDistributor: share overflow"); // 开发者 1%，其余最多 99%
+    /// @notice 设置治理合约；仅 owner 可调用
+    function setGovernance(address _governance) external onlyOwner {
+        governance = _governance;
+        emit GovernanceSet(_governance);
     }
 
-    /// @notice 设置开发者地址（收取 5% 手续费，每次到账自动转入，无需兑换）
-    function setDeveloperAddress(address _developer) external onlyOwner {
+    /// @notice 设置分配对象（会覆盖原有列表）；owner 或 governance 可调用
+    function setRecipients(address[] calldata accounts, uint16[] calldata shareBps) external onlyOwnerOrGovernance {
+        uint256 len = accounts.length;
+        require(len == shareBps.length, "FeeDistributor: length mismatch");
+        delete recipients;
+        uint16 _total = 0;
+        for (uint256 i = 0; i < len; ) {
+            address acct = accounts[i];
+            require(acct != address(0), "FeeDistributor: zero address");
+            _total += shareBps[i];
+            recipients.push(Recipient(acct, shareBps[i]));
+            emit RecipientSet(i, acct, shareBps[i]);
+            unchecked { ++i; }
+        }
+        uint256 maxBps = developerAddress == address(0) ? 10000 : (10000 - DEVELOPER_SHARE_BPS);
+        require(_total <= maxBps, "FeeDistributor: share overflow"); // 开发者 1%，其余最多 99%
+        totalShareBps = _total;
+    }
+
+    /// @notice 设置开发者地址（收取 1% 手续费，每次到账自动转入）；owner 或 governance 可调用
+    function setDeveloperAddress(address _developer) external onlyOwnerOrGovernance {
         developerAddress = _developer;
         emit DeveloperSet(_developer);
     }
@@ -68,45 +87,59 @@ contract FeeDistributor {
         require(token != address(0) && amount > 0, "FeeDistributor: invalid input");
         require(IERC20(token).transferFrom(msg.sender, address(this), amount), "FeeDistributor: transfer failed");
 
-        uint256 developerAmount = (developerAddress != address(0)) ? (amount * DEVELOPER_SHARE_BPS) / 10000 : 0;
-        if (developerAmount > 0) {
-            require(IERC20(token).transfer(developerAddress, developerAmount), "FeeDistributor: developer transfer failed");
-            emit DeveloperPaid(token, developerAddress, developerAmount);
+        address _dev = developerAddress;
+        uint256 developerAmount = _dev != address(0) ? (amount * DEVELOPER_SHARE_BPS) / 10000 : 0;
+        uint256 toAccumulate;
+        if (developerAmount != 0) {
+            require(IERC20(token).transfer(_dev, developerAmount), "FeeDistributor: developer transfer failed");
+            emit DeveloperPaid(token, _dev, developerAmount);
+            unchecked { toAccumulate = amount - developerAmount; }
+        } else {
+            toAccumulate = amount;
         }
-        accumulated[token] += amount - developerAmount;
+        accumulated[token] += toAccumulate;
         emit FeeReceived(token, amount);
     }
 
     /// @notice 领取某代币的应得份额（按当前余额与比例）
     function claim(address token) external {
         uint256 balance = IERC20(token).balanceOf(address(this));
-        require(balance > 0 && totalShareBps > 0, "FeeDistributor: nothing to claim");
+        uint16 _totalBps = totalShareBps;
+        require(balance > 0 && _totalBps > 0, "FeeDistributor: nothing to claim");
         uint256 myShareBps = 0;
-        for (uint256 i = 0; i < recipients.length; i++) {
+        uint256 len = recipients.length;
+        for (uint256 i = 0; i < len; ) {
             if (recipients[i].account == msg.sender) {
                 myShareBps = recipients[i].shareBps;
                 break;
             }
+            unchecked { ++i; }
         }
         require(myShareBps > 0, "FeeDistributor: not recipient");
-        uint256 amount = (accumulated[token] * myShareBps) / totalShareBps - claimed[token][msg.sender];
-        require(amount > 0, "FeeDistributor: zero amount");
-        claimed[token][msg.sender] += amount;
-        require(IERC20(token).transfer(msg.sender, amount), "FeeDistributor: transfer failed");
-        emit Claimed(msg.sender, token, amount);
+        uint256 acc = accumulated[token];
+        uint256 amt;
+        unchecked { amt = (acc * myShareBps) / _totalBps - claimed[token][msg.sender]; }
+        require(amt > 0, "FeeDistributor: zero amount");
+        claimed[token][msg.sender] += amt;
+        require(IERC20(token).transfer(msg.sender, amt), "FeeDistributor: transfer failed");
+        emit Claimed(msg.sender, token, amt);
     }
 
     /// @notice 查询某账户在某代币上可领取金额
     function claimable(address token, address account) external view returns (uint256) {
+        uint16 _totalBps = totalShareBps;
+        if (_totalBps == 0) return 0;
         uint256 myShareBps = 0;
-        for (uint256 i = 0; i < recipients.length; i++) {
+        uint256 len = recipients.length;
+        for (uint256 i = 0; i < len; ) {
             if (recipients[i].account == account) {
                 myShareBps = recipients[i].shareBps;
                 break;
             }
+            unchecked { ++i; }
         }
-        if (myShareBps == 0 || totalShareBps == 0) return 0;
-        return (accumulated[token] * myShareBps) / totalShareBps - claimed[token][account];
+        if (myShareBps == 0) return 0;
+        unchecked { return (accumulated[token] * myShareBps) / _totalBps - claimed[token][account]; }
     }
 
     function transferOwnership(address newOwner) external onlyOwner {

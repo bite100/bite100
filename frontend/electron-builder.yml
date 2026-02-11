@@ -1,5 +1,5 @@
 appId: io.github.p2p-p2p.exchange
-productName: P2P 交易所
+productName: 比特100
 directories:
   output: release
 files:
@@ -17,4 +17,4 @@ nsis:
   installerLanguages:
     - zh-CN
     - en-US
-  shortcutName: P2P 交易所
+  shortcutName: 比特100

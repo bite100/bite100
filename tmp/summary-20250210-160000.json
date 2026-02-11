@@ -1,0 +1,4 @@
+{
+  "summary": "本回合确认 gas 节省分配逻辑已实现：Settlement.sol 的 settleTradesBatchWithGasSavings（50% 减 fee、25% FeeDistributor、25% 创始人积分）、NodeRewards.sol 的 depositFounderReward 与 setSettlement；本地未安装 forge 故未执行 forge build。前端 config 已补充 SETTLEMENT_ABI：settleTradesBatchWithGasSavings 与 GasSavingsDistributed 事件，便于 relayer 调用与解析。",
+  "current_status": "合约实现已完成；前端 ABI 已更新。部署后需在 Settlement 上设置 setNodeRewards、setFounder、setUsdtToken，在 NodeRewards 上设置 setSettlement；relayer 需估算 gasSavingsUsdt6 并授权 USDT 后调用 settleTradesBatchWithGasSavings。"
+}

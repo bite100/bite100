@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
 import { Contract } from 'ethers'
-import { useConnection, useConnect, useDisconnect } from 'wagmi'
+import { useConnection, useDisconnect } from 'wagmi'
+import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { CHAIN_ID, VAULT_ABI, ERC20_ABI, AMM_ABI, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
@@ -9,11 +10,15 @@ import { CrossChainBridge } from './components/CrossChainBridge'
 import { LiquidityPoolInfo } from './components/LiquidityPoolInfo'
 import { RewardPoolInfo } from './components/RewardPoolInfo'
 import { UnifiedRewardClaim } from './components/UnifiedRewardClaim'
+import { NodeLaunchRewards } from './components/NodeLaunchRewards'
+import { MerkleAirdropClaim } from './components/MerkleAirdropClaim'
 import { AddNetworkButton } from './components/AddNetworkButton'
+import { MobileConnectHint } from './components/MobileConnectHint'
 import { Navigation, type Tab } from './components/Navigation'
 import { ErrorDisplay } from './components/ErrorDisplay'
 import { ChainSwitcher } from './components/ChainSwitcher'
 import { useChain } from './hooks/useChain'
+import { useOnlineStatus } from './hooks/useOnlineStatus'
 import { getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL } from './utils'
 import './App.css'
 
@@ -47,10 +52,40 @@ function setStored(key: string, value: string) {
   } catch {}
 }
 
+/** 确保 allowance 足够：不足时按「先清零再授权 amount」的模式处理，避免某些 ERC20 的非标准行为 */
+async function ensureAllowance(
+  token: Contract,
+  owner: string,
+  spender: string,
+  amount: bigint,
+) {
+  const current = await token.allowance(owner, spender)
+  if (current >= amount) return
+  if (current > 0n) {
+    await (await token.approve(spender, 0n)).wait()
+  }
+  await (await token.approve(spender, amount)).wait()
+}
+
+async function runWithLoading(
+  setLoading: (value: boolean) => void,
+  setError: (msg: string | null) => void,
+  fn: () => Promise<void>,
+) {
+  setError(null)
+  setLoading(true)
+  try {
+    await fn()
+  } catch (e) {
+    setError(formatError(e))
+  } finally {
+    setLoading(false)
+  }
+}
+
 function App() {
   const connection = useConnection()
   const account = connection.address ?? null
-  const { connect, connectors, isPending: connectPending, error: connectError } = useConnect()
   const { disconnect } = useDisconnect()
 
   const connectionLabel =
@@ -69,7 +104,7 @@ function App() {
   })
   const [depositAmount, setDepositAmount] = useState<string>('')
   const [withdrawAmount, setWithdrawAmount] = useState<string>('')
-  const [loading, setLoading] = useState(false) // 用于余额/其他操作，连接状态用 connectPending
+  const [loading, setLoading] = useState(false)
   const [loadingDeposit, setLoadingDeposit] = useState(false)
   const [loadingWithdraw, setLoadingWithdraw] = useState(false)
   const [loadingSwap, setLoadingSwap] = useState(false)
@@ -88,8 +123,13 @@ function App() {
   const [reserve0, setReserve0] = useState<string>('')
   const [reserve1, setReserve1] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
-  const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine)
-  const [activeTab, setActiveTab] = useState<Tab>('vault')
+  const isOnline = useOnlineStatus()
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    if (typeof window === 'undefined') return 'vault'
+    const t = new URLSearchParams(window.location.search).get('tab')
+    const valid: Tab[] = ['vault', 'orderbook', 'swap', 'data', 'bridge', 'governance', 'contribution']
+    return valid.includes(t as Tab) ? (t as Tab) : 'vault'
+  })
   
   // 链切换
   const { currentChainId, switchChain } = useChain()
@@ -111,40 +151,7 @@ function App() {
   }, [currentChainId, account])
 
   useEffect(() => { setStored('tokenAddress', tokenAddress) }, [tokenAddress])
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const onOnline = () => setIsOnline(true)
-    const onOffline = () => setIsOnline(false)
-    window.addEventListener('online', onOnline)
-    window.addEventListener('offline', onOffline)
-    return () => {
-      window.removeEventListener('online', onOnline)
-      window.removeEventListener('offline', onOffline)
-    }
-  }, [])
   useEffect(() => { setStored('swapTokenIn', swapTokenIn) }, [swapTokenIn])
-
-  const handleConnectInjected = useCallback(() => {
-    setError(null)
-    const connector = connectors?.find((c) => c.type === 'injected') ?? connectors?.[0]
-    if (!connector) {
-      setError('未检测到浏览器钱包（请安装 MetaMask / Rabby / Phantom 等，或在钱包 App 内置浏览器中打开本页）')
-      return
-    }
-    connect({ connector }, { onError: (e) => setError(formatError(e)) })
-  }, [connectors, connect])
-
-  const handleConnectWalletConnect = useCallback(() => {
-    setError(null)
-    const connector =
-      connectors?.find((c) => c.id === 'walletConnect') ??
-      connectors?.find((c) => c.name.toLowerCase().includes('walletconnect'))
-    if (!connector) {
-      setError('当前未配置 WalletConnect（需要设置 VITE_WC_PROJECT_ID）。')
-      return
-    }
-    connect({ connector }, { onError: (e) => setError(formatError(e)) })
-  }, [connectors, connect])
 
   const tokenAddr = tokenAddress.trim()
 
@@ -195,26 +202,19 @@ function App() {
       setError('请输入存入数量')
       return
     }
-    setError(null)
-    setLoadingDeposit(true)
-    try {
+    await runWithLoading(setLoadingDeposit, setError, async () => {
       await withSigner(async (signer) => {
         if (!currentChainConfig) throw new Error('链配置未加载')
         const token = new Contract(tokenAddr, ERC20_ABI, signer)
         const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, signer)
-        const txApprove = await token.approve(currentChainConfig.contracts.vault, amount)
-        await txApprove.wait()
+        await ensureAllowance(token, account!, currentChainConfig.contracts.vault, amount)
         const txDeposit = await vault.deposit(tokenAddr, amount)
         await txDeposit.wait()
       })
       setDepositAmount('')
       cacheInvalidate(CACHE_KEYS.BALANCE)
       await fetchBalances()
-    } catch (e) {
-      setError(formatError(e))
-    } finally {
-      setLoadingDeposit(false)
-    }
+    })
   }, [account, tokenAddr, depositAmount, fetchBalances, currentChainConfig])
 
   const handleWithdraw = useCallback(async () => {
@@ -227,9 +227,7 @@ function App() {
       setError('请输入提取数量')
       return
     }
-    setError(null)
-    setLoadingWithdraw(true)
-    try {
+    await runWithLoading(setLoadingWithdraw, setError, async () => {
       await withSigner(async (signer) => {
         if (!currentChainConfig) throw new Error('链配置未加载')
         const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, signer)
@@ -239,11 +237,7 @@ function App() {
       setWithdrawAmount('')
       cacheInvalidate(CACHE_KEYS.BALANCE)
       await fetchBalances()
-    } catch (e) {
-      setError(formatError(e))
-    } finally {
-      setLoadingWithdraw(false)
-    }
+    })
   }, [account, tokenAddr, withdrawAmount, fetchBalances, currentChainConfig])
 
   const fetchReserves = useCallback(async () => {
@@ -318,20 +312,14 @@ function App() {
       setError('当前链的 AMM 池尚未部署，请切换到已部署的链（如 Sepolia）')
       return
     }
-    setError(null)
-    setLoadingSwap(true)
-    try {
+    await runWithLoading(setLoadingSwap, setError, async () => {
       const tokenIn = swapTokenIn === 'token0' ? currentChainConfig.contracts.token0 : currentChainConfig.contracts.token1
       await withSigner(async (signer) => {
         const token = new Contract(tokenIn, ERC20_ABI, signer)
         const bal = await token.balanceOf(account!)
         if (bal < amount) throw new Error(`余额不足，钱包仅有 ${formatTokenAmount(bal)}`)
         const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, signer)
-        const allowance = await token.allowance(account!, currentChainConfig.contracts.ammPool)
-        if (allowance < amount) {
-          await (await token.approve(currentChainConfig.contracts.ammPool, 0n)).wait()
-          await (await token.approve(currentChainConfig.contracts.ammPool, amount)).wait()
-        }
+        await ensureAllowance(token, account!, currentChainConfig.contracts.ammPool, amount)
         await (await amm.swap(tokenIn, amount)).wait()
       })
       setSwapAmount('')
@@ -339,11 +327,7 @@ function App() {
       cacheInvalidate(CACHE_KEYS.BALANCE)
       cacheInvalidate(CACHE_KEYS.RESERVES)
       await fetchReserves()
-    } catch (e) {
-      setError(formatError(e))
-    } finally {
-      setLoadingSwap(false)
-    }
+    })
   }, [account, swapAmount, swapTokenIn, fetchReserves, currentChainConfig])
 
   const handleAddLiquidity = useCallback(async () => {
@@ -357,28 +341,22 @@ function App() {
         setError('当前链的 AMM 池尚未部署，请切换到已部署的链（如 Sepolia）')
         return
       }
-      setError(null)
-      setLoadingAddLiq(true)
-      try {
+      await runWithLoading(setLoadingAddLiq, setError, async () => {
         await withSigner(async (signer) => {
           const token0C = new Contract(currentChainConfig.contracts.token0, ERC20_ABI, signer)
           const token1C = new Contract(currentChainConfig.contracts.token1, ERC20_ABI, signer)
           const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, signer)
           await Promise.all([
-            token0C.approve(currentChainConfig.contracts.ammPool, amt0),
-            token1C.approve(currentChainConfig.contracts.ammPool, amt1),
-          ]).then((txs) => Promise.all(txs.map((tx) => tx.wait())))
+            ensureAllowance(token0C, account!, currentChainConfig.contracts.ammPool, amt0),
+            ensureAllowance(token1C, account!, currentChainConfig.contracts.ammPool, amt1),
+          ])
           await (await amm.addLiquidity(amt0, amt1)).wait()
         })
         setAddLiqAmount0('')
         setAddLiqAmount1('')
         cacheInvalidate(CACHE_KEYS.RESERVES)
         await fetchReserves()
-      } catch (e) {
-        setError(formatError(e))
-      } finally {
-        setLoadingAddLiq(false)
-      }
+      })
     }, [account, addLiqAmount0, addLiqAmount1, fetchReserves, currentChainConfig])
 
   const handleMaxDeposit = useCallback(() => {
@@ -446,7 +424,7 @@ function App() {
       )}
       <div className="app-header-top">
         <div>
-          <h1>P2P 交易所</h1>
+          <h1>比特100</h1>
           <p className="subtitle">
             {currentChainConfig?.name || '未知网络'} · 连钱包 · 存提 · Swap · 添加流动性
           </p>
@@ -469,30 +447,13 @@ function App() {
 
       {!account ? (
         <>
-          <div className="connect-buttons">
-            <button
-              className="btn primary"
-              onClick={handleConnectInjected}
-              disabled={connectPending}
-              type="button"
-            >
-              {connectPending ? '连接中...' : '浏览器钱包连接'}
-            </button>
-            {connectors?.some((c) => c.id === 'walletConnect' || c.name.toLowerCase().includes('walletconnect')) && (
-              <button
-                className="btn secondary"
-                onClick={handleConnectWalletConnect}
-                disabled={connectPending}
-                type="button"
-                style={{ marginLeft: '0.5rem' }}
-              >
-                {connectPending ? '连接中...' : 'WalletConnect / 钱包 App'}
-              </button>
-            )}
+          <div className="connect-buttons" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
+            <ConnectButton />
+            <p className="hint" style={{ margin: 0, fontSize: '0.85rem' }}>
+              手机端：推荐在 MetaMask、Trust 等钱包 App 内置浏览器中打开，连接成功率 90%+；或通过 WalletConnect 扫码连接。
+            </p>
+            <MobileConnectHint />
           </div>
-          <p className="hint" style={{ marginTop: '0.5rem', marginBottom: 0, fontSize: '0.85rem' }}>
-            手机端建议在 MetaMask、Trust 等钱包 App 内置浏览器中打开本页，或使用 WalletConnect 从外部浏览器自动拉起钱包 App。
-          </p>
           <p className="hint" style={{ marginTop: '0.25rem', marginBottom: 0, fontSize: '0.8rem' }}>
             支持主流 EVM 钱包：MetaMask、Rabby、Phantom（EVM 模式）、OKX、Bitget、imToken、Trust 等。
           </p>
@@ -503,23 +464,23 @@ function App() {
           </div>
         </>
       ) : (
-        <div className="card">
-          <div className="row">
-            <span className="label">当前账户</span>
-            <span className="value mono">{shortAddress(account)}</span>
+          <div className="card">
+            <div className="row">
+              <span className="label">当前账户</span>
+              <span className="value mono">{shortAddress(account)}</span>
+            </div>
+            <div className="row">
+              <span className="label">连接方式</span>
+              <span className="value">{connectionLabel}</span>
+            </div>
+            <div className="row">
+              <span className="label">钱包 ETH 余额</span>
+              <span className="value">{ethBalance} ETH</span>
+            </div>
+            <button type="button" className="btn secondary" onClick={() => disconnect()} style={{ marginTop: '0.5rem' }}>
+              断开连接
+            </button>
           </div>
-          <div className="row">
-            <span className="label">连接方式</span>
-            <span className="value">{connectionLabel}</span>
-          </div>
-          <div className="row">
-            <span className="label">钱包 ETH 余额</span>
-            <span className="value">{ethBalance} ETH</span>
-          </div>
-          <button type="button" className="btn secondary" onClick={() => disconnect()} style={{ marginTop: '0.5rem' }}>
-            断开连接
-          </button>
-        </div>
       )}
 
       {account && (
@@ -527,7 +488,7 @@ function App() {
           <Navigation activeTab={activeTab} onTabChange={setActiveTab} account={account} />
 
           {(activeTab === 'vault' || activeTab === 'swap') && (
-            <>
+            <div className="vault-layout">
               <div className="card vault-section">
                 <h2>代币与 Vault 余额</h2>
                 <p className="hint">输入 ERC20 代币合约地址，或点下方快捷填入。代币地址与 Swap 方向会保存在本机，刷新后仍保留；清除浏览器/缓存会丢失。</p>
@@ -554,61 +515,63 @@ function App() {
                 {(vaultBalance !== '' || walletTokenBalance !== '') && !error && (
                   <div className="balances">
                     <div className="row result">
-                      <span className="label">钱包中该代币</span>
+                      <span className="label">钱包余额</span>
                       <span className="value">{walletTokenBalance}</span>
                     </div>
                     <div className="row result">
-                      <span className="label">Vault 中该代币</span>
+                      <span className="label">可提取余额</span>
                       <span className="value">{vaultBalance}</span>
                     </div>
                   </div>
                 )}
               </div>
 
-              <div className="card vault-section">
-                <h2>存入 Vault</h2>
-                <p className="hint">先 approve 再 deposit，需有该代币余额</p>
-                <div className="input-row">
-                  <input
-                    type="text"
-                    placeholder="数量"
-                    value={depositAmount}
-                    onChange={(e) => setDepositAmount(e.target.value)}
-                    className="input"
-                  />
-                  <button type="button" className="btn-max" onClick={handleMaxDeposit}>最大</button>
+              <div className="vault-actions-grid">
+                <div className="card vault-section">
+                  <h2>存入</h2>
+                  <p className="hint">首次存入需在钱包中确认两次（授权 + 存入），之后可直接存入。需有代币余额。</p>
+                  <div className="input-row">
+                    <input
+                      type="text"
+                      placeholder="数量"
+                      value={depositAmount}
+                      onChange={(e) => setDepositAmount(e.target.value)}
+                      className="input"
+                    />
+                    <button type="button" className="btn-max" onClick={handleMaxDeposit}>最大</button>
+                  </div>
+                  <button
+                    className="btn primary"
+                    onClick={handleDeposit}
+                    disabled={loadingDeposit || !isValidAddress(tokenAddr) || !depositAmount.trim()}
+                  >
+                    {loadingDeposit ? '处理中…' : '存入'}
+                  </button>
                 </div>
-                <button
-                  className="btn primary"
-                  onClick={handleDeposit}
-                  disabled={loadingDeposit || !isValidAddress(tokenAddr) || !depositAmount.trim()}
-                >
-                  {loadingDeposit ? '处理中…' : '存入'}
-                </button>
-              </div>
 
-              <div className="card vault-section">
-                <h2>从 Vault 提取</h2>
-                <p className="hint">从 Vault 提回钱包，不超过 Vault 中该代币余额</p>
-                <div className="input-row">
-                  <input
-                    type="text"
-                    placeholder="数量"
-                    value={withdrawAmount}
-                    onChange={(e) => setWithdrawAmount(e.target.value)}
-                    className="input"
-                  />
-                  <button type="button" className="btn-max" onClick={handleMaxWithdraw}>最大</button>
+                <div className="card vault-section">
+                  <h2>提取</h2>
+                  <p className="hint">提回钱包，不超过可提取余额</p>
+                  <div className="input-row">
+                    <input
+                      type="text"
+                      placeholder="数量"
+                      value={withdrawAmount}
+                      onChange={(e) => setWithdrawAmount(e.target.value)}
+                      className="input"
+                    />
+                    <button type="button" className="btn-max" onClick={handleMaxWithdraw}>最大</button>
+                  </div>
+                  <button
+                    className="btn secondary"
+                    onClick={handleWithdraw}
+                    disabled={loadingWithdraw || !isValidAddress(tokenAddr) || !withdrawAmount.trim()}
+                  >
+                    {loadingWithdraw ? '处理中…' : '提取'}
+                  </button>
                 </div>
-                <button
-                  className="btn secondary"
-                  onClick={handleWithdraw}
-                  disabled={loadingWithdraw || !isValidAddress(tokenAddr) || !withdrawAmount.trim()}
-                >
-                  {loadingWithdraw ? '处理中…' : '提取'}
-                </button>
               </div>
-            </>
+            </div>
           )}
 
           {activeTab === 'data' && (
@@ -634,39 +597,78 @@ function App() {
           )}
 
           {activeTab === 'swap' && (
-            <div className="card vault-section">
-              <h2>AMM Swap</h2>
-            <p className="hint">Token A ↔ Token B，0.01% 手续费，单笔最高等值 1 USD。池子需有流动性。</p>
-            <div className="row">
-              <span className="label">池子储备</span>
-              <span className="value mono">TKA: {reserve0} · TKB: {reserve1}</span>
-            </div>
-            <select
-              value={swapTokenIn}
-              onChange={(e) => setSwapTokenIn(e.target.value as 'token0' | 'token1')}
-              className="input"
-            >
-              <option value="token0">TKA → TKB</option>
-              <option value="token1">TKB → TKA</option>
-            </select>
-            <div className="input-row">
-              <input
-                type="text"
-                placeholder="输入数量"
-                value={swapAmount}
-                onChange={(e) => setSwapAmount(e.target.value)}
-                className="input"
-              />
-              <button type="button" className="btn-max" onClick={handleMaxSwap}>最大</button>
-            </div>
-            {swapAmountOut && <div className="row result"><span className="label">预计获得</span><span className="value">{swapAmountOut}</span></div>}
-            <button
-              className="btn primary"
-              onClick={handleSwap}
-              disabled={loadingSwap || !swapAmount.trim() || parseAmount(swapAmount) === 0n}
-            >
-              {loadingSwap ? '处理中…' : 'Swap'}
-            </button>
+            <div className="swap-liq-grid">
+              <div className="card vault-section">
+                <h2>AMM Swap</h2>
+                <p className="hint">Token A ↔ Token B，0.01% 手续费，单笔最高等值 1 USD。池子需有流动性。</p>
+                <div className="row">
+                  <span className="label">池子储备</span>
+                  <span className="value mono">TKA: {reserve0} · TKB: {reserve1}</span>
+                </div>
+                <select
+                  value={swapTokenIn}
+                  onChange={(e) => setSwapTokenIn(e.target.value as 'token0' | 'token1')}
+                  className="input"
+                >
+                  <option value="token0">TKA → TKB</option>
+                  <option value="token1">TKB → TKA</option>
+                </select>
+                <div className="input-row">
+                  <input
+                    type="text"
+                    placeholder="输入数量"
+                    value={swapAmount}
+                    onChange={(e) => setSwapAmount(e.target.value)}
+                    className="input"
+                  />
+                  <button type="button" className="btn-max" onClick={handleMaxSwap}>最大</button>
+                </div>
+                {swapAmountOut && (
+                  <div className="row result">
+                    <span className="label">预计获得</span>
+                    <span className="value">{swapAmountOut}</span>
+                  </div>
+                )}
+                <button
+                  className="btn primary"
+                  onClick={handleSwap}
+                  disabled={loadingSwap || !swapAmount.trim() || parseAmount(swapAmount) === 0n}
+                >
+                  {loadingSwap ? '处理中…' : 'Swap'}
+                </button>
+              </div>
+
+              <div className="card vault-section">
+                <h2>添加流动性</h2>
+                <p className="hint">向 AMM 池添加 Token A 和 Token B，需有该代币余额</p>
+                <div className="input-row">
+                  <input
+                    type="text"
+                    placeholder="Token A 数量"
+                    value={addLiqAmount0}
+                    onChange={(e) => setAddLiqAmount0(e.target.value)}
+                    className="input"
+                  />
+                  <button type="button" className="btn-max" onClick={handleMaxAddLiq0}>最大</button>
+                </div>
+                <div className="input-row">
+                  <input
+                    type="text"
+                    placeholder="Token B 数量"
+                    value={addLiqAmount1}
+                    onChange={(e) => setAddLiqAmount1(e.target.value)}
+                    className="input"
+                  />
+                  <button type="button" className="btn-max" onClick={handleMaxAddLiq1}>最大</button>
+                </div>
+                <button
+                  className="btn secondary"
+                  onClick={handleAddLiquidity}
+                  disabled={loadingAddLiq || !addLiqAmount0.trim() || !addLiqAmount1.trim()}
+                >
+                  {loadingAddLiq ? '处理中…' : '添加流动性'}
+                </button>
+              </div>
             </div>
           )}
 
@@ -678,7 +680,9 @@ function App() {
 
           {activeTab === 'contribution' && (
             <>
+              <NodeLaunchRewards account={account} />
               <UnifiedRewardClaim account={account} />
+              <MerkleAirdropClaim account={account} />
               <ContributionSection account={account} />
             </>
           )}
@@ -687,45 +691,13 @@ function App() {
             <CrossChainBridge account={account} currentChainId={currentChainId} />
           )}
 
-          {(activeTab === 'vault' || activeTab === 'swap') && (
-            <div className="card vault-section">
-              <h2>添加流动性</h2>
-            <p className="hint">向 AMM 池添加 Token A 和 Token B，需有该代币余额</p>
-            <div className="input-row">
-              <input
-                type="text"
-                placeholder="Token A 数量"
-                value={addLiqAmount0}
-                onChange={(e) => setAddLiqAmount0(e.target.value)}
-                className="input"
-              />
-              <button type="button" className="btn-max" onClick={handleMaxAddLiq0}>最大</button>
-            </div>
-            <div className="input-row">
-              <input
-                type="text"
-                placeholder="Token B 数量"
-                value={addLiqAmount1}
-                onChange={(e) => setAddLiqAmount1(e.target.value)}
-                className="input"
-              />
-              <button type="button" className="btn-max" onClick={handleMaxAddLiq1}>最大</button>
-            </div>
-            <button
-              className="btn secondary"
-              onClick={handleAddLiquidity}
-              disabled={loadingAddLiq || !addLiqAmount0.trim() || !addLiqAmount1.trim()}
-            >
-              {loadingAddLiq ? '处理中…' : '添加流动性'}
-            </button>
-            </div>
-          )}
+          {/* 添加流动性已在 Swap 标签下与 Swap 并排展示 */}
 
         </>
       )}
 
       <ErrorDisplay
-        error={error ?? (connectError ? formatError(connectError) : null)}
+        error={error}
         onRetry={() => {
           setError(null)
           if (account && isValidAddress(tokenAddr)) fetchBalances()

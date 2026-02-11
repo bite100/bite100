@@ -31,6 +31,12 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
+        env:
+          # 可选：在仓库 Settings → Secrets 中设置
+          # VITE_NODE_API_URL：节点 API 地址，线上前端将连到该节点
+          # VITE_BASE：若 Pages 地址为 https://用户.github.io/仓库名/，设为 /仓库名/
+          VITE_NODE_API_URL: ${{ secrets.VITE_NODE_API_URL }}
+          VITE_BASE: ${{ secrets.VITE_BASE }}
         run: npm run build
 
       - name: Upload artifact

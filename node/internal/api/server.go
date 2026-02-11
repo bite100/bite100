@@ -14,6 +14,7 @@ import (
 	"github.com/P2P-P2P/p2p/node/internal/match"
 	"github.com/P2P-P2P/p2p/node/internal/storage"
 	syncpkg "github.com/P2P-P2P/p2p/node/internal/sync"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // orderRateLimiter 按 key（如 IP）滑动窗口限流，用于 API 下单 Spam 防护
@@ -33,6 +34,22 @@ func newOrderRateLimiter(perMinute int, window time.Duration) *orderRateLimiter 
 		limit:  perMinute,
 		window: window,
 	}
+}
+
+// MaskIP 脱敏 IP，用于日志输出（不记录完整 IP 策略）
+func MaskIP(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	// IPv4: 192.168.1.100 -> 192.168.1.xxx
+	if idx := strings.LastIndex(ip, "."); idx > 0 && idx < len(ip)-1 {
+		return ip[:idx+1] + "xxx"
+	}
+	// IPv6 或异常：取前几位 + xxx
+	if len(ip) > 8 {
+		return ip[:8] + "..."
+	}
+	return "xxx"
 }
 
 func remoteIP(r *http.Request) string {
@@ -87,7 +104,26 @@ type Server struct {
 	RewardWallet             string // 领奖地址（VPS/Docker 下由 env REWARD_WALLET 配置，仅展示）
 	WSServer                 *WSServer // WebSocket 服务器
 	RateLimitOrdersPerMinute uint64    // 每 IP 每分钟下单上限，0=不限制（Spam 防护）
+	BlockedTraders           map[string]struct{} // 黑名单：拒绝这些地址下单（Spam 防护；从 config api.blocked_traders 构建）
 	orderLimiter              *orderRateLimiter
+}
+
+// BuildTraderBlacklist 从配置构建 trader 黑名单 map（地址统一小写）；用于 Spam 防护
+func BuildTraderBlacklist(addrs []string) map[string]struct{} {
+	if len(addrs) == 0 {
+		return nil
+	}
+	m := make(map[string]struct{}, len(addrs))
+	for _, a := range addrs {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			m[strings.ToLower(a)] = struct{}{}
+		}
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // OrderbookResponse 订单簿 GET 响应
@@ -101,6 +137,12 @@ type OrderbookResponse struct {
 func (s *Server) Run(listen string) {
 	if listen == "" {
 		return
+	}
+	// 节点启动时从存储恢复订单簿（清单 1.1 节点重启后订单簿同步）
+	if s.Store != nil && s.MatchEngine != nil {
+		if err := match.RestoreOrdersFromStore(s.MatchEngine, s.Store); err != nil {
+			log.Printf("[api] 订单簿恢复失败: %v", err)
+		}
 	}
 	if s.RateLimitOrdersPerMinute > 0 {
 		s.orderLimiter = newOrderRateLimiter(int(s.RateLimitOrdersPerMinute), time.Minute)
@@ -120,6 +162,7 @@ func (s *Server) Run(listen string) {
 	mux.HandleFunc("/api/order/cancel", s.cors(s.handleCancelOrder))
 	mux.HandleFunc("/api/health", s.cors(s.handleHealth))
 	mux.HandleFunc("/api/node", s.cors(s.handleNode))
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/ws", s.handleWebSocket)
 	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("[api] 监听 %s (含 WebSocket)", listen)
@@ -260,10 +303,11 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "publish not configured", http.StatusServiceUnavailable)
 		return
 	}
-	// Spam 防护：按 IP 速率限制
+	// Spam 防护：按 IP 速率限制（IP 仅存内存，不持久化，见 docs/隐私与不记录IP策略.md）
 	if s.orderLimiter != nil {
 		ip := remoteIP(r)
 		if !s.orderLimiter.Allow(ip) {
+			log.Printf("[api] 下单速率超限（来源已脱敏）: %s", MaskIP(ip))
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -276,6 +320,13 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 	if o.OrderID == "" || o.Pair == "" || o.Side == "" || o.Price == "" || o.Amount == "" {
 		http.Error(w, "missing required fields", http.StatusBadRequest)
 		return
+	}
+	// Spam 防护：黑名单 trader 拒绝
+	if s.BlockedTraders != nil {
+		if _, blocked := s.BlockedTraders[strings.ToLower(o.Trader)]; blocked {
+			http.Error(w, "trader blocked", http.StatusForbidden)
+			return
+		}
 	}
 	if o.Signature == "" {
 		http.Error(w, "signature required", http.StatusBadRequest)
@@ -342,10 +393,21 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// 验证取消订单签名（如果提供了签名和用户地址）
+	// 验证取消订单签名（如果提供了签名和用户地址）；同时检查黑名单
+	if s.Store != nil {
+		order, err := s.Store.GetOrder(req.OrderID)
+		if err == nil && order != nil {
+			// Spam 防护：黑名单 trader 拒绝撤单
+			if s.BlockedTraders != nil {
+				if _, blocked := s.BlockedTraders[strings.ToLower(order.Trader)]; blocked {
+					http.Error(w, "trader blocked", http.StatusForbidden)
+					return
+				}
+			}
+		}
+	}
 	if req.Signature != "" {
-		// 需要从订单中获取用户地址，这里简化处理，实际应从订单存储中查询
-		// 如果订单不存在或无法获取用户地址，跳过签名验证（向后兼容）
+		// 需要从订单中获取用户地址
 		if s.Store != nil {
 			order, err := s.Store.GetOrder(req.OrderID)
 			if err == nil && order != nil {

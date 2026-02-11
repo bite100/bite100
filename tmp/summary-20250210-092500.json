@@ -1,0 +1,4 @@
+{
+  "summary": "按 优化与改进清单 §2.1「打开钱包失败」项，优化错误处理与用户提示：1) utils.formatError 新增 connector not found、连接超时 等钱包相关错误的中文提示；2) ErrorDisplay 在网络/连接/钱包/超时类错误时展示引导文案「若持续失败，请刷新页面或尝试在 MetaMask、Trust 等钱包 App 内置浏览器中打开」；3) 补充 formatError 单测。",
+  "current_status": "比特100 钱包连接失败时的错误提示与重试引导已优化，构建与测试通过。"
+}

@@ -1,46 +1,64 @@
-# P2P 节点配置（复制为 config.yaml 使用）
-# 领奖地址必填，可通过 reward_wallet、环境变量 REWARD_WALLET 或 -reward-wallet 设置
+# ============================================================
+# P2P 节点配置
+# 防 Sybil：NodeRewards 合约限制每钱包最多 3 节点（MAX_NODES_PER_WALLET）
+# 使用：复制为 config.yaml，然后按需修改
+# ============================================================
+#
+# 【小白必改】
+#  - reward_wallet：你的钱包地址（0x 开头），用于领取节点奖励。可通过环境变量 REWARD_WALLET 或启动参数 -reward-wallet 设置
+#
+# 【其余可不改】本地开发或一键脚本会自动用默认值
+# ============================================================
+
 node:
-  type: relay   # storage | relay
+  type: relay        # relay=中继（默认）| storage=存储 | match=撮合
   data_dir: ./data
   listen:
     - /ip4/0.0.0.0/tcp/4001
-  reward_wallet: ""   # 领奖钱包地址（0x 开头 42 字符），也可用 env REWARD_WALLET 或 -reward-wallet
+  reward_wallet: ""  # 必填：领奖钱包（0x 开头 42 字符）
 
 network:
-  # P2P 无中心。不填也能运行；填了则启动时自动连这些节点
-  bootstrap: []
-  topics:         # GossipSub 订阅的 topic（为空则默认含 Phase 3.1 订单/成交主题）；Phase 3.3 可按 peer 限流
+  bootstrap: []      # 留空也能运行；填了则自动连接这些节点
+  use_tor: false     # 高级：true=经 Tor 代理出站，隐藏 IP
+  tor_socks_addr: "127.0.0.1:9050"
+  topics:            # 一般无需改
     - /p2p-exchange/sync/trades
     - /p2p-exchange/sync/orderbook
     - /p2p-exchange/order/new
     - /p2p-exchange/order/cancel
     - /p2p-exchange/trade/executed
 
-relay:            # 仅中继节点（Phase 3.3）：限流与信誉，抗 Sybil 基础
-  rate_limit_bytes_per_sec_per_peer: 0   # 每 peer 每秒字节上限，0=不限制
-  rate_limit_msgs_per_sec_per_peer: 0    # 每 peer 每秒消息数上限，0=不限制
+relay:
+  rate_limit_bytes_per_sec_per_peer: 0
+  rate_limit_msgs_per_sec_per_peer: 0
 
-storage:          # 仅存储节点
-  retention_months: 0   # 0 = 统一两周，>0 = 保留月数（超期自动删除）
+storage:
+  retention_months: 0   # 0=两周，>0=月数
 
-match:            # 仅撮合节点（Phase 3.2）：交易对与链上代币，用于结算
+match:
   pairs:
     TKA/TKB:
-      token0: ""   # base 代币合约地址（如 Sepolia TKA）
-      token1: ""   # quote 代币合约地址（如 Sepolia TKB）
+      token0: ""
+      token1: ""
 
-metrics:          # 贡献指标与证明（M3）
-  proof_period_days: 7  # 证明周期（天）；验收 24h 可设为 1
-  proof_output_dir: "" # 证明落盘目录，默认 data_dir/proofs
+metrics:
+  proof_period_days: 7
+  proof_output_dir: ""
 
-api:              # Phase 3.5 前端：订单簿、下单/撤单、成交（空则不开 HTTP API）
-  listen: ""      # 如 ":8080" 开启后前端可配置 NODE_API 连接
-  rate_limit_orders_per_minute: 0   # 每 IP 每分钟下单上限，0=不限制（Spam 防护，可设如 30）
+api:
+  listen: ":8080"    # 填 :8080 即开启，前端可连；空=不开启
+  rate_limit_orders_per_minute: 0
+  # 黑名单：拒绝这些地址的下单/撤单（Spam 防护，可选，多数节点可留空）
+  # 示例：
+  # blocked_traders:
+  #   - "0x000000000000000000000000000000000000dEaD"
+  blocked_traders: []
 
-chain:            # 可选：从链上拉取历史成交
-  rpc_url: ""         # 如 https://sepolia.infura.io/v3/...
+chain:               # 可选，从链上拉取历史成交时填
+  rpc_url: ""
   chain_id: 11155111
-  amm_pool: ""        # AMMPool 合约地址
+  amm_pool: ""
   token0: ""
   token1: ""
+  # §12.3 多 Relayer：多个 relayer API 地址，按轮询选择，避免单点
+  relayer_endpoints: []

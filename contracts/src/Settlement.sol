@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./interfaces/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./Vault.sol";
 import "./FeeDistributor.sol";
+import "./NodeRewards.sol";
 import "./MerkleProof.sol";
 
 /// @title Settlement 交易结算
@@ -55,6 +56,11 @@ contract Settlement {
     event MaxGasReimbursePerTradeSet(uint256 oldCap, uint256 newCap);
     event GovernanceSet(address indexed governance);
     event TradesBatchSettledWithMerkle(uint256 indexed batchId, bytes32 merkleRoot, uint256 count);
+    event GasSavingsDistributed(uint256 userRebateUsdt, uint256 toFeeDistributorUsdt, uint256 toFounderUsdt);
+
+    address public nodeRewards;
+    address public founder;
+    address public usdtToken;
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Settlement: not owner");
@@ -118,11 +124,67 @@ contract Settlement {
         emit MaxGasReimbursePerTradeSet(old, _cap);
     }
 
+    function setNodeRewards(address _nodeRewards) external onlyOwner {
+        nodeRewards = _nodeRewards;
+    }
+
+    function setFounder(address _founder) external onlyOwner {
+        founder = _founder;
+    }
+
+    /// @notice 设置 USDT 代币地址（用于 gas 节省减 fee 与分配）
+    function setUsdtToken(address _usdtToken) external onlyOwner {
+        usdtToken = _usdtToken;
+    }
+
     /// @notice 检查调用者是否为授权结算方（owner、单一 relayer 或白名单 relayer）
     function _isSettlementCaller() internal view returns (bool) {
         return msg.sender == owner
             || (relayer != address(0) && msg.sender == relayer)
             || isRelayer[msg.sender];
+    }
+
+    /// @notice 内部：按给定 fee 执行单笔结算（供批量与 gas 节省逻辑复用）
+    function _settleOne(
+        address maker,
+        address taker,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOut,
+        uint256 feeIn,
+        uint256 feeOut,
+        uint256 gasReimburseIn,
+        uint256 gasReimburseOut
+    ) internal {
+        require(amountIn >= feeIn + gasReimburseIn, "Settlement: amountIn < fee + gas");
+        require(amountOut >= feeOut + gasReimburseOut, "Settlement: amountOut < fee + gas");
+        address _feeDist = address(feeDistributor);
+        address gasRecipient = (gasReimburseIn > 0 || gasReimburseOut > 0) ? msg.sender : address(0);
+        uint256 takerReceives = amountIn - feeIn - gasReimburseIn;
+        uint256 makerReceives = amountOut - feeOut - gasReimburseOut;
+
+        vault.transferWithinVault(maker, taker, tokenIn, takerReceives);
+        if (feeIn != 0 && _feeDist != address(0)) {
+            vault.transferOut(maker, address(this), tokenIn, feeIn);
+            require(IERC20(tokenIn).approve(_feeDist, feeIn), "Settlement: approve failed");
+            FeeDistributor(_feeDist).receiveFee(tokenIn, feeIn);
+        }
+        if (gasReimburseIn != 0) vault.transferOut(maker, gasRecipient, tokenIn, gasReimburseIn);
+
+        vault.transferWithinVault(taker, maker, tokenOut, makerReceives);
+        if (feeOut != 0 && _feeDist != address(0)) {
+            vault.transferOut(taker, address(this), tokenOut, feeOut);
+            require(IERC20(tokenOut).approve(_feeDist, feeOut), "Settlement: approve failed");
+            FeeDistributor(_feeDist).receiveFee(tokenOut, feeOut);
+        }
+        if (gasReimburseOut > 0) vault.transferOut(taker, gasRecipient, tokenOut, gasReimburseOut);
+
+        if (gasReimburseIn > 0 || gasReimburseOut > 0) {
+            emit TradeSettledWithGasReimburse(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn + feeOut, gasReimburseIn, gasReimburseOut, gasRecipient);
+        } else {
+            emit TradeSettled(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn + feeOut);
+        }
     }
 
     /// @param maker 挂单方
@@ -149,53 +211,19 @@ contract Settlement {
         if (withGas && maxGasReimbursePerTrade > 0) {
             require(gasReimburseIn + gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
         }
-
         require(maker != address(0) && taker != address(0), "Settlement: zero address");
         require(tokenIn != address(0) && tokenOut != address(0), "Settlement: zero token");
         require(amountIn > 0 && amountOut > 0, "Settlement: zero amount");
 
-        // 买卖双方各自代币收取 0.01%，每边最高 feeCapPerToken（0 表示不设上限）
-        uint256 feeIn = (amountIn * feeBps) / 10000;
+        uint16 _feeBps = feeBps;
+        uint256 feeIn = (amountIn * _feeBps) / 10000;
         uint256 capIn = feeCapPerToken[tokenIn];
-        if (capIn > 0 && feeIn > capIn) feeIn = capIn;
-
-        uint256 feeOut = (amountOut * feeBps) / 10000;
+        if (capIn != 0 && feeIn > capIn) feeIn = capIn;
+        uint256 feeOut = (amountOut * _feeBps) / 10000;
         uint256 capOut = feeCapPerToken[tokenOut];
-        if (capOut > 0 && feeOut > capOut) feeOut = capOut;
+        if (capOut != 0 && feeOut > capOut) feeOut = capOut;
 
-        require(amountIn >= feeIn + gasReimburseIn, "Settlement: amountIn < fee + gas");
-        require(amountOut >= feeOut + gasReimburseOut, "Settlement: amountOut < fee + gas");
-
-        uint256 makerReceives = amountOut - feeOut - gasReimburseOut;
-        uint256 takerReceives = amountIn - feeIn - gasReimburseIn;
-        address gasRecipient = withGas ? msg.sender : address(0);
-
-        // maker 转出 tokenIn：taker 得 takerReceives，手续费 feeIn，gas 代付得 gasReimburseIn
-        vault.transferWithinVault(maker, taker, tokenIn, takerReceives);
-        if (feeIn > 0 && address(feeDistributor) != address(0)) {
-            vault.transferOut(maker, address(this), tokenIn, feeIn);
-            require(IERC20(tokenIn).approve(address(feeDistributor), feeIn), "Settlement: approve failed");
-            feeDistributor.receiveFee(tokenIn, feeIn);
-        }
-        if (gasReimburseIn > 0) {
-            vault.transferOut(maker, gasRecipient, tokenIn, gasReimburseIn);
-        }
-        // taker 转出 tokenOut：maker 得 makerReceives，手续费 feeOut，gas 代付得 gasReimburseOut
-        vault.transferWithinVault(taker, maker, tokenOut, makerReceives);
-        if (feeOut > 0 && address(feeDistributor) != address(0)) {
-            vault.transferOut(taker, address(this), tokenOut, feeOut);
-            require(IERC20(tokenOut).approve(address(feeDistributor), feeOut), "Settlement: approve failed");
-            feeDistributor.receiveFee(tokenOut, feeOut);
-        }
-        if (gasReimburseOut > 0) {
-            vault.transferOut(taker, gasRecipient, tokenOut, gasReimburseOut);
-        }
-
-        if (withGas) {
-            emit TradeSettledWithGasReimburse(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn + feeOut, gasReimburseIn, gasReimburseOut, gasRecipient);
-        } else {
-            emit TradeSettled(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn + feeOut);
-        }
+        _settleOne(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn, feeOut, gasReimburseIn, gasReimburseOut);
     }
 
     /// @notice 批量结算多笔交易（节省 Gas）；参数数组长度需一致
@@ -232,7 +260,8 @@ contract Settlement {
         require(len > 0 && len <= 50, "Settlement: batch size 1-50");
 
         for (uint256 i = 0; i < len; i++) {
-            settleTrade(
+            // 通过外部调用复用 settleTrade 的校验与 gas 上限逻辑
+            this.settleTrade(
                 makers[i],
                 takers[i],
                 tokenIns[i],
@@ -242,6 +271,113 @@ contract Settlement {
                 gasReimburseIns[i],
                 gasReimburseOuts[i]
             );
+        }
+    }
+
+    /// @notice 批量结算并分配 gas 节省：50% 减 fee 退用户，25% 进 FeeDistributor，25% 进 NodeRewards 创始人积分（按当时 USDT 价值）
+    /// @param gasSavingsUsdt6 本次批量相对单笔结算节省的 gas 价值（USDT 6 位小数）；0 则不做分配
+    /// 调用前 relayer 需 approve(settlement, gasSavingsUsdt6 * 50%)，用于 25% FD + 25% 创始人
+    function settleTradesBatchWithGasSavings(
+        address[] calldata makers,
+        address[] calldata takers,
+        address[] calldata tokenIns,
+        address[] calldata tokenOuts,
+        uint256[] calldata amountIns,
+        uint256[] calldata amountOuts,
+        uint256[] calldata gasReimburseIns,
+        uint256[] calldata gasReimburseOuts,
+        uint256 gasSavingsUsdt6
+    ) external {
+        require(_isSettlementCaller(), "Settlement: not auth");
+        uint256 len = makers.length;
+        require(
+            len == takers.length &&
+            len == tokenIns.length &&
+            len == tokenOuts.length &&
+            len == amountIns.length &&
+            len == amountOuts.length &&
+            len == gasReimburseIns.length &&
+            len == gasReimburseOuts.length,
+            "Settlement: length mismatch"
+        );
+        require(len > 0 && len <= 50, "Settlement: batch size 1-50");
+
+        if (gasSavingsUsdt6 == 0) {
+            for (uint256 i = 0; i < len; i++) {
+                // gasSavingsUsdt6 为 0 时，直接复用单笔结算逻辑
+                this.settleTrade(
+                    makers[i], takers[i], tokenIns[i], tokenOuts[i],
+                    amountIns[i], amountOuts[i], gasReimburseIns[i], gasReimburseOuts[i]
+                );
+            }
+            return;
+        }
+
+        address _usdt = usdtToken;
+        uint16 _feeBps = feeBps;
+        uint256 totalFeeUsdt;
+        uint256[] memory feeIns = new uint256[](len);
+        uint256[] memory feeOuts = new uint256[](len);
+
+        for (uint256 i = 0; i < len; i++) {
+            require(makers[i] != address(0) && takers[i] != address(0), "Settlement: zero address");
+            require(tokenIns[i] != address(0) && tokenOuts[i] != address(0), "Settlement: zero token");
+            require(amountIns[i] > 0 && amountOuts[i] > 0, "Settlement: zero amount");
+            if (gasReimburseIns[i] + gasReimburseOuts[i] > 0 && maxGasReimbursePerTrade > 0) {
+                require(gasReimburseIns[i] + gasReimburseOuts[i] <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
+            }
+            uint256 feeIn = (amountIns[i] * _feeBps) / 10000;
+            uint256 capIn = feeCapPerToken[tokenIns[i]];
+            if (capIn != 0 && feeIn > capIn) feeIn = capIn;
+            uint256 feeOut = (amountOuts[i] * _feeBps) / 10000;
+            uint256 capOut = feeCapPerToken[tokenOuts[i]];
+            if (capOut != 0 && feeOut > capOut) feeOut = capOut;
+            feeIns[i] = feeIn;
+            feeOuts[i] = feeOut;
+            if (_usdt != address(0)) {
+                if (tokenIns[i] == _usdt) totalFeeUsdt += feeIn;
+                if (tokenOuts[i] == _usdt) totalFeeUsdt += feeOut;
+            }
+        }
+
+        uint256 userRebateUsdt;
+        if (_usdt != address(0) && totalFeeUsdt > 0) {
+            userRebateUsdt = (gasSavingsUsdt6 * 50) / 100;
+            if (userRebateUsdt > totalFeeUsdt) userRebateUsdt = totalFeeUsdt;
+            for (uint256 i = 0; i < len; i++) {
+                uint256 feeInUsdt = tokenIns[i] == _usdt ? feeIns[i] : 0;
+                uint256 feeOutUsdt = tokenOuts[i] == _usdt ? feeOuts[i] : 0;
+                uint256 part = feeInUsdt + feeOutUsdt;
+                if (part == 0 || totalFeeUsdt == 0) continue;
+                uint256 deduct = (userRebateUsdt * part) / totalFeeUsdt;
+                uint256 deductIn = (deduct * feeInUsdt) / part;
+                uint256 deductOut = deduct - deductIn;
+                if (feeInUsdt >= deductIn) feeIns[i] -= deductIn; else feeIns[i] = 0;
+                if (feeOutUsdt >= deductOut) feeOuts[i] -= deductOut; else feeOuts[i] = 0;
+            }
+        }
+
+        for (uint256 i = 0; i < len; i++) {
+            _settleOne(
+                makers[i], takers[i], tokenIns[i], tokenOuts[i],
+                amountIns[i], amountOuts[i], feeIns[i], feeOuts[i],
+                gasReimburseIns[i], gasReimburseOuts[i]
+            );
+        }
+
+        uint256 toFD = (gasSavingsUsdt6 * 25) / 100;
+        uint256 toFounder = (gasSavingsUsdt6 * 25) / 100;
+        if (toFD + toFounder > 0 && _usdt != address(0) && address(feeDistributor) != address(0) && nodeRewards != address(0) && founder != address(0)) {
+            require(IERC20(_usdt).transferFrom(msg.sender, address(this), toFD + toFounder), "Settlement: gas savings transfer");
+            if (toFD > 0) {
+                require(IERC20(_usdt).approve(address(feeDistributor), toFD), "Settlement: approve FD");
+                feeDistributor.receiveFee(_usdt, toFD);
+            }
+            if (toFounder > 0) {
+                require(IERC20(_usdt).approve(nodeRewards, toFounder), "Settlement: approve NR");
+                NodeRewards(nodeRewards).depositFounderReward(founder, toFounder);
+            }
+            emit GasSavingsDistributed(userRebateUsdt, toFD, toFounder);
         }
     }
 
@@ -300,9 +436,9 @@ contract Settlement {
             require(MerkleProof.verify(proofs[i], merkleRoot, leaf), "Settlement: invalid merkle proof");
         }
 
-        // 验证通过后批量结算
+        // 验证通过后批量结算，复用单笔结算逻辑
         for (uint256 i = 0; i < len; i++) {
-            settleTrade(
+            this.settleTrade(
                 makers[i],
                 takers[i],
                 tokenIns[i],

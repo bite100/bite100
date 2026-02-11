@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./interfaces/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./FeeDistributor.sol";
 import "./ContributorReward.sol";
 
@@ -258,7 +258,7 @@ contract AMMPoolWithLiquidityReward {
     }
 
     /// @notice 查询流动性提供者的流动性数量
-    function getLiquidityAmount(address provider) external view returns (uint256) {
+    function getLiquidityAmount(address provider) public view returns (uint256) {
         LiquidityProvider memory p = liquidityProviders[provider];
         return _calculateLiquidityAmount(p.currentLiquidity0, p.currentLiquidity1);
     }

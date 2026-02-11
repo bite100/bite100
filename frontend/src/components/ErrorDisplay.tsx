@@ -19,14 +19,19 @@ export function ErrorDisplay({ error, onRetry, onDismiss, className = '' }: Erro
     message.includes('timeout')
   )
 
+  const connectHint = typeof message === 'string' && (
+    message.includes('网络') || message.includes('超时') || message.includes('钱包') || message.includes('连接')
+  )
+
   return (
-    <div className={`error-display ${isNetworkError ? 'network-error' : ''} ${className}`}>
-      <div className="error-content">
-        <span className="error-icon">⚠️</span>
-        <span className="error-message">{message}</span>
-      </div>
-      {(onRetry || onDismiss) && (
-        <div className="error-actions">
+    <div className={`error-display-wrap ${className}`}>
+      <div className={`error-display ${isNetworkError ? 'network-error' : ''}`}>
+        <div className="error-content">
+          <span className="error-icon">⚠️</span>
+          <span className="error-message">{message}</span>
+        </div>
+        {(onRetry || onDismiss) && (
+          <div className="error-actions">
           {onRetry && (
             <button type="button" className="btn-retry" onClick={onRetry}>
               重试
@@ -37,7 +42,11 @@ export function ErrorDisplay({ error, onRetry, onDismiss, className = '' }: Erro
               ✕
             </button>
           )}
-        </div>
+          </div>
+        )}
+      </div>
+      {connectHint && (
+        <p className="error-hint">若持续失败，请刷新页面或尝试在 MetaMask、Trust 等钱包 App 内置浏览器中打开</p>
       )}
     </div>
   )

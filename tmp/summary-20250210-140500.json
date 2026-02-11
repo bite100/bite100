@@ -1,0 +1,4 @@
+{
+  "summary": "按清单实现 6.1 Replay Attack 防护单元测试：在 node/internal/storage/orders_test.go 中新增 TestOrderExpired，验证 nil、ExpiresAt=0、过去/未来过期时间的判断。更新清单 6.1 Replay Attack 防护为已实现。",
+  "current_status": "6.1 Replay Attack 防护（订单过期）已补充单元测试。"
+}

@@ -49,6 +49,8 @@ export function formatError(e: unknown): string {
   const err = e as { code?: number; reason?: string; message?: string; shortMessage?: string; data?: unknown }
   const msg = (err.reason ?? err.shortMessage ?? err.message ?? String(e)).toLowerCase()
   if (err.code === 4001 || msg.includes('user rejected') || msg.includes('denied')) return '您已拒绝签名或切换网络'
+  if (msg.includes('connector') && (msg.includes('not found') || msg.includes('missing'))) return '未检测到钱包。请在 MetaMask、Trust 等钱包 App 内置浏览器中打开本页，或安装浏览器扩展。'
+  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('expired')) return '连接超时。请检查网络后重试，或使用钱包 App 内置浏览器打开。'
   if (msg.includes('fetch failed') || msg.includes('failed to fetch') || msg.includes('econnrefused') || msg.includes('etimedout') || msg.includes('network error') || msg.includes('load failed'))
     return (typeof navigator !== 'undefined' && !navigator.onLine ? '网络异常，当前似乎离线，请检查网络后重试。' : '网络异常，请检查网络后重试；若网络不稳定可稍后重试。')
   if (msg.includes('network') || msg.includes('chain')) return '网络错误，请确认已切换到正确网络（Sepolia / 主网 / Polygon）'

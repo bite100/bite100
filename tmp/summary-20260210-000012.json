@@ -1,0 +1,4 @@
+{
+  "summary": "针对前端交易与奖励主流程做了一点代码级优化：抽取了通用的 useOnlineStatus Hook（封装 navigator.onLine + online/offline 事件），并在 App 和 OrderBookSection 中复用，去掉重复的在线状态监听逻辑，让离线提示和行为控制更集中、可维护性更好。",
+  "current_status": "比特100 前端现在通过单一的 useOnlineStatus Hook 管理在线/离线状态，App 顶部离线 banner 和订单簿的离线只读模式共用同一套逻辑，减少了重复代码，同时保持了之前实现的离线体验行为不变。"
+}

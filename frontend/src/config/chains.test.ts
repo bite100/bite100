@@ -34,18 +34,18 @@ describe('getChainConfig', () => {
 })
 
 describe('isChainSupported', () => {
-  it('returns true for Sepolia, Mainnet, Polygon, Base, Arbitrum, Optimism', () => {
+  it('returns true for Sepolia, Mainnet, Polygon, Base, Arbitrum, Optimism, BSC', () => {
     expect(isChainSupported(11155111)).toBe(true)
     expect(isChainSupported(1)).toBe(true)
     expect(isChainSupported(137)).toBe(true)
     expect(isChainSupported(8453)).toBe(true)
     expect(isChainSupported(42161)).toBe(true)
     expect(isChainSupported(10)).toBe(true)
+    expect(isChainSupported(56)).toBe(true)
   })
 
   it('returns false for unknown chainId', () => {
     expect(isChainSupported(999)).toBe(false)
-    expect(isChainSupported(56)).toBe(false)
   })
 })
 

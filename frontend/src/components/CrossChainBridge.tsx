@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { Contract } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig } from '../config/chains'
 import { getProvider, withSigner, formatTokenAmount, formatError } from '../utils'
+import { ErrorDisplay } from './ErrorDisplay'
 import { ERC20_ABI } from '../config'
 import './CrossChainBridge.css'
 
@@ -162,12 +163,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       <h2>跨链桥接</h2>
       <p className="hint">在不同链之间转移资产</p>
 
-      {error && (
-        <div className="bridge-error">
-          <span>{error}</span>
-          <button onClick={() => setError(null)}>×</button>
-        </div>
-      )}
+      <ErrorDisplay error={error} onDismiss={() => setError(null)} className="bridge-error" />
 
       <div className="bridge-form">
         <div className="bridge-field">

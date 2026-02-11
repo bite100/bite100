@@ -1,0 +1,4 @@
+{
+  "summary": "按清单 §7.1 测试覆盖：新增 frontend/src/services/governanceUtils.ts（feePercentToBps、validateProposalFeePercent）及 governanceUtils.test.ts 单元测试 11 例；GovernanceSection 改用 governanceUtils 提取逻辑。",
+  "current_status": "§7.1 测试覆盖已补充 governance 工具测试。清单下一项可做：12.2 内存订单簿+增量、5.4 Chainlink Keeper 等。"
+}

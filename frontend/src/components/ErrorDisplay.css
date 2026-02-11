@@ -1,3 +1,14 @@
+.error-display-wrap {
+  margin: 0.5rem 0;
+}
+
+.error-display-wrap .error-hint {
+  margin: 0.375rem 0 0;
+  font-size: 0.8125rem;
+  color: #fef3c7;
+  line-height: 1.4;
+}
+
 .error-display {
   background: #7f1d1d;
   border: 1px solid #991b1b;

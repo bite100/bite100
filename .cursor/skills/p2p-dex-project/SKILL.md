@@ -1,9 +1,9 @@
 ---
 name: p2p-dex-project
-description: Guides work on the P2P DEX codebase: doc structure, concept/phase alignment, contract and frontend conventions. Use when editing project docs, adding features, planning work, or when the user asks about this repository's structure or conventions.
+description: Guides work on the 比特100 (Bit 100) codebase: doc structure, concept/phase alignment, contract and frontend conventions. Use when editing project docs, adding features, planning work, or when the user asks about this repository's structure or conventions.
 ---
 
-# P2P DEX 项目协作指南
+# 比特100 项目协作指南
 
 ## 文档结构（必读）
 
@@ -47,9 +47,32 @@ description: Guides work on the P2P DEX codebase: doc structure, concept/phase a
 ## 写代码时的原则
 
 - **结合整个项目来考虑**：写代码时要结合整个项目（前端、节点 Go、合约、脚本、文档）一起考虑，避免只改一处导致前后端/节点/文档不一致。例如：节点 API 与前端 nodeClient、订单签名与 orderSigning/orderVerification、配置与 config.example/relay 配置、新增功能与 功能增加与改进总结/设计文档 的同步。
+- **用户功能足够简单**：不懂合约、不懂技术的用户打开交易所，应能直接投票、交易、提案。面向用户的功能要：用大白话、最少步骤、最少术语；隐藏合约地址、calldata、maker/taker 等技术概念；投票用「支持/反对」大按钮；提案用模板式引导；交易用「选币→填数量→点买卖」流程。参见 [优化与改进清单 §〇 新手友好原则](docs/优化与改进清单.md#〇新手友好原则贯穿所有功能)。
 
 ## 术语一致
 
 - 链下订单簿、撮合节点、中继节点、存储节点、贡献证明、ContributorReward、Settlement、Governance、Vault、AMMPool、FeeDistributor。
 - 经济模型比例：撮合 40%、存储 25%、中继 15%、团队 15%、治理 5%（与概念文档一致）。
 - 数据保留：电脑端最多 6 个月、手机端最多 1 个月，超期清理（与概念文档、Phase2、技术架构说明一致）。
+
+## 功能模块 Skill 索引（防止优化跑偏）
+
+优化或修改某功能时，先查阅对应 skill，确保不破坏不可变约束：
+
+| 功能 | Skill | 路径 |
+|------|-------|------|
+| 订单签名 | order-signing | .cursor/skills/order-signing/ |
+| 链上结算 | settlement-chain | .cursor/skills/settlement-chain/ |
+| 资金托管 | vault-deposit-withdraw | .cursor/skills/vault-deposit-withdraw/ |
+| AMM/Swap | amm-swap | .cursor/skills/amm-swap/ |
+| 手续费与治理 | fee-governance | .cursor/skills/fee-governance/ |
+| 贡献分 | contributor-reward | .cursor/skills/contributor-reward/ |
+| 订单簿与撮合 | orderbook-match | .cursor/skills/orderbook-match/ |
+| P2P 节点与中继 | p2p-node-relay | .cursor/skills/p2p-node-relay/ |
+| 前端主流程 | frontend-ux | .cursor/skills/frontend-ux/ |
+| 跨链桥接 | cross-chain-bridge | .cursor/skills/cross-chain-bridge/ |
+| PWA 与移动端 | pwa-mobile | .cursor/skills/pwa-mobile/ |
+| 节点 API | node-api | .cursor/skills/node-api/ |
+| 贡献证明 | contribution-proof | .cursor/skills/contribution-proof/ |
+| 数据保留 | data-retention | .cursor/skills/data-retention/ |
+| 安全与防滥用 | spam-security | .cursor/skills/spam-security/ |

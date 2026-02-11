@@ -8,7 +8,12 @@ export interface GasEstimate {
   gasLimit: bigint
   gasPrice: bigint
   totalCost: bigint
+  /** gas 优化建议：当 gas 较高时提示用户 */
+  suggestion?: string
 }
+
+/** 高 gas 阈值：超过约 0.005 ETH 时给出优化建议 */
+const HIGH_GAS_THRESHOLD_WEI = 5n * 10n ** 15n // 0.005 ETH
 
 /**
  * 估算当前链上 Gas 费用（用于手续费透明化展示）。
@@ -33,11 +38,17 @@ export function useGasEstimate(enabled: boolean = true) {
         }
         const feeData = await provider.getFeeData()
         const gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas ?? 0n
+        const totalCost = SETTLE_TRADE_GAS_LIMIT * gasPrice
+        let suggestion: string | undefined
+        if (totalCost > HIGH_GAS_THRESHOLD_WEI) {
+          suggestion = 'Gas 较高，建议稍后重试或等待网络空闲时交易'
+        }
         if (cancelled) return
         setEstimate({
           gasLimit: SETTLE_TRADE_GAS_LIMIT,
           gasPrice,
-          totalCost: SETTLE_TRADE_GAS_LIMIT * gasPrice,
+          totalCost,
+          suggestion,
         })
       } catch (err) {
         if (!cancelled) {

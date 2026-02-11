@@ -30,8 +30,9 @@ $rpc = "https://ethereum-sepolia.publicnode.com"
 if ($env:SEPOLIA_RPC_URL -and $env:SEPOLIA_RPC_URL.Trim()) { $rpc = $env:SEPOLIA_RPC_URL.Trim() }
 $env:SEPOLIA_RPC_URL = $rpc
 Write-Host "RPC: $rpc"
-$settlement = if ($env:SETTLEMENT_ADDRESS) { $env:SETTLEMENT_ADDRESS } else { "0xDa9f738Cc8bF4a312473f1AAfF4929b367e22C85" }
-$ammPool    = if ($env:AMMPOOL_ADDRESS)    { $env:AMMPOOL_ADDRESS }    else { "0x85F18604a8e3ca3C87A1373e4110Ed5C337677d4" }
+$settlement      = if ($env:SETTLEMENT_ADDRESS)      { $env:SETTLEMENT_ADDRESS }      else { "0xDa9f738Cc8bF4a312473f1AAfF4929b367e22C85" }
+$ammPool         = if ($env:AMMPOOL_ADDRESS)         { $env:AMMPOOL_ADDRESS }         else { "0x85F18604a8e3ca3C87A1373e4110Ed5C337677d4" }
+$feeDistributor  = if ($env:FEE_DISTRIBUTOR_ADDRESS) { $env:FEE_DISTRIBUTOR_ADDRESS } else { "0xeF4BFB58541270De18Af9216EB0Cd8EC07a2547F" }
 
 # ContributorReward：若未部署，脚本会先部署
 $contributorReward = $env:CONTRIBUTOR_REWARD_ADDRESS
@@ -60,12 +61,14 @@ if (-not $contributorReward) {
 # 若 PRIVATE_KEY 非 Settlement/AMMPool 的 owner，设 SKIP_SETTLEMENT_AMM=1 仅绑定 ContributorReward
 $skipSettlementAmm = $env:SKIP_SETTLEMENT_AMM -eq "1" -or $env:SKIP_SETTLEMENT_AMM -eq "true"
 if ($skipSettlementAmm) {
-    Write-Host "SKIP_SETTLEMENT_AMM=1：跳过 Settlement/AMMPool 绑定，仅绑定 ContributorReward" -ForegroundColor Yellow
+    Write-Host "SKIP_SETTLEMENT_AMM=1：跳过 Settlement/AMMPool/FeeDistributor 绑定，仅绑定 ContributorReward" -ForegroundColor Yellow
     Remove-Item Env:SETTLEMENT_ADDRESS -ErrorAction SilentlyContinue
     Remove-Item Env:AMMPOOL_ADDRESS -ErrorAction SilentlyContinue
+    Remove-Item Env:FEE_DISTRIBUTOR_ADDRESS -ErrorAction SilentlyContinue
 } else {
     $env:SETTLEMENT_ADDRESS = $settlement
     $env:AMMPOOL_ADDRESS = $ammPool
+    $env:FEE_DISTRIBUTOR_ADDRESS = $feeDistributor
 }
 $env:CONTRIBUTOR_REWARD_ADDRESS = $contributorReward
 $out1 = forge script script/Deploy.s.sol:Deploy --sig "runGovernance()" --rpc-url "$rpc" --broadcast 2>&1 | Out-String

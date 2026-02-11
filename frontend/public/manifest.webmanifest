@@ -1,16 +1,52 @@
 {
-  "name": "P2P 交易所",
-  "short_name": "P2P",
-  "description": "P2P 去中心化交易所 · 存提 · Swap · 治理 · 订单簿",
+  "name": "比特100",
+  "short_name": "比特100",
+  "description": "比特100 去中心化交易所 · 存提 · Swap · 治理 · 订单簿",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui", "browser"],
   "background_color": "#0f0f12",
   "theme_color": "#0f0f12",
   "orientation": "portrait-primary",
   "lang": "zh-CN",
   "categories": ["finance", "utilities"],
+  "prefer_related_applications": false,
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "存提",
+      "short_name": "存提",
+      "description": "存取代币",
+      "url": "/?tab=vault",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Swap",
+      "short_name": "Swap",
+      "description": "AMM 兑换",
+      "url": "/?tab=swap",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "订单簿",
+      "short_name": "订单簿",
+      "description": "限价单撮合",
+      "url": "/?tab=orderbook",
+      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
   ]
 }

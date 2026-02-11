@@ -4,26 +4,77 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p-pubsub"
 	"github.com/multiformats/go-multiaddr"
+	"golang.org/x/net/proxy"
 )
 
-// NewHost 根据监听地址创建 libp2p Host；dataDir 非空时从 dataDir/peerkey 加载或生成并持久化密钥，保证同目录 PeerID 不变
+// HostOpts 可选配置（12.1 Tor 等）
+type HostOpts struct {
+	UseTor       bool
+	TorSocksAddr string // 如 127.0.0.1:9050
+}
+
+// HostOptsFromNetwork 从 NetworkConfig 构建 HostOpts；cfg 为 nil 时返回 nil
+func HostOptsFromNetwork(useTor bool, torSocksAddr string) *HostOpts {
+	if !useTor {
+		return nil
+	}
+	addr := torSocksAddr
+	if addr == "" {
+		addr = "127.0.0.1:9050"
+	}
+	return &HostOpts{UseTor: true, TorSocksAddr: addr}
+}
+
+// socksContextDialer 包装 proxy.Dialer 以实现 tcp.ContextDialer（DialContext）
+type socksContextDialer struct {
+	d proxy.Dialer
+}
+
+func (s *socksContextDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return s.d.Dial(network, addr)
+}
+
+// NewHost 根据监听地址创建 libp2p Host；dataDir 非空时从 dataDir/peerkey 加载或生成并持久化密钥
 func NewHost(listenAddrs []string, dataDir string) (host.Host, error) {
+	return NewHostWithOpts(listenAddrs, dataDir, nil)
+}
+
+// NewHostWithOpts 支持 Tor 等可选配置（12.1 节点可选 Tor 出口）
+func NewHostWithOpts(listenAddrs []string, dataDir string, opts *HostOpts) (host.Host, error) {
 	if len(listenAddrs) == 0 {
 		listenAddrs = []string{"/ip4/0.0.0.0/tcp/4001"}
 	}
-	opts := []libp2p.Option{
+	hostOpts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.Ping(true),
 		libp2p.NATPortMap(),
+	}
+	if opts != nil && opts.UseTor && opts.TorSocksAddr != "" {
+		socksAddr := opts.TorSocksAddr
+		socksDialer, err := proxy.SOCKS5("tcp", socksAddr, nil, proxy.Direct)
+		if err != nil {
+			return nil, fmt.Errorf("创建 Tor SOCKS5 代理: %w", err)
+		}
+		ctxDialer := &socksContextDialer{d: socksDialer}
+		dialerForAddr := func(raddr multiaddr.Multiaddr) (tcp.ContextDialer, error) {
+			return ctxDialer, nil
+		}
+		hostOpts = append(hostOpts,
+			libp2p.NoTransports,
+			libp2p.Transport(tcp.NewTCPTransport, tcp.WithDialerForAddr(dialerForAddr)),
+		)
+		log.Printf("P2P 出站经 Tor SOCKS5: %s", socksAddr)
 	}
 	if dataDir != "" {
 		priv, err := LoadOrCreateKey(dataDir)
@@ -31,10 +82,10 @@ func NewHost(listenAddrs []string, dataDir string) (host.Host, error) {
 			return nil, fmt.Errorf("节点密钥: %w", err)
 		}
 		if priv != nil {
-			opts = append(opts, libp2p.Identity(priv))
+			hostOpts = append(hostOpts, libp2p.Identity(priv))
 		}
 	}
-	return libp2p.New(opts...)
+	return libp2p.New(hostOpts...)
 }
 
 // StartDHT 创建并启动 Kademlia DHT，连接 Bootstrap 节点（优化：重试、超时、DHT 发现）
@@ -100,8 +151,15 @@ func StartDHT(ctx context.Context, h host.Host, bootstrapPeers []string) (*dht.I
 }
 
 // NewGossipSub 创建 GossipSub（先不接 DHT discovery，仅直连与 -connect 的节点互通）
+// 清单 1.1 GossipSub 延迟优化：降低 heartbeat、适度提高 fanout 以加快订单广播
 func NewGossipSub(ctx context.Context, h host.Host) (*pubsub.PubSub, error) {
-	return pubsub.NewGossipSub(ctx, h)
+	params := pubsub.DefaultGossipSubParams()
+	// heartbeat 从 1s 降为 500ms，加快 mesh 维护与 gossip 频率
+	params.HeartbeatInterval = 500 * time.Millisecond
+	params.HeartbeatInitialDelay = 50 * time.Millisecond
+	// fanout 保留时间略短，便于快速重选 mesh 内 peer
+	params.FanoutTTL = 30 * time.Second
+	return pubsub.NewGossipSub(ctx, h, pubsub.WithGossipSubParams(params))
 }
 
 // SubscribeAndLog 订阅 topic 并打印收到的消息（为 M2/M3 打基础）

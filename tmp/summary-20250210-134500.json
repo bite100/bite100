@@ -1,0 +1,4 @@
+{
+  "summary": "按清单实现十一 Docker Compose 一键部署 + 八 Prometheus 监控：新增 monitoring/prometheus.yml 抓取 p2p-node:8080/metrics，在 docker-compose.prod.yml 中增加 prometheus 服务（--profile monitoring），使用 prometheus-data 卷持久化。更新清单 8.1、11 对应项为已实现。",
+  "current_status": "Docker Compose + Prometheus 监控已接入。用法：docker compose -f docker-compose.prod.yml --profile monitoring up -d。"
+}

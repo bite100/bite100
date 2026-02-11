@@ -1,0 +1,4 @@
+{
+  "summary": "按清单 1.2 从第一步实现订单簿状态不一致的同步：在 engine.go 中新增 ReplaceOrderbook(pair, bids, asks)，清除该 pair 的 orderIDToPair 与旧订单簿，按剩余量加入 bids/asks 并排序；在 orderbook_sync.go 的 applySync 中调用 engine.ReplaceOrderbook 实际应用 Leader 同步数据，替代原 TODO 占位。",
+  "current_status": "清单 1.2 订单簿状态不一致 已实现 applySync。撮合结果不一致（BFT 共识）待做。"
+}

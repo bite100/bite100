@@ -1,0 +1,8 @@
+{
+  "summary": "继续优化前端交易代码：在 App.tsx 中新增通用的 ensureAllowance 帮助函数，封装 ERC20 allowance 检查与“先清零再授权”的 approve 模式，并在存入 Vault、AMM Swap 和添加流动性三个路径中统一使用该函数，配合此前的 runWithLoading，使 withSigner + approve + 状态 这一整套流程完全去重、语义更清晰，且保持原有业务逻辑不变。",
+  "current_status": "前端交易主链路（存入/提取/Swap/添加流动性）已完成统一的 Loading/错误处理与授权逻辑抽象，代码复用度和可维护性明显提升，下一步可以视需要继续抽象 withSigner 层面的通用封装或拆分子组件。"
+}
+{
+  "summary": "在节点主程序中接入了 Tor 配置：创建 libp2p Host 时使用 HostOptsFromNetwork(cfg.Network.UseTor, cfg.Network.TorSocksAddr) 并调用 NewHostWithOpts，使 config.yaml 中的 use_tor/tor_socks_addr 开关真正生效，支持通过本地 Tor SOCKS5 代理隐藏节点出站 IP。",
+  "current_status": "当前代码已支持根据配置启用 Tor 出口、在 Gossip 层按 peer 做限流与信誉记录，并在 HTTP API 层提供下单速率限制和黑名单控制；前端的核心优化项也已落地，整体安全与隐私能力较之前更完整，可继续迭代上线奖励、防 Sybil 与性能监控等中期任务。"
+}

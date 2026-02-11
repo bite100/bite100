@@ -113,6 +113,14 @@
   text-align: center;
 }
 
+.order-summary {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  background: #f0fdf4;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  color: #166534;
+}
 .order-form-market-hint {
   margin: 0.5rem 0 0;
   font-size: 0.8125rem;

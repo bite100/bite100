@@ -1,4 +1,4 @@
-# P2P 交易所 - 前端
+# 比特100 - 前端
 
 连钱包、读余额（Sepolia 测试网）。
 
@@ -29,7 +29,7 @@ npm run dev
   npm install
   npm run dist
   ```
-  安装包输出在 `frontend/release/` 目录（如 `P2P 交易所 Setup 0.0.1.exe`）。
+  安装包输出在 `frontend/release/` 目录（如 `比特100 Setup 0.0.1.exe`）。
 - **开发时以桌面窗口运行**：`npm run electron:dev`（会先启动 Vite 再打开 Electron 窗口）。
 
 ## 合约地址（Sepolia）

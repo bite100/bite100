@@ -1,0 +1,4 @@
+{
+  "summary": "按清单从第一步开始实现：1) 11 VPS cron 自动更新：在 scripts/vps/install-vps.sh 中增加可选步骤，交互式询问是否配置每日 3 点 cron，支持 CRON_AUTO_UPDATE=1 非交互启用；2) 更新清单：5.4 手动领取、11 VPS cron 标记为已实现；3) 更新 scripts/vps/README.md 说明 cron 配置方式。",
+  "current_status": "11 VPS cron 自动更新已集成到 install-vps.sh；5.4 贡献分手动领取、11 VPS cron 已在清单中标记完成。"
+}

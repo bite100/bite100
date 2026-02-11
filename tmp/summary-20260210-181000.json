@@ -1,0 +1,4 @@
+{
+  "summary": "本回合修复 GovernanceExtended 中对 super.vote 的调用导致的“Member vote not found”编译错误。为此在 Governance.sol 中抽取了内部投票逻辑 _vote(proposalId, support, proof) internal，并让 external virtual vote(...) 仅调用 _vote；同时在 GovernanceExtended.sol 的重写 vote 中改为直接调用 _vote 而不是 super.vote，从而避免对 external 基类函数的 super 调用限制。",
+  "current_status": "治理合约的投票逻辑现已通过 internal 助手函数共享，扩展合约调用 _vote 以复用基类逻辑。下一步用户需要在 /d/P2P/contracts 目录再次运行 forge build 和 forge test，确认是否全部通过。如仍有编译错误需根据最新输出继续排查。"
+}

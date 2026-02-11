@@ -44,6 +44,11 @@ export function FeeDisplay({
               <span className="value">
                 ≈ {formatEther(gasEstimate.totalCost)} ETH
                 <span className="gas-relayer">（由 relayer 代付）</span>
+                {gasEstimate.suggestion && (
+                  <span className="gas-suggestion" title={gasEstimate.suggestion}>
+                    {gasEstimate.suggestion}
+                  </span>
+                )}
               </span>
             ) : (
               <span className="value muted">—</span>

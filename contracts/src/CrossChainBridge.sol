@@ -200,7 +200,7 @@ contract CrossChainBridge is OApp {
         bytes calldata payload,
         bytes calldata options
     ) external view returns (uint256 nativeFee, uint256 lzTokenFee) {
-        MessagingFee memory fee = _quote(dstChainId, payload, options, false);
+        OApp.MessagingFee memory fee = _quote(dstChainId, payload, options, false);
         return (fee.nativeFee, fee.lzTokenFee);
     }
 

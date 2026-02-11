@@ -20,6 +20,7 @@ import (
 	"github.com/P2P-P2P/p2p/node/internal/config"
 	"github.com/P2P-P2P/p2p/node/internal/match"
 	"github.com/P2P-P2P/p2p/node/internal/p2p"
+	"github.com/P2P-P2P/p2p/node/internal/relay"
 	"github.com/P2P-P2P/p2p/node/internal/storage"
 	"github.com/P2P-P2P/p2p/node/internal/sync"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -56,6 +57,10 @@ func main() {
 	if err != nil {
 		exitFatalf("加载配置: %v", err)
 	}
+	// 无配置文件或未设置 api.listen 时默认开启 :8080（便于 Railway/Fly 等云部署）
+	if cfg.API.Listen == "" {
+		cfg.API.Listen = ":8080"
+	}
 	// 领奖地址：命令行 > 环境变量 > 配置文件
 	w := strings.TrimSpace(*rewardWallet)
 	if w == "" {
@@ -91,8 +96,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 1. 创建 libp2p Host
-	h, err := p2p.NewHost(listenAddrs, cfg.Node.DataDir)
+	// 1. 创建 libp2p Host（支持可选 Tor 出口）
+	hostOpts := p2p.HostOptsFromNetwork(cfg.Network.UseTor, cfg.Network.TorSocksAddr)
+	h, err := p2p.NewHostWithOpts(listenAddrs, cfg.Node.DataDir, hostOpts)
 	if err != nil {
 		exitFatalf("创建 Host: %v", err)
 	}
@@ -132,6 +138,16 @@ func main() {
 	ps, err := p2p.NewGossipSub(ctx, h)
 	if err != nil {
 		exitFatalf("GossipSub: %v", err)
+	}
+
+	// 3.1 中继 Spam 防护：按 peer 速率限制 + 信誉记录（可用于后续奖励与惩罚）
+	var perPeerLimiter *relay.Limiter
+	var reputation *relay.Reputation
+	if cfg.Relay.RateLimitBytesPerSecPerPeer > 0 || cfg.Relay.RateLimitMsgsPerSecPerPeer > 0 {
+		perPeerLimiter = relay.NewLimiter(cfg.Relay.RateLimitBytesPerSecPerPeer, cfg.Relay.RateLimitMsgsPerSecPerPeer)
+		reputation = relay.NewReputation()
+		log.Printf("[relay] 已启用 Gossip 限流：每 peer 每秒字节上限=%d，每秒消息数上限=%d",
+			cfg.Relay.RateLimitBytesPerSecPerPeer, cfg.Relay.RateLimitMsgsPerSecPerPeer)
 	}
 
 	// 4. 订单发布器（加入订单/撤单/成交主题）
@@ -205,7 +221,7 @@ func main() {
 		router:    router,
 		registry:  registry,
 	}
-	subscriber := sync.NewOrderSubscriber(ps, handler)
+	subscriber := sync.NewOrderSubscriberWithSecurity(ps, handler, perPeerLimiter, reputation)
 	if err := subscriber.Start(ctx); err != nil {
 		exitFatalf("OrderSubscriber: %v", err)
 	}
@@ -260,6 +276,7 @@ func main() {
 		RewardWallet:            cfg.Node.RewardWallet,
 		WSServer:                wsServer,
 		RateLimitOrdersPerMinute: cfg.API.RateLimitOrdersPerMinute,
+		BlockedTraders:           api.BuildTraderBlacklist(cfg.API.BlockedTraders),
 	}
 	if cfg.API.Listen != "" {
 		srv.Run(cfg.API.Listen)

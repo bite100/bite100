@@ -1,6 +1,6 @@
-# P2P DEX 开发环境快速启动脚本（Windows）
+# 比特100 开发环境快速启动脚本（Windows）
 
-Write-Host "🚀 启动 P2P DEX 开发环境..." -ForegroundColor Green
+Write-Host "🚀 启动 比特100 开发环境..." -ForegroundColor Green
 
 # 检查 Docker
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {

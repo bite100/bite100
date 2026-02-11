@@ -73,6 +73,28 @@ func (db *DB) GetOrder(orderID string) (*Order, error) {
 	return &o, nil
 }
 
+// ListPairsWithOpenOrders 返回有 open/partial 订单的交易对列表，用于启动时恢复订单簿
+func (db *DB) ListPairsWithOpenOrders() ([]string, error) {
+	rows, err := db.sql.Query(
+		`SELECT DISTINCT pair FROM orders WHERE status IN ('open', 'partial') ORDER BY pair`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var pairs []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		if p != "" {
+			pairs = append(pairs, p)
+		}
+	}
+	return pairs, rows.Err()
+}
+
 // ListOrdersOpenByPair 查询某交易对当前盘口（open/partial），买盘价格降序、卖盘价格升序，用于订单簿展示
 func (db *DB) ListOrdersOpenByPair(pair string, limit int) (bids, asks []*Order, err error) {
 	if limit <= 0 {

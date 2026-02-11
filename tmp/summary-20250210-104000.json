@@ -1,0 +1,4 @@
+{
+  "summary": "按清单 1.2 实现撮合结果不一致的确定性 TradeID：将 engine.Match 中的 genTradeID 从「takerOrderID-now-seq」改为「takerOrderID-makerOrderID-seq」，使相同订单簿+相同 taker 产生相同 TradeID，便于多节点共识时结果一致。",
+  "current_status": "清单 1.1、1.2 均已实现。下一步可做 2.1 Deep Link、2.3 价格参考（若清单未标完成）或 3.x 多链扩展。"
+}

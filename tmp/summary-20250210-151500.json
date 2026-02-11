@@ -1,0 +1,4 @@
+{
+  "summary": "完成清单 3.2 BSC 支持：在 walletConfig.tsx 中引入 wagmi/chains 的 bsc、加入 chains/transports/RPC 配置；更新 chains.test.ts 使 isChainSupported(56) 为 true；将 BSC 从计划支持移至已配置。chains 测试全部通过。",
+  "current_status": "BSC 链已完整支持（chains.ts 原有配置 + walletConfig wagmi 配置 + 单元测试）。可按清单继续实现下一项。"
+}

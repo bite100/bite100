@@ -1,0 +1,4 @@
+{
+  "summary": "实现 §12.3 声誉/惩罚与防 Sybil：在 relay 包中新增 ReputationExportRow 与 ExportForReputationUpdater(peerToAddress, activeDuration)，将 Reputation 快照导出为 reputation-updater 所需格式；reputation_export_test.go 单元测试；config.example.yaml 增加防 Sybil 注释（NodeRewards 限 3 节点）；清单标记完成。",
+  "current_status": "§12.3 声誉/防 Sybil 基础已实现。后续可做：P2P 网格增强、网络延迟检测、治理挑战，及清单其余待办项。"
+}

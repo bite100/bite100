@@ -42,9 +42,17 @@ export const TOKEN0_ADDRESS = currentChainConfig.contracts.token0
 export const TOKEN1_ADDRESS = currentChainConfig.contracts.token1
 export const AMM_POOL_ADDRESS = currentChainConfig.contracts.ammPool
 export const CONTRIBUTOR_REWARD_ADDRESS = currentChainConfig.contracts.contributorReward
+export const FEE_DISTRIBUTOR_ADDRESS = currentChainConfig.contracts.feeDistributor
 export const GOVERNANCE_ADDRESS = currentChainConfig.contracts.governance
 export const TOKEN_REGISTRY_ADDRESS = currentChainConfig.contracts.tokenRegistry
 export const CHAIN_CONFIG_ADDRESS = currentChainConfig.contracts.chainConfig
+
+// NodeRewards（上线奖励）合约地址：优先使用链配置中的扩展字段，其次使用环境变量
+const envNodeRewards = (import.meta.env.VITE_NODE_REWARDS_ADDRESS ?? '').trim()
+export const NODE_REWARDS_ADDRESS =
+  (currentChainConfig as any).contracts?.nodeRewards && (currentChainConfig as any).contracts.nodeRewards !== '0x0000000000000000000000000000000000000000'
+    ? (currentChainConfig as any).contracts.nodeRewards
+    : envNodeRewards
 
 // 导出链配置获取函数（供组件使用）
 export { getChainConfig, DEFAULT_CHAIN_ID } from './config/chains'
@@ -90,9 +98,27 @@ export const CONTRIBUTOR_REWARD_ABI = [
   'function claimReward(string calldata period, address token)',
 ] as const
 
+export const FEE_DISTRIBUTOR_ABI = [
+  'function claimable(address token, address account) view returns (uint256)',
+  'function claim(address token)',
+] as const
+
+// NodeRewards 上线奖励合约 ABI（积分/节点绑定 + 一键领取）
+export const NODE_REWARDS_ABI = [
+  'function devPoints(address wallet) view returns (uint256)',
+  'function nodePoints(address wallet) view returns (uint256)',
+  'function getTotalRewards(address wallet) view returns (uint256)',
+  'function claimRewards()',
+  'function boundNodeCount(address wallet) view returns (uint256)',
+  'function bindAndRegister(bytes32 nodeId)',
+] as const
+
 /** Settlement 合约：链下撮合后调用 settleTrade 上链结算（需 owner/relayer） */
 export const SETTLEMENT_ABI = [
   'function settleTrade(address maker, address taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 gasReimburseIn, uint256 gasReimburseOut)',
+  'function settleTradesBatch(address[] makers, address[] takers, address[] tokenIns, address[] tokenOuts, uint256[] amountIns, uint256[] amountOuts, uint256[] gasReimburseIns, uint256[] gasReimburseOuts)',
+  'function settleTradesBatchWithGasSavings(address[] makers, address[] takers, address[] tokenIns, address[] tokenOuts, uint256[] amountIns, uint256[] amountOuts, uint256[] gasReimburseIns, uint256[] gasReimburseOuts, uint256 gasSavingsUsdt6)',
   'event TradeSettled(address indexed maker, address indexed taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 feeAmount)',
   'event TradeSettledWithGasReimburse(address indexed maker, address indexed taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 feeAmount, uint256 gasReimburseIn, uint256 gasReimburseOut, address indexed gasRecipient)',
+  'event GasSavingsDistributed(uint256 userRebateUsdt, uint256 toFeeDistributorUsdt, uint256 toFounderUsdt)',
 ] as const

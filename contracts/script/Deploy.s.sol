@@ -10,6 +10,7 @@ import "../src/ContributorReward.sol";
 import "../src/Governance.sol";
 import "../src/TokenRegistry.sol";
 import "../src/ChainConfig.sol";
+import "../src/NodeRegistry.sol";
 import "../src/mock/MockERC20.sol";
 
 /// @title 部署脚本：Vault → FeeDistributor → Settlement → (可选) AMM + Mock 代币
@@ -104,11 +105,16 @@ contract Deploy is Script {
     }
 
     /// @notice 部署 Governance 并绑定目标合约
+    /// 可选环境变量：SETTLEMENT_ADDRESS, AMMPOOL_ADDRESS, CONTRIBUTOR_REWARD_ADDRESS, FEE_DISTRIBUTOR_ADDRESS
     function runGovernance() external {
         address settlementAddr = vm.envOr("SETTLEMENT_ADDRESS", address(0));
         address ammPoolAddr = vm.envOr("AMMPOOL_ADDRESS", address(0));
         address contributorRewardAddr = vm.envOr("CONTRIBUTOR_REWARD_ADDRESS", address(0));
-        require(settlementAddr != address(0) || ammPoolAddr != address(0) || contributorRewardAddr != address(0), "set at least one target");
+        address feeDistributorAddr = vm.envOr("FEE_DISTRIBUTOR_ADDRESS", address(0));
+        require(
+            settlementAddr != address(0) || ammPoolAddr != address(0) || contributorRewardAddr != address(0) || feeDistributorAddr != address(0),
+            "set at least one target"
+        );
 
         uint256 pk = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(pk);
@@ -123,6 +129,9 @@ contract Deploy is Script {
         }
         if (contributorRewardAddr != address(0)) {
             ContributorReward(contributorRewardAddr).setGovernance(address(gov));
+        }
+        if (feeDistributorAddr != address(0)) {
+            FeeDistributor(feeDistributorAddr).setGovernance(address(gov));
         }
 
         vm.stopBroadcast();
@@ -162,6 +171,16 @@ contract Deploy is Script {
         console.log("ContributorReward", address(contributorReward));
         console.log("Developer launch reward: 50000 contribution score set for", developer);
         console.log("Note: Inject reward pool via setPeriodReward to enable claiming");
+    }
+
+    /// @notice 部署 NodeRegistry（节点钱包绑定，用于上线奖励分发）
+    function runNodeRegistry() external {
+        uint256 pk = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(pk);
+        NodeRegistry registry = new NodeRegistry();
+        vm.stopBroadcast();
+        console.log("NodeRegistry", address(registry));
+        console.log("Usage: Node operators call register(nodeIdHash, wallet) to bind reward wallet");
     }
 
     /// @notice 重新部署 Settlement 与 AMMPool（当前源码含 governance），并绑定 Governance
