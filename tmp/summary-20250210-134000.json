@@ -1,4 +1,0 @@
-{
-  "summary": "按清单实现 3.1 Gas 估算增强：在 useGasEstimate 中当 totalCost > 0.005 ETH 时返回 suggestion「Gas 较高，建议稍后重试或等待网络空闲时交易」，FeeDisplay 展示该建议并新增 gas-suggestion 样式。更新清单将 Gas 估算标为已实现。",
-  "current_status": "3.1 Gas 估算（含 gas 优化建议）已实现。待办：5.3/5.4 标记、合约审计、Docker Compose 等。"
-}

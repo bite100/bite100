@@ -1,9 +1,0 @@
-{
-  "summary": "为了更接近“币安那种中间交易区更突出、四周信息略弱”的布局，本轮在 index.css 中取消了 #root 的 480px 最大宽度限制，让页面可以在桌面端铺开；同时在 App.css 中对订单簿主卡片 orderbook-section 增加了略带币安黄的描边与阴影，并略微放大其主标题字号、强调下单区 h3，从而在视觉上强化了中间链下订单簿 + 下单区域，相对弱化周边信息卡片的存在感。",
-  "current_status": "前端整体已经具备更接近交易所的桌面布局，中间订单簿和下单区在对比度与层级上更突出，后续如有需要可以进一步调整字体粗细或将其他信息卡片减淡来加强中心视觉焦点。"
-}
-{
-  "summary": "根据当前清单的第一项未完全完成任务（Spam 防护），在节点主程序中接通了基于配置的交易地址黑名单，并为配置示例和基础单元测试补全了支撑：cmd/node/main.go 通过 BuildTraderBlacklist(cfg.API.BlockedTraders) 初始化 Server.BlockedTraders，config.example.yaml 中新增 api.blocked_traders 示例，internal/api/server_test.go 覆盖了黑名单构建的大小写与空白处理逻辑。",
-  "current_status": "现在节点 HTTP API 层除了已有的按 IP 下单速率限制外，还可以通过 config.yaml 中的 api.blocked_traders 精确封禁特定钱包地址的下单与撤单请求，配合 Gossip 层 per-peer 限流与信誉统计，实现了从 IP、节点、地址三层的 Spam 防护闭环；后续可以继续按清单推进上线奖励、防 Sybil 与性能监控等中期任务。",
-  "current_status": "比特100 节点现已支持配置级的 trader 黑名单、API 限流和 Gossip 层限流/信誉机制，前端高优体验项也已完成，可以按文档继续推进上线奖励、防 Sybil 与性能监控等中期任务。"
-}

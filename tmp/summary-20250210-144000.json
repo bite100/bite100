@@ -1,4 +1,0 @@
-{
-  "summary": "按清单实现 8.1 Grafana 监控仪表板：1) 新增 monitoring/grafana/provisioning 数据源与仪表板配置；2) 预置 P2P 节点监控仪表板（撮合 TPS、延迟 P50/P95/P99、总成交笔数）；3) docker-compose.prod.yml 增加 Grafana 服务（--profile monitoring）；4) 更新 scripts/docker/README.md 增加监控使用说明。",
-  "current_status": "8.1 Prometheus + Grafana 已完整接入，预置 P2P 节点仪表板。"
-}

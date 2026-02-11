@@ -1,4 +1,0 @@
-{
-  "summary": "本回合针对 CrossChainBridge.quoteBridgeFee 的最新编译错误“Undeclared identifier _quote”进行了修复。分析发现 OApp stub 中尚未实现 _quote，已在 lib/oapp-evm/contracts/oapp/OApp.sol 中添加与 LayerZero 接口兼容签名的 internal _quote 函数，返回一个 nativeFee 和 lzTokenFee 均为 0 的 MessagingFee 作为本地开发用 stub。",
-  "current_status": "OApp stub 现已包含 _quote、_lzSend、_lzReceive 以及 MessagingFee/Origin，足以支撑 CrossChainBridge 的编译和本地测试（不进行真实跨链）。用户需在 /d/P2P/contracts 目录重新执行 forge build 和 forge test 验证是否全部通过，如仍有报错需查看新的编译输出。"
-}

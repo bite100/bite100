@@ -1,4 +1,0 @@
-{
-  "summary": "用户已在 Windows 上安装 Git for Windows，本回合指导其进行下一步：在 Git Bash 中运行 curl 安装 Foundry（foundryup），然后再继续后续 forge build / forge test 步骤。",
-  "current_status": "Foundry 尚未安装；下一步是让用户打开 Git Bash 执行 curl 安装脚本和 foundryup，安装完成后再在 d:\\P2P\\contracts 目录运行 forge build 与 forge test。"
-}

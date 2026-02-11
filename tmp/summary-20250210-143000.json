@@ -1,4 +1,0 @@
-{
-  "summary": "按清单实现 7.1 测试覆盖：在 contracts/test/Settlement.t.sol 中新增 test_SettleTrade_IsRelayerWhitelist（白名单 relayer 可调用 settleTrade）、test_SettleTrade_MaxGasReimburseCap（gas 报销超限 revert）、test_SettleTrade_MaxGasReimburseAtCap（等于上限可成功），覆盖 Relayer 防滥用逻辑。",
-  "current_status": "7.1 测试覆盖已补充 Settlement Relayer 相关单元测试。"
-}

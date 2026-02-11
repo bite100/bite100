@@ -1,4 +1,0 @@
-{
-  "summary": "本回合根据项目自带 INSTALL-FOUNDRY-WINDOWS.md，给出了在 Windows 下安装 Foundry（forge）并在 contracts 目录运行 forge build / forge test 的详细步骤，包含推荐的 Git Bash + foundryup 方式与预编译包方式。",
-  "current_status": "当前开发环境仍未安装 Foundry，尚未实际在本机执行 forge build / forge test；用户可按说明完成安装后在 d:\\P2P\\contracts 目录运行 scripts/install-and-build.ps1 或手动执行 forge build 与 forge test。"
-}

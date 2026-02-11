@@ -1,4 +1,0 @@
-{
-  "summary": "按清单实现 5.3 公开数据展示「连接钱包后可过滤我的交易」：在 OrderBookSection 最近成交区域增加「全部/我的」切换按钮，连接钱包时显示，点击「我的」后按 maker/taker 过滤展示当前用户相关成交。新增 tradesFilterMine 状态和 trades-filter 样式。更新清单 5.3 三项均为已实现。",
-  "current_status": "5.3 公开数据展示（流动性池、奖励池、交易记录含「我的」过滤）已实现。"
-}

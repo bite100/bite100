@@ -1,4 +1,0 @@
-{
-  "summary": "本回合修复 GovernanceExtended 中 super.execute 调用导致的“Member execute not found”编译错误。与投票逻辑类似，在 Governance.sol 中抽取内部执行逻辑 _execute(uint256 proposalId) internal，将 external virtual execute 仅包装调用 _execute；同时在 GovernanceExtended.sol 的 execute 重写中改为调用 _execute 而非 super.execute，从而避免对 external 函数使用 super 的限制。",
-  "current_status": "治理合约的执行逻辑现通过 internal 助手函数共享，扩展合约直接调用 _execute 以复用基类逻辑。用户需要在 /d/P2P/contracts 目录再次运行 forge build 和 forge test 以确认所有编译/测试是否通过，如仍有错误需根据最新输出继续排查。"
-}

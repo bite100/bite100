@@ -1,4 +1,0 @@
-{
-  "summary": "按清单 2.1 实现 Deep Link 跳转失败的 fallback：新增 MobileConnectHint 组件，在手机端显示「复制链接，在钱包 App 内置浏览器中打开」按钮，用户可一键复制当前 URL 到剪贴板，粘贴到 MetaMask/Trust 等钱包 App 内置浏览器中打开。",
-  "current_status": "清单 2.1 Deep Link 跳转失败 已实现 fallback。下一步可做 2.2 离线体验、2.3 价格参考、3.x 多链扩展。"
-}

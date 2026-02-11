@@ -1,4 +1,0 @@
-{
-  "summary": "按清单 7.1 Gas 优化：Settlement.sol 中缓存 feeBps、feeDistributor，capIn/capOut 用 != 0 短路，makerReceives/takerReceives 用 unchecked；FeeDistributor.sol 中 receiveFee 缓存 developerAddress、unchecked 减法，claim/claimable 缓存 totalShareBps 与 length、unchecked 循环与运算，setRecipients 缓存并单次写 totalShareBps。清单已更新。",
-  "current_status": "7.1 Gas 优化已落地。forge test 因本地 solc 环境未执行。可继续清单下一项（如 10.1 NodeRegistry 链上注册、7.1 合约验证）。"
-}

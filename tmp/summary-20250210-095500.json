@@ -1,4 +1,0 @@
-{
-  "summary": "按 优化与改进清单 §3.2 多链扩展，完成 Arbitrum/Base/Optimism 的 wagmi 集成：walletConfig 新增 arbitrum、base、optimism 链与对应 RPC transports，与 chains.ts 对齐。链切换器与添加网络功能现支持 6 条链。",
-  "current_status": "比特100 前端已完整支持 Sepolia、Ethereum、Polygon、Arbitrum、Base、Optimism，wagmi 与 chains 配置一致。构建通过。"
-}

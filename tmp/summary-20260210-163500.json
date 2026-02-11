@@ -1,4 +1,0 @@
-{
-  "summary": "用户已在 Git Bash 中成功执行 foundryup，Foundry 工具链（forge/cast/anvil/chisel）安装完成。本回合将指导用户在 Git Bash 中切换到 d:\\P2P\\contracts 目录并执行 forge build 与 forge test 进行编译和测试。",
-  "current_status": "Foundry 已安装就绪，下一步是在 Git Bash 中运行 forge --version 确认版本，然后在 d:\\P2P\\contracts 目录执行 forge build 和 forge test，若有报错再根据具体信息排查。"
-}

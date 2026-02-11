@@ -1,4 +1,0 @@
-{
-  "summary": "按清单实现 11. VPS 一键脚本 + systemd：新增 scripts/vps/install-vps.sh，一键安装 Docker（get.docker.com）、创建 .env、生成 p2p-node.service 实现开机自启。新增 scripts/vps/README.md。更新清单标记为已实现。",
-  "current_status": "VPS 一键安装脚本已就绪。用法：sudo ./scripts/vps/install-vps.sh。"
-}

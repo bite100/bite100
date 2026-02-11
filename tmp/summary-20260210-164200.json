@@ -1,4 +1,0 @@
-{
-  "summary": "本回合分析 forge build 报错：缺少 LayerZero OApp 依赖（lib/oapp-evm）以及 OpenZeppelin 要求 solc ^0.8.20，而 foundry.toml 仍配置为 0.8.19，导致“Encountered invalid solc version”。已将 contracts/foundry.toml 中 solc 版本从 0.8.19 升级为 0.8.20，并准备指导用户安装 solc 0.8.20 和 LayerZero 依赖后重新编译。",
-  "current_status": "Foundry 已安装，foundry.toml 已改为使用 solc 0.8.20；下一步用户需在 /d/P2P/contracts 目录执行 forge solc install 0.8.20 以及运行 PowerShell 脚本 scripts/install-layerzero.ps1（通过 powershell.exe 调用），然后再尝试 forge build/forge test。"
-}

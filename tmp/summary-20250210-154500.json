@@ -1,4 +1,0 @@
-{
-  "summary": "按清单 10.1 链上注册实现 NodeRegistry 合约：contracts/src/NodeRegistry.sol（register、updateWallet、setNodeWallet）、Deploy.s.sol 新增 runNodeRegistry、test/NodeRegistry.t.sol 单元测试。清单已更新。",
-  "current_status": "10.1 NodeRegistry 链上注册已完成。可继续清单下一项（如 5.4 统一奖励领取、12.1 Tor 集成等）。"
-}

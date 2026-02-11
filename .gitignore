@@ -20,6 +20,9 @@ node/*.exe~
 # 部署产物（可选保留则移除下一行）
 contracts/deployments-*.json
 
+# 本地摘要与临时文件（不推送）
+tmp/
+
 # 系统与编辑器
 .DS_Store
 Thumbs.db

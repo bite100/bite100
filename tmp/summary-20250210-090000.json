@@ -1,4 +1,0 @@
-{
-  "summary": "按 功能增加与改进总结/优化与改进清单 中的「测试覆盖」高优先级项，为 contributorRewardUtils 添加单元测试：formatScore、getLastTwoPeriods、periodToId、isPastClaimDeadline，含 vi.useFakeTimers 测试领取截止逻辑。共 13 个用例，全部通过。更新 docs/前端单元测试说明.md 覆盖表。",
-  "current_status": "比特100 前端单元测试由 50 增至 63 个，contributorRewardUtils 核心逻辑有测试保护。后续可继续：useChain/useGasEstimate 测试、组件集成测试、订单簿一致性等。"
-}

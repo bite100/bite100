@@ -1,4 +1,0 @@
-{
-  "summary": "按优化与改进清单 1.1 实现节点重启后订单簿同步：在 storage/orders.go 中新增 ListPairsWithOpenOrders() 返回有 open/partial 订单的交易对；新增 match/restore.go 实现 RestoreOrdersFromStore(engine, store)，从 DB 恢复订单到撮合引擎（过期订单由 AddOrder 自动跳过）；在 api/server.go Run() 启动时调用恢复逻辑。已通过 go build 验证，清单已标记完成。",
-  "current_status": "清单 1.1 节点重启后订单簿同步 已完成。storage 已有持久化、match 已有恢复逻辑、api 启动时执行恢复。后续可继续清单 1.1 的 GossipSub 延迟优化、Spam 防护，或清单 1.2 一致性问题。"
-}

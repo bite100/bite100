@@ -1,4 +1,0 @@
-{
-  "summary": "按清单 1.1 继续实现 Spam 防护剩余项：新增 trader 黑名单。在 config 中增加 api.blocked_traders；api.Server 增加 BlockedTraders map 与 BuildTraderBlacklist 辅助函数；handlePostOrder 与 handleCancelOrder 中拒绝黑名单地址。config.example.yaml 补充 blocked_traders 说明。",
-  "current_status": "清单 1.1 三项均已实现（订单簿同步✅、GossipSub 延迟✅、Spam 防护✅）。Spam 防护含：签名验证、API 限流、黑名单。信誉机制为链上贡献分配，属独立模块。下一步可做 1.2 一致性问题或 2.x 手机端优化。"
-}

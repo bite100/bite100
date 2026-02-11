@@ -1,4 +1,0 @@
-{
-  "summary": "按用户要求更新文档，明确「推送到仓库以后交易所网站就会更新」：在《部署-Railway与Fly》中强化 GitHub Pages 为「推送到 main 即自动更新网站」、补充「日常更新流程」小节（改代码 → push main → 一两分钟后网站即新版本）、将 Railway/Fly 节点 URL 说明改为「在 Secrets 设 VITE_NODE_API_URL，下次推 main 时网站自动用新节点」；在 README 中增加「线上发布：推送到仓库即更新网站」和部署文档链接。",
-  "current_status": "文档已统一为：推 main → Actions 自动构建发布 → 交易所网站自动更新；README 与部署文档均已体现该流程。"
-}

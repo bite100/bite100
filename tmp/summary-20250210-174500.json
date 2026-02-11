@@ -1,4 +1,0 @@
-{
-  "summary": "实现 §12.3 多 Relayer / 去中心化 relayer：在 ChainConfig 中新增 relayer_endpoints；创建 RelayerSelector 轮询选择器（GetNext、Count）；config.example.yaml 增加 relayer_endpoints 示例；selector_test.go 单元测试；清单标记完成。",
-  "current_status": "§12.3 多 Relayer 已实现。后续可做：声誉/防 Sybil、P2P 网格增强、清单其余待办项。"
-}

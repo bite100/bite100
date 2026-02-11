@@ -1,4 +1,0 @@
-{
-  "summary": "按 优化与改进清单 §2.2 PWA 完善，完成 Manifest 优化：1) manifest.webmanifest 添加 display_override、prefer_related_applications、maskable 图标、shortcuts（存提/Swap/订单簿）；2) icon.svg 品牌更新：P2P→100；3) App.tsx 从 URL ?tab= 初始化 activeTab，支持 PWA 快捷方式直达。",
-  "current_status": "比特100 PWA Manifest 已优化，支持桌面/手机安装后通过快捷方式直达存提、Swap、订单簿。构建通过。"
-}

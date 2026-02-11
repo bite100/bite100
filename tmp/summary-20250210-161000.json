@@ -1,4 +1,0 @@
-{
-  "summary": "按用户要求更新设定，使小白用户也能简单易用：1) node/config.example.yaml 增加「小白必改」「其余可不改」分区，简化注释，api.listen 默认改为 :8080；2) frontend/.env.example、.env.example、contracts/.env.example 统一格式，突出必填项，精简可选说明；3) docs/快速开始.md 新增「小白用户 3 步走」零配置体验；4) README.md 快速开始处增加「小白友好」提示。",
-  "current_status": "小白易用设定已更新完成。用户安装 Docker 后可直接运行 start-dev 脚本，无需改配置即可体验。"
-}

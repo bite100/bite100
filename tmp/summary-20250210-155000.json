@@ -1,4 +1,0 @@
-{
-  "summary": "完成 5.4 统一奖励领取（UnifiedRewardClaim 整合 FeeDistributor）+ 7.1 合约验证（verify-contracts.ps1）。chains 新增 feeDistributor、config 导出 FEE_DISTRIBUTOR_ADDRESS、UnifiedRewardClaim 增加手续费分成领取区块。verify-contracts.ps1 支持 Vault/FeeDistributor/Settlement 验证，主网部署指南补充说明。",
-  "current_status": "5.4 统一奖励领取、7.1 合约验证 已落地。清单剩余：合约审计（流程）、5.4 每周自动领取、12.x 架构增强等。"
-}

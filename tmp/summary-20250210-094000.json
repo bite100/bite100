@@ -1,4 +1,0 @@
-{
-  "summary": "按 优化与改进清单 §2.2 Service Worker 项，实现更新机制：1) sw.js 移除 install 中的 skipWaiting，新增 message 监听 SKIP_WAITING；2) 新建 ServiceWorkerUpdate 组件，注册 sw、监听 updatefound、检测 waiting 状态后展示「新版本已就绪」横幅；3) 用户点击刷新后 postMessage 触发 skipWaiting，controllerchange 时 reload；4) 页面可见时调用 reg.update() 检查更新。",
-  "current_status": "比特100 PWA Service Worker 更新流程已打通，部署新版本后用户可见更新提示并可主动刷新。构建通过。"
-}

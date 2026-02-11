@@ -1,4 +1,0 @@
-{
-  "summary": "用户反馈在 Git Bash 中命令“打不出来”，本回合准备通过说明如何复制粘贴命令、确认是否打开的是 Git Bash 而非 PowerShell 等方式，帮助其正确输入并执行 curl 与 foundryup。",
-  "current_status": "Foundry 仍未安装，下一步需要用户在 Git Bash 中正确粘贴执行 curl -L https://foundry.paradigm.xyz | bash 和 foundryup；待用户反馈具体问题或报错后继续指导。"
-}

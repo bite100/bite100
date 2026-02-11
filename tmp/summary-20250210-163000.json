@@ -1,4 +1,0 @@
-{
-  "summary": "按清单 §〇 新手友好原则实现第一步：1) GovernanceSection 投票：每个「投票中」提案卡片内直接显示「支持」「反对」大按钮，handleVote 改为接受 (proposalId, support) 参数；proof 输入框折叠到「高级」details 中，默认 []，提示从 merkletool 获取；2) OrderForm：增加订单摘要「以 X 价格买入/卖出 Y 个 token」人话预览；3) App.css 增加 .vote-btn、.vote-advanced 等样式；4) 优化与改进清单标记交易、投票已完成。",
-  "current_status": "新手友好第一步（投票大按钮、订单人话预览）已完成。提案模板式、存提引导、奖励一键领取等可后续迭代。"
-}

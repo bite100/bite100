@@ -1,4 +1,0 @@
-{
-  "summary": "按清单实现 10.2 Merkle Airdrop 前端领取界面：新增 MerkleAirdropClaim 组件，支持输入合约地址、检查已领取、填写 index/amount/proof 后 claim；置于贡献 tab；支持 VITE_MERKLE_DISTRIBUTOR_ADDRESS 默认地址。",
-  "current_status": "10.2 Merkle Airdrop 已完整实现（合约 + 工具 + 前端领取界面）。"
-}

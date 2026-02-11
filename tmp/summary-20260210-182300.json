@@ -1,4 +1,0 @@
-{
-  "summary": "本回合修复跨链桥单元测试依赖的 MockERC20 接口不匹配问题。原先为适配 OpenZeppelin，将 MockERC20 改为带初始供应的三参构造，但 CrossChainBridge.t.sol 仍按旧接口 new MockERC20(name, symbol) 并调用 mint(...)，导致“Wrong argument count”和“Member mint not found”。现已将 MockERC20 改为继承 OZ ERC20，构造函数仅接收 name/symbol，且新增外部 mint(to, amount) 函数，从而同时满足测试用法与统一 ERC20 实现。",
-  "current_status": "MockERC20 现与测试文件接口一致并基于 OpenZeppelin 实现。用户需要在 /d/P2P/contracts 目录再次执行 forge build 和 forge test，以验证编译及所有单元测试是否通过，如仍有错误则根据新的输出继续修复。"
-}

@@ -1,4 +1,0 @@
-{
-  "summary": "完成 7.1 测试覆盖：新增 node/internal/storage/orders_test.go（TestListPairsWithOpenOrders）和 node/internal/match/restore_test.go（TestRestoreOrdersFromStore、TestRestoreOrdersFromStore_nil），所有用例通过。将 docs/优化与改进清单.md 中「测试覆盖」项更新为「🟡 部分完成」并补充说明。",
-  "current_status": "7.1 测试覆盖已部分完成：storage ListPairsWithOpenOrders、match RestoreOrdersFromStore 单元测试已实现并通过。待办：集成测试、合约审计、Gas 优化、合约验证等。"
-}

@@ -1,4 +1,0 @@
-{
-  "summary": "实现 §12.3 Epoch 撮合 + 批量结算：在 frontend 中新增 settleTradesBatch(signer, trades)，将多笔成交一次上链调用 Settlement.settleTradesBatch，1–50 笔；抽取 tradeToSettleParams 复用；在 config.ts 中补充 settleTradesBatch ABI；清单 §12.3 标记完成。",
-  "current_status": "§12.2 内存订单簿+增量、确定性撮合与 Epoch，§12.3 Epoch 撮合+批量结算 已实现。后续可做：多 Relayer、声誉/防 Sybil、清单其余待办项。"
-}

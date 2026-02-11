@@ -1,4 +1,0 @@
-{
-  "summary": "本回合排查 forge build 报错：1）forge 版本不支持 --no-commit，改为直接 forge install LayerZero-Labs/oapp-evm；2）lib/oapp-evm 目录仍不存在导致 OApp.sol 找不到；3）GovernanceExtended.sol 中直接使用中文字符串在 solc 0.8.20 下需显式使用 unicode 字面量。已将 GovernanceExtended.sol 中的中文常量改为 unicode\"...\"，并确认 lib/oapp-evm 仍需通过 forge install 安装。",
-  "current_status": "foundry.toml 已设置 solc=0.8.20，GovernanceExtended.sol 已修复为使用 unicode 字符串；用户需要在 /d/P2P/contracts 目录重新执行 forge install LayerZero-Labs/oapp-evm（不带 --no-commit），然后再运行 forge build 和 forge test，若仍有报错需继续查看输出。"
-}

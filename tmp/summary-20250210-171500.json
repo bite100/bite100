@@ -1,4 +1,0 @@
-{
-  "summary": "实现 §12.2 内存订单簿+增量更新：OrderbookSyncManager 例行同步改为仅发元数据（Bids/Asks=nil）减少带宽；新增 compact level 快照广播到 /sync/orderbook（OrdersToLevelSnapshot 聚合订单为 [price,qty]）；实现 orderbook-request 请求/响应（requestFullOrderbook 发布请求、HandleOrderbookRequest 由 Leader 回传完整订单簿）。同步 TopicOrderbookRequest、ParseOrderbookRequest、orderbook_sync_test.go 及清单标记完成。",
-  "current_status": "§12.2 高性能订单簿-内存订单簿+增量更新 已实现。后续待做：确定性撮合与 Epoch、其他 §12 架构增强，以及清单其余项。"
-}

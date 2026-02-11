@@ -1,4 +1,0 @@
-{
-  "summary": "根据“取消上线奖励，改为创始人奖励”的新需求，将前端的 NodeLaunchRewards 组件从“开发者+节点上线奖励 + 绑定 1–3 节点”调整为纯粹的创始人奖励视图：只读取 NodeRewards 中的 devPoints 和 getTotalRewards，将其展示为创始人积分≈USDT，一键调用 claimRewards 供创始人在主网上线时领取一次，并移除了节点绑定与 1–3 节点的防 Sybil 交互提示。",
-  "current_status": "前端“贡献”页现在将 NodeRewards 模块解释为仅供创始人在上线时一次性领取的创始人奖励，普通用户不会看到节点绑定等入口；合约侧 NodeRewards 仍保留节点绑定相关方法但前端不再调用，后续若需要也可以按同样思路精简合约和文档中的描述。"
-}

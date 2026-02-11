@@ -1,4 +1,0 @@
-{
-  "summary": "按清单实现 12.2 低延迟 API/WebSocket：在 frontend/src/services/wsClient.ts 中增加指数退避重连（1s→2s→4s→…→30s 上限）、onStatusChange 连接状态回调、_disconnecting 避免主动断开时重连、多 relay fallback 保持。",
-  "current_status": "12.2 低延迟 API/WebSocket 重连策略已优化。"
-}

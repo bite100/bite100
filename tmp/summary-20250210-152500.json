@@ -1,4 +1,0 @@
-{
-  "summary": "按清单完成 5.1 Governance 提案逻辑与 6.1 清单标记。FeeDistributor：新增 governance、setGovernance、onlyOwnerOrGovernance；setRecipients/setDeveloperAddress 可由 Governance 提案执行。Governance.t.sol 新增 test_GovernanceProposal_FeeDistributorSetRecipients。Deploy.s.sol runGovernance 支持 FEE_DISTRIBUTOR_ADDRESS；deploy-governance.ps1 绑定 FeeDistributor。清单 5.1、6.1 标为已完成。",
-  "current_status": "5.1 手续费分成提案已实现；6.1 Relayer 防滥用已标记完成。合约 forge test 因环境（solc/oapp）未本地验证，代码修改已落地。可按清单继续下一项。"
-}

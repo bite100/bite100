@@ -1,4 +1,0 @@
-{
-  "summary": "按清单 7.1 测试覆盖新增 FeeDistributor.t.sol 单元测试：覆盖 receiveFee（无/有开发者 1% 自动转）、setRecipients（owner/governance）、claim/claimable、setDeveloperAddress、transferOwnership、share overflow、revert 场景。清单已更新。",
-  "current_status": "7.1 测试覆盖已补充 FeeDistributor 单元测试。forge test 因本地 solc/oapp 环境未运行，代码已落地。可继续清单下一项（如 7.1 Gas 优化、合约验证，或 10.1 链上注册 NodeRegistry）。"
-}

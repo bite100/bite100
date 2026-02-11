@@ -1,4 +1,0 @@
-{
-  "summary": "按清单 1.2 实现建议添加 match 单元测试：新建 node/internal/match/engine_test.go，包含 TestReplaceOrderbook（验证 ReplaceOrderbook 替换订单簿）和 TestMatchDeterministicTradeID（验证确定性 TradeID 格式 takerID-makerID-seq）。",
-  "current_status": "清单 1.2 单元测试已补充。下一步可做 2.2 离线体验、2.3 价格参考标记完成、3.1 Config 结构等。"
-}
