@@ -29,6 +29,9 @@ export function MobileConnectHint() {
 
   return (
     <div className="mobile-connect-hint" style={{ marginTop: '0.25rem' }}>
+      <p style={{ fontSize: '0.75rem', color: '#888', marginBottom: '0.35rem' }}>
+        若已在钱包 App 内打开，请稍候几秒或刷新页面以检测钱包。
+      </p>
       <button
         type="button"
         className="btn secondary"

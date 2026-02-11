@@ -1,14 +1,21 @@
 /** 工具函数：钱包 Provider、缓存、错误格式化等（仅浏览器/PWA） */
 import { BrowserProvider, type Eip1193Provider, type Signer } from 'ethers'
 
-const WIN =
-  typeof window !== 'undefined'
-    ? (window as unknown as {
-        ethereum?: Eip1193Provider | Eip1193Provider[];
-        phantom?: { ethereum?: Eip1193Provider };
-        trustwallet?: Eip1193Provider;
-      })
-    : null
+type WinEthereum = {
+  ethereum?: Eip1193Provider | Eip1193Provider[]
+  phantom?: { ethereum?: Eip1193Provider }
+  trustwallet?: Eip1193Provider
+  bitget?: Eip1193Provider
+  rabby?: Eip1193Provider
+  okxwallet?: Eip1193Provider
+  coinbaseWallet?: Eip1193Provider
+  onekey?: Eip1193Provider
+  tokenpocket?: Eip1193Provider
+  safepal?: Eip1193Provider
+  imToken?: Eip1193Provider
+}
+
+const WIN = typeof window !== 'undefined' ? (window as unknown as WinEthereum) : null
 
 function normalizeProvider(p: unknown): Eip1193Provider | null {
   if (!p) return null
@@ -16,24 +23,47 @@ function normalizeProvider(p: unknown): Eip1193Provider | null {
   return p as Eip1193Provider
 }
 
+/** 按优先级尝试的 provider 键（Wagmi 只读 window.ethereum，检测到其他键时会在 main 里写入 ethereum） */
+const PROVIDER_KEYS: (keyof WinEthereum)[] = [
+  'ethereum',
+  'trustwallet',
+  'phantom', // 使用 WIN.phantom?.ethereum 单独处理
+  'bitget',
+  'rabby',
+  'okxwallet',
+  'coinbaseWallet',
+  'onekey',
+  'tokenpocket',
+  'safepal',
+  'imToken',
+]
+
+function getRawProvider(): unknown {
+  if (!WIN) return null
+  if (WIN.ethereum) return WIN.ethereum
+  if (WIN.phantom?.ethereum) return WIN.phantom.ethereum
+  for (const k of PROVIDER_KEYS) {
+    if (k === 'ethereum' || k === 'phantom') continue
+    const v = WIN[k]
+    if (v && typeof (v as Eip1193Provider).request === 'function') return v
+  }
+  return null
+}
+
 export function getEthereum(): Eip1193Provider | null {
-  const raw =
-    WIN?.ethereum ??
-    (WIN as { trustwallet?: Eip1193Provider })?.trustwallet ??
-    WIN?.phantom?.ethereum ??
-    null
-  return normalizeProvider(raw)
+  return normalizeProvider(getRawProvider())
 }
 
 /**
  * 等待钱包注入（钱包 App 内打开时可能延迟注入）
- * @param timeoutMs 最多等待毫秒数，默认 2500
+ * @param timeoutMs 最多等待毫秒数，默认 5000
  */
-export function getEthereumAsync(timeoutMs = 2500): Promise<Eip1193Provider | null> {
+export function getEthereumAsync(timeoutMs = 5000): Promise<Eip1193Provider | null> {
   const existing = getEthereum()
   if (existing) return Promise.resolve(existing)
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs
+    const start = Date.now()
     const tick = () => {
       const eth = getEthereum()
       if (eth) {
@@ -44,9 +74,12 @@ export function getEthereumAsync(timeoutMs = 2500): Promise<Eip1193Provider | nu
         resolve(null)
         return
       }
-      setTimeout(tick, 200)
+      // 前 1.5 秒每 80ms 轮询，之后每 200ms
+      const elapsed = Date.now() - start
+      const interval = elapsed < 1500 ? 80 : 200
+      setTimeout(tick, interval)
     }
-    setTimeout(tick, 100)
+    setTimeout(tick, 50)
   })
 }
 
