@@ -80,13 +80,32 @@ export function requestAccountsOnUserGesture(): Promise<string[]> {
     return Promise.reject(new Error('未检测到钱包。请安装 MetaMask、Trust Wallet、Phantom 等钱包扩展，或在钱包 App 内置浏览器中打开本页。'))
   }
 
-  // 添加超时处理
+  // 添加超时处理和更详细的错误信息
   return Promise.race([
     ethereum.request({ method: 'eth_requestAccounts', params: [] }) as Promise<string[]>,
     new Promise<string[]>((_, reject) => {
       setTimeout(() => {
-        reject(new Error('连接超时。请检查钱包是否正常运行，或稍后重试。'))
+        reject(new Error(`连接超时（${REQUEST_TIMEOUT_MS / 1000}秒）。请检查：\n1. 钱包是否正常运行\n2. 网络连接是否正常\n3. 钱包是否已解锁\n4. 是否已授权该网站访问钱包`))
       }, REQUEST_TIMEOUT_MS)
     }),
-  ])
+  ]).catch((error: unknown) => {
+    // 增强错误信息
+    if (error && typeof error === 'object' && 'code' in error) {
+      const code = error.code as number
+      if (code === 4001) {
+        throw new Error('用户拒绝了连接请求。请重新点击连接按钮并授权。')
+      } else if (code === -32002) {
+        throw new Error('连接请求已在进行中。请等待钱包响应，或刷新页面后重试。')
+      } else if (code === -32603) {
+        throw new Error('钱包内部错误。请检查钱包是否正常运行，或尝试重启钱包。')
+      }
+    }
+    // 检查是否是超时错误
+    if (error instanceof Error && error.message.includes('超时')) {
+      throw error
+    }
+    // 其他错误，提供通用提示
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    throw new Error(`连接失败：${errorMsg}\n\n建议：\n1. 检查钱包是否已安装并解锁\n2. 尝试刷新页面\n3. 检查网络连接\n4. 如问题持续，请联系支持`)
+  })
 }

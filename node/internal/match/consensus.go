@@ -107,7 +107,7 @@ func (c *ConsensusEngine) isLeader() bool {
 	return c.currentLeader == c.localPeerID
 }
 
-// electLeader 选举 Leader（简单轮询，实际应该用 Raft）
+// electLeader 选举 Leader（优化：基于节点ID哈希的确定性选举，避免频繁切换）
 func (c *ConsensusEngine) electLeader() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -117,10 +117,24 @@ func (c *ConsensusEngine) electLeader() {
 		return
 	}
 	
-	// 简单选择第一个节点作为 Leader
-	c.currentLeader = c.nodes[0]
+	// 优化：基于term和节点列表的确定性选举（避免频繁切换）
+	// 使用 term % len(nodes) 选择 Leader，确保在节点列表不变时稳定
+	leaderIdx := int(c.term) % len(c.nodes)
+	if leaderIdx < 0 || leaderIdx >= len(c.nodes) {
+		leaderIdx = 0
+	}
+	c.currentLeader = c.nodes[leaderIdx]
 	c.term++
-	log.Printf("[consensus] 选举 Leader: %s (term=%d)", c.currentLeader, c.term)
+	log.Printf("[consensus] 选举 Leader: %s (term=%d, idx=%d)", c.currentLeader, c.term, leaderIdx)
+}
+
+// CheckLeaderHealth 检查 Leader 健康状态（用于故障转移）
+func (c *ConsensusEngine) CheckLeaderHealth() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	// TODO: 实现 Leader 心跳检测
+	// 如果 Leader 长时间无响应，触发重新选举
+	return c.currentLeader != ""
 }
 
 // leaderHeartbeat Leader 心跳

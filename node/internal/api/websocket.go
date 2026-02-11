@@ -22,9 +22,10 @@ var upgrader = websocket.Upgrader{
 
 // WSClient WebSocket 客户端
 type WSClient struct {
-	conn   *websocket.Conn
-	send   chan []byte
-	server *WSServer
+	conn     *websocket.Conn
+	send     chan []byte
+	server   *WSServer
+	lastPong time.Time // 最后收到pong的时间
 }
 
 // WSServer WebSocket 服务器
@@ -34,15 +35,22 @@ type WSServer struct {
 	register   chan *WSClient
 	unregister chan *WSClient
 	mu         sync.RWMutex
+	// 连接管理优化
+	maxConnections int
+	connectionCount int
+	// 消息队列大小限制
+	maxMessageQueue int
 }
 
 // NewWSServer 创建 WebSocket 服务器
 func NewWSServer() *WSServer {
 	return &WSServer{
-		clients:    make(map[*WSClient]bool),
-		broadcast:  make(chan []byte, 256),
-		register:   make(chan *WSClient),
-		unregister: make(chan *WSClient),
+		clients:         make(map[*WSClient]bool),
+		broadcast:       make(chan []byte, 256),
+		register:        make(chan *WSClient),
+		unregister:      make(chan *WSClient),
+		maxConnections:  1000, // 最大连接数
+		maxMessageQueue: 256,  // 每个客户端最大消息队列
 	}
 }
 
@@ -52,9 +60,17 @@ func (s *WSServer) Run() {
 		select {
 		case client := <-s.register:
 			s.mu.Lock()
+			// 连接管理优化：检查最大连接数
+			if s.maxConnections > 0 && len(s.clients) >= s.maxConnections {
+				s.mu.Unlock()
+				log.Printf("[ws] 连接数已达上限 %d，拒绝新连接", s.maxConnections)
+				client.conn.Close()
+				continue
+			}
 			s.clients[client] = true
+			s.connectionCount = len(s.clients)
 			s.mu.Unlock()
-			log.Printf("[ws] 客户端连接，当前: %d", len(s.clients))
+			log.Printf("[ws] 客户端连接，当前: %d/%d", s.connectionCount, s.maxConnections)
 			
 		case client := <-s.unregister:
 			s.mu.Lock()
@@ -67,15 +83,32 @@ func (s *WSServer) Run() {
 			
 		case message := <-s.broadcast:
 			s.mu.RLock()
+			// 连接管理优化：批量发送，避免阻塞
+			clientsToRemove := make([]*WSClient, 0)
 			for client := range s.clients {
 				select {
 				case client.send <- message:
+					// 发送成功
 				default:
-					close(client.send)
-					delete(s.clients, client)
+					// 消息队列满，标记为移除
+					clientsToRemove = append(clientsToRemove, client)
 				}
 			}
 			s.mu.RUnlock()
+			
+			// 移除无法发送消息的客户端
+			if len(clientsToRemove) > 0 {
+				s.mu.Lock()
+				for _, client := range clientsToRemove {
+					if _, ok := s.clients[client]; ok {
+						close(client.send)
+						delete(s.clients, client)
+					}
+				}
+				s.connectionCount = len(s.clients)
+				s.mu.Unlock()
+				log.Printf("[ws] 移除 %d 个无法发送消息的客户端，当前: %d", len(clientsToRemove), s.connectionCount)
+			}
 		}
 	}
 }
@@ -125,9 +158,23 @@ func (c *WSClient) readPump() {
 	
 	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.conn.SetPongHandler(func(string) error {
+		c.lastPong = time.Now()
 		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		return nil
 	})
+	
+	// 连接健康检查：如果60秒内没有收到pong，关闭连接
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if time.Since(c.lastPong) > 60*time.Second {
+				log.Printf("[ws] 客户端健康检查失败，关闭连接")
+				c.conn.Close()
+				return
+			}
+		}
+	}()
 	
 	for {
 		_, message, err := c.conn.ReadMessage()

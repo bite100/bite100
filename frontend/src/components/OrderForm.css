@@ -129,3 +129,58 @@
 .order-form-market-hint .text-muted { color: #9ca3af; }
 .order-form-market-hint .text-green { color: #059669; }
 .order-form-market-hint .text-red { color: #dc2626; }
+
+.balance-info {
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+.order-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.price-impact {
+  font-size: 0.875rem;
+  padding: 0.5rem;
+  border-radius: 6px;
+}
+
+.price-impact.normal {
+  color: #059669;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.price-impact.caution {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.price-impact.warning {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.gas-estimate {
+  font-size: 0.8125rem;
+  margin-top: 0.25rem;
+}
+
+.gas-suggestion {
+  color: #f59e0b;
+}
+
+.submit-btn.success {
+  background: #10b981 !important;
+  animation: pulse 0.5s ease-out;
+}
+
+.submit-btn.failed {
+  background: #ef4444 !important;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+}

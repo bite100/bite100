@@ -17,12 +17,28 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// cachedResponse 缓存的响应
+type cachedResponse struct {
+	data      []byte
+	timestamp time.Time
+}
+
 // orderRateLimiter 按 key（如 IP）滑动窗口限流，用于 API 下单 Spam 防护
 type orderRateLimiter struct {
 	mu     sync.Mutex
 	hits   map[string][]time.Time
 	limit  int
 	window time.Duration
+	// 优化：使用更精确的令牌桶算法
+	tokens map[string]*tokenBucket
+}
+
+// tokenBucket 令牌桶（用于更精确的限流）
+type tokenBucket struct {
+	tokens     float64
+	lastUpdate time.Time
+	capacity   float64
+	rate       float64 // tokens per second
 }
 
 func newOrderRateLimiter(perMinute int, window time.Duration) *orderRateLimiter {
@@ -30,10 +46,48 @@ func newOrderRateLimiter(perMinute int, window time.Duration) *orderRateLimiter 
 		return nil
 	}
 	return &orderRateLimiter{
-		hits:   make(map[string][]time.Time),
-		limit:  perMinute,
-		window: window,
+		hits:    make(map[string][]time.Time),
+		limit:   perMinute,
+		window:  window,
+		tokens:  make(map[string]*tokenBucket),
 	}
+}
+
+// allowTokenBucket 使用令牌桶算法检查是否允许请求
+func (l *orderRateLimiter) allowTokenBucket(key string) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	
+	now := time.Now()
+	bucket, ok := l.tokens[key]
+	if !ok {
+		// 初始化令牌桶：容量为limit，速率为limit/window
+		bucket = &tokenBucket{
+			tokens:     float64(l.limit),
+			lastUpdate: now,
+			capacity:   float64(l.limit),
+			rate:       float64(l.limit) / window.Seconds(),
+		}
+		l.tokens[key] = bucket
+	}
+	
+	// 补充令牌
+	elapsed := now.Sub(bucket.lastUpdate).Seconds()
+	bucket.tokens = bucket.tokens + elapsed*bucket.rate
+	if bucket.tokens > bucket.capacity {
+		bucket.tokens = bucket.capacity
+	}
+	bucket.lastUpdate = now
+	
+	// 检查是否有足够的令牌
+	if bucket.tokens >= 1.0 {
+		bucket.tokens -= 1.0
+		return true
+	}
+	return false
 }
 
 // MaskIP 脱敏 IP，用于日志输出（不记录完整 IP 策略）
@@ -77,22 +131,23 @@ func (l *orderRateLimiter) Allow(key string) bool {
 	if l == nil {
 		return true
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	cut := now.Add(-l.window)
-	slice := l.hits[key]
-	// 去掉窗口外的记录
-	i := 0
-	for i < len(slice) && slice[i].Before(cut) {
-		i++
+	// 优化：优先使用令牌桶算法（更精确）
+	if l.allowTokenBucket(key) {
+		// 同时更新滑动窗口（用于兼容）
+		l.mu.Lock()
+		now := time.Now()
+		cut := now.Add(-l.window)
+		slice := l.hits[key]
+		i := 0
+		for i < len(slice) && slice[i].Before(cut) {
+			i++
+		}
+		slice = slice[i:]
+		l.hits[key] = append(slice, now)
+		l.mu.Unlock()
+		return true
 	}
-	slice = slice[i:]
-	if len(slice) >= l.limit {
-		return false
-	}
-	l.hits[key] = append(slice, now)
-	return true
+	return false
 }
 
 // Server HTTP API 服务
@@ -106,6 +161,12 @@ type Server struct {
 	RateLimitOrdersPerMinute uint64    // 每 IP 每分钟下单上限，0=不限制（Spam 防护）
 	BlockedTraders           map[string]struct{} // 黑名单：拒绝这些地址下单（Spam 防护；从 config api.blocked_traders 构建）
 	orderLimiter              *orderRateLimiter
+	// 响应缓存优化
+	responseCache            map[string]*cachedResponse
+	cacheMu                  sync.RWMutex
+	cacheTTL                 time.Duration
+	// API响应时间监控
+	responseTimeHistogram    map[string][]time.Duration
 }
 
 // BuildTraderBlacklist 从配置构建 trader 黑名单 map（地址统一小写）；用于 Spam 防护
@@ -154,6 +215,22 @@ func (s *Server) Run(listen string) {
 		go s.WSServer.Run()
 	}
 	
+	// 初始化响应缓存
+	if s.responseCache == nil {
+		s.responseCache = make(map[string]*cachedResponse)
+		s.cacheTTL = 5 * time.Second // 默认5秒缓存
+		s.responseTimeHistogram = make(map[string][]time.Duration)
+	}
+	
+	// 定期清理过期缓存
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.cleanExpiredCache()
+		}
+	}()
+	
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/orderbook", s.cors(s.handleOrderbook))
 	mux.HandleFunc("/api/trades", s.cors(s.handleTrades))
@@ -182,7 +259,64 @@ func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		// API响应时间监控
+		start := time.Now()
 		next(w, r)
+		duration := time.Since(start)
+		s.recordResponseTime(r.URL.Path, duration)
+	}
+}
+
+// recordResponseTime 记录API响应时间
+func (s *Server) recordResponseTime(path string, duration time.Duration) {
+	if s.responseTimeHistogram == nil {
+		return
+	}
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if s.responseTimeHistogram[path] == nil {
+		s.responseTimeHistogram[path] = make([]time.Duration, 0, 100)
+	}
+	s.responseTimeHistogram[path] = append(s.responseTimeHistogram[path], duration)
+	// 只保留最近100条记录
+	if len(s.responseTimeHistogram[path]) > 100 {
+		s.responseTimeHistogram[path] = s.responseTimeHistogram[path][len(s.responseTimeHistogram[path])-100:]
+	}
+}
+
+// cleanExpiredCache 清理过期缓存
+func (s *Server) cleanExpiredCache() {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	now := time.Now()
+	for key, cached := range s.responseCache {
+		if now.Sub(cached.timestamp) > s.cacheTTL {
+			delete(s.responseCache, key)
+		}
+	}
+}
+
+// getCachedResponse 获取缓存的响应
+func (s *Server) getCachedResponse(key string) []byte {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	cached, ok := s.responseCache[key]
+	if !ok {
+		return nil
+	}
+	if time.Since(cached.timestamp) > s.cacheTTL {
+		return nil
+	}
+	return cached.data
+}
+
+// setCachedResponse 设置缓存的响应
+func (s *Server) setCachedResponse(key string, data []byte) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	s.responseCache[key] = &cachedResponse{
+		data:      data,
+		timestamp: time.Now(),
 	}
 }
 
@@ -218,6 +352,16 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "pair required", http.StatusBadRequest)
 		return
 	}
+	
+	// 响应缓存优化：检查缓存
+	cacheKey := "orderbook:" + pair
+	if cached := s.getCachedResponse(cacheKey); cached != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Cache", "HIT")
+		_, _ = w.Write(cached)
+		return
+	}
+	
 	var bids, asks []*storage.Order
 	if s.MatchEngine != nil {
 		bids, asks = s.MatchEngine.GetOrderbook(pair)
@@ -231,8 +375,20 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	
+	response := OrderbookResponse{Pair: pair, Bids: bids, Asks: asks}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(OrderbookResponse{Pair: pair, Bids: bids, Asks: asks})
+	w.Header().Set("X-Cache", "MISS")
+	
+	// 编码并缓存响应
+	var buf []byte
+	if data, err := json.Marshal(response); err == nil {
+		buf = data
+		s.setCachedResponse(cacheKey, data)
+		_, _ = w.Write(data)
+	} else {
+		http.Error(w, "encode error", http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) handleTrades(w http.ResponseWriter, r *http.Request) {
@@ -312,6 +468,14 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	
+	// 错误处理优化：使用defer恢复panic
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[api] handlePostOrder panic: %v", r)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}
+	}()
 	var o storage.Order
 	if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)

@@ -43,10 +43,11 @@ export class P2PWebSocketClient {
     return () => this.statusListeners.delete(cb)
   }
 
-  /** 指数退避延迟：1s, 2s, 4s, ..., 上限 30s */
+  /** 指数退避 + 随机 jitter，避免多客户端同时重连 */
   private getReconnectDelay(): number {
-    const delay = Math.min(MIN_RECONNECT_MS * Math.pow(2, this.consecutiveFailures), MAX_RECONNECT_MS)
-    return Math.min(delay, MAX_RECONNECT_MS)
+    const base = Math.min(MIN_RECONNECT_MS * Math.pow(2, this.consecutiveFailures), MAX_RECONNECT_MS)
+    const jitter = base * 0.2 * (Math.random() - 0.5)
+    return Math.round(base + jitter)
   }
 
   connect() {
@@ -111,21 +112,21 @@ export class P2PWebSocketClient {
     this._disconnecting = false
   }
   
-  subscribe(type: WSMessageType, callback: (data: any) => void) {
+  /** 订阅消息：callback 收到完整 WSMessage（含 type、pair、data），便于按 pair 过滤 */
+  subscribe(type: WSMessageType, callback: (msg: WSMessage) => void) {
     if (!this.listeners.has(type)) {
       this.listeners.set(type, new Set())
     }
     this.listeners.get(type)!.add(callback)
-    
     return () => {
       this.listeners.get(type)?.delete(callback)
     }
   }
-  
+
   private handleMessage(msg: WSMessage) {
     const callbacks = this.listeners.get(msg.type)
     if (callbacks) {
-      callbacks.forEach(cb => cb(msg.data))
+      callbacks.forEach((cb: (m: WSMessage) => void) => cb(msg))
     }
   }
   

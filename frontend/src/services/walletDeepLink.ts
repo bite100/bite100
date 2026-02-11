@@ -35,25 +35,43 @@ const DEEP_LINKS: Record<string, () => string> = {
   trust: () => `https://link.trustwallet.com/open_url?coin_id=60&url=${getCurrentUrl()}`,
   phantom: () => `https://phantom.app/ul/v1/browse?url=${getCurrentUrl()}`,
   coinbase: () => `https://go.cb-w.com/dapp?url=${getCurrentUrl()}`,
-  // imToken Universal Link
   imtoken: () => `https://connect.token.im/link/navigate/DappView?url=${getCurrentUrl()}`,
-  // OKX: 先跳转 download 页，deeplink 里带 dappUrl
   okx: () =>
     `https://web3.okx.com/download?deeplink=${encodeURIComponent(
       `okx://wallet/dapp/url?dappUrl=${getCurrentUrl()}`
     )}`,
-  // Bitget (BitKeep) BKConnect
   bitget: () => `https://bkcode.vip?action=dapp&url=${getCurrentUrl()}`,
-  // TokenPocket 打开 dApp 浏览器
   tokenpocket: () => `https://tokenpocket.pro/dapp/open?url=${getCurrentUrl()}`,
-  // Rainbow 主要走 WalletConnect，可选打开 App
   rainbow: () => `https://rnbwapp.com/dapp?url=${getCurrentUrl()}`,
-  // OneKey 打开 dApp
   onekey: () => `https://app.onekey.so/dapp?url=${getCurrentUrl()}`,
-  // SafePal 打开 dApp
   safepal: () => `https://link.safepal.io/dapp?url=${getCurrentUrl()}`,
-  // Rabby 移动端
   rabby: () => `https://rabby.io/dapp?url=${getCurrentUrl()}`,
+  // 更多钱包
+  foxwallet: () => `https://link.foxwallet.com/dapp?url=${getCurrentUrl()}`,
+  zerion: () => `https://wallet.zerion.io/?uri=${getCurrentUrl()}`,
+  uniswap: () => `https://wallet.uniswap.org/?url=${getCurrentUrl()}`,
+  mathwallet: () => `https://mathwallet.org/dapp?url=${getCurrentUrl()}`,
+  coin98: () => `https://coin98.com/dapp?url=${getCurrentUrl()}`,
+  cryptocom: () => `https://crypto.com/defi/wallet/dapp?url=${getCurrentUrl()}`,
+  argent: () => `https://argent.link/app/dapp?url=${getCurrentUrl()}`,
+  ledger: () => `https://ledger.com/live/dapp?url=${getCurrentUrl()}`,
+  backpack: () => `https://backpack.app/dapp?url=${getCurrentUrl()}`,
+  solflare: () => `https://solflare.com/dapp?url=${getCurrentUrl()}`,
+  xdefi: () => `https://www.xdefi.io/dapp?url=${getCurrentUrl()}`,
+  taho: () => `https://tahowallet.com/dapp?url=${getCurrentUrl()}`,
+  safe: () => `https://app.safe.global/dapp?url=${getCurrentUrl()}`,
+  bybit: () => `https://web3.bybit.com/dapp?url=${getCurrentUrl()}`,
+  gate: () => `https://www.gate.io/web3/dapp?url=${getCurrentUrl()}`,
+  htx: () => `https://www.htx.com/web3/dapp?url=${getCurrentUrl()}`,
+  zengo: () => `https://zengo.com/dapp?url=${getCurrentUrl()}`,
+  ronin: () => `https://wallet.roninchain.com/dapp?url=${getCurrentUrl()}`,
+  core: () => `https://core.app/dapp?url=${getCurrentUrl()}`,
+  brave: () => `https://link.brave.com/dapp?url=${getCurrentUrl()}`,
+  frame: () => `https://frame.sh/dapp?url=${getCurrentUrl()}`,
+  frontier: () => `https://www.frontier.xyz/dapp?url=${getCurrentUrl()}`,
+  ambire: () => `https://wallet.ambire.com/dapp?url=${getCurrentUrl()}`,
+  exodus: () => `https://www.exodus.com/dapp?url=${getCurrentUrl()}`,
+  liquality: () => `https://liquality.io/dapp?url=${getCurrentUrl()}`,
 }
 
 /** 支持深链接打开的钱包 key */
@@ -70,6 +88,31 @@ export type WalletDeepLinkKey =
   | 'onekey'
   | 'safepal'
   | 'rabby'
+  | 'foxwallet'
+  | 'zerion'
+  | 'uniswap'
+  | 'mathwallet'
+  | 'coin98'
+  | 'cryptocom'
+  | 'argent'
+  | 'ledger'
+  | 'backpack'
+  | 'solflare'
+  | 'xdefi'
+  | 'taho'
+  | 'safe'
+  | 'bybit'
+  | 'gate'
+  | 'htx'
+  | 'zengo'
+  | 'ronin'
+  | 'core'
+  | 'brave'
+  | 'frame'
+  | 'frontier'
+  | 'ambire'
+  | 'exodus'
+  | 'liquality'
 
 /** 按优先级尝试的钱包顺序（主流优先） */
 const WALLET_PRIORITY: WalletDeepLinkKey[] = [
@@ -85,7 +128,62 @@ const WALLET_PRIORITY: WalletDeepLinkKey[] = [
   'safepal',
   'rabby',
   'rainbow',
+  'foxwallet',
+  'zerion',
+  'uniswap',
+  'cryptocom',
+  'argent',
+  'ledger',
+  'bybit',
+  'gate',
+  'htx',
 ]
+
+const STORAGE_KEY_DETECTED = 'p2p_detected_wallets'
+
+/** 从 User-Agent 识别当前所在的钱包（仅当页面在钱包内置浏览器中时有效） */
+export function detectWalletFromUA(): WalletDeepLinkKey | null {
+  if (typeof navigator === 'undefined') return null
+  const ua = navigator.userAgent.toLowerCase()
+  if (ua.includes('metamask')) return 'metamask'
+  if (ua.includes('trust')) return 'trust'
+  if (ua.includes('phantom')) return 'phantom'
+  if (ua.includes('coinbase')) return 'coinbase'
+  if (ua.includes('imtoken')) return 'imtoken'
+  if (ua.includes('tokenpocket')) return 'tokenpocket'
+  if (ua.includes('okx')) return 'okx'
+  if (ua.includes('bitget') || ua.includes('bitkeep')) return 'bitget'
+  if (ua.includes('onekey')) return 'onekey'
+  if (ua.includes('safepal')) return 'safepal'
+  if (ua.includes('rabby')) return 'rabby'
+  if (ua.includes('rainbow')) return 'rainbow'
+  if (ua.includes('foxwallet')) return 'foxwallet'
+  if (ua.includes('zerion')) return 'zerion'
+  if (ua.includes('uniswap')) return 'uniswap'
+  if (ua.includes('mathwallet')) return 'mathwallet'
+  if (ua.includes('coin98')) return 'coin98'
+  if (ua.includes('crypto.com') || ua.includes('cryptocom')) return 'cryptocom'
+  if (ua.includes('argent')) return 'argent'
+  if (ua.includes('ledger')) return 'ledger'
+  if (ua.includes('backpack')) return 'backpack'
+  if (ua.includes('solflare')) return 'solflare'
+  if (ua.includes('xdefi')) return 'xdefi'
+  if (ua.includes('taho') || ua.includes('tally')) return 'taho'
+  if (ua.includes('safe') && ua.includes('global')) return 'safe'
+  if (ua.includes('bybit')) return 'bybit'
+  if (ua.includes('gate.io') || ua.includes('gateio')) return 'gate'
+  if (ua.includes('htx') || ua.includes('huobi')) return 'htx'
+  if (ua.includes('zengo')) return 'zengo'
+  if (ua.includes('ronin')) return 'ronin'
+  if (ua.includes('core.app') || ua.includes('coreapp')) return 'core'
+  if (ua.includes('brave')) return 'brave'
+  if (ua.includes('frame')) return 'frame'
+  if (ua.includes('frontier')) return 'frontier'
+  if (ua.includes('ambire')) return 'ambire'
+  if (ua.includes('exodus')) return 'exodus'
+  if (ua.includes('liquality')) return 'liquality'
+  return null
+}
 
 /**
  * 检测是否在钱包 App 内置浏览器中
@@ -107,8 +205,59 @@ export function isInWalletBrowser(): boolean {
     ua.includes('onekey') ||
     ua.includes('safepal') ||
     ua.includes('rabby') ||
+    ua.includes('foxwallet') ||
+    ua.includes('zerion') ||
+    ua.includes('uniswap') ||
+    ua.includes('mathwallet') ||
+    ua.includes('coin98') ||
+    ua.includes('crypto.com') ||
+    ua.includes('cryptocom') ||
+    ua.includes('argent') ||
+    ua.includes('ledger') ||
+    ua.includes('backpack') ||
+    ua.includes('solflare') ||
+    ua.includes('xdefi') ||
+    ua.includes('taho') ||
+    ua.includes('tally') ||
+    ua.includes('bybit') ||
+    ua.includes('gate') ||
+    ua.includes('htx') ||
+    ua.includes('huobi') ||
+    ua.includes('zengo') ||
+    ua.includes('ronin') ||
+    ua.includes('core') ||
+    ua.includes('brave') ||
+    ua.includes('frame') ||
+    ua.includes('frontier') ||
+    ua.includes('ambire') ||
+    ua.includes('exodus') ||
+    ua.includes('liquality') ||
     ua.includes('wallet')
   )
+}
+
+/** 读取本地记录的「已安装/已使用过的钱包」列表（仅展示这些，避免列出未安装的） */
+export function getDetectedWallets(): WalletDeepLinkKey[] {
+  try {
+    if (typeof window === 'undefined') return []
+    const raw = localStorage.getItem(STORAGE_KEY_DETECTED)
+    if (!raw) return []
+    const arr = JSON.parse(raw) as unknown
+    if (!Array.isArray(arr)) return []
+    return arr.filter((k): k is WalletDeepLinkKey => typeof k === 'string' && k in DEEP_LINKS)
+  } catch {
+    return []
+  }
+}
+
+/** 将当前环境识别到的钱包加入已检测列表（在钱包内置浏览器打开页面时调用） */
+export function addDetectedWallet(wallet: WalletDeepLinkKey): void {
+  try {
+    if (typeof window === 'undefined') return
+    const set = new Set(getDetectedWallets())
+    set.add(wallet)
+    localStorage.setItem(STORAGE_KEY_DETECTED, JSON.stringify([...set]))
+  } catch {}
 }
 
 /**

@@ -35,6 +35,11 @@ type Engine struct {
 	currentTrades  uint64
 	currentVolume  *big.Int
 	periodStats    map[string]*PeriodStats // 已结束周期缓存，供证明读取
+	// 性能优化：订单验证缓存（避免重复验证）
+	signatureCache map[string]bool // orderID -> 验证结果
+	cacheMu        sync.RWMutex
+	// 内存优化：订单簿大小限制
+	maxOrdersPerPair int
 }
 
 // NewEngine 创建撮合引擎
@@ -43,11 +48,13 @@ func NewEngine(pairTokens map[string]PairTokens) *Engine {
 		pairTokens = make(map[string]PairTokens)
 	}
 	e := &Engine{
-		pairs:         make(map[string]*OrderBook),
-		tokens:        pairTokens,
-		orderIDToPair: make(map[string]string),
-		currentVolume: new(big.Int),
-		periodStats:   make(map[string]*PeriodStats),
+		pairs:            make(map[string]*OrderBook),
+		tokens:           pairTokens,
+		orderIDToPair:    make(map[string]string),
+		currentVolume:    new(big.Int),
+		periodStats:      make(map[string]*PeriodStats),
+		signatureCache:   make(map[string]bool, 1000), // 预分配缓存空间
+		maxOrdersPerPair: 10000,                        // 默认每个交易对最多10000个订单
 	}
 	return e
 }
@@ -145,6 +152,9 @@ func (e *Engine) GetOrderbook(pair string) (bids, asks []*storage.Order) {
 	if !ok {
 		return nil, nil
 	}
+	// 内存优化：预分配切片容量，减少内存分配
+	bids = make([]*storage.Order, 0, len(ob.Bids))
+	asks = make([]*storage.Order, 0, len(ob.Asks))
 	for _, o := range ob.Bids {
 		c := *o
 		bids = append(bids, &c)
@@ -154,6 +164,45 @@ func (e *Engine) GetOrderbook(pair string) (bids, asks []*storage.Order) {
 		asks = append(asks, &c)
 	}
 	return bids, asks
+}
+
+// IsSignatureValid 检查订单签名是否有效（带缓存）
+func (e *Engine) IsSignatureValid(orderID string, order *storage.Order, pairTokens *PairTokens) (bool, error) {
+	// 检查缓存
+	e.cacheMu.RLock()
+	if cached, ok := e.signatureCache[orderID]; ok {
+		e.cacheMu.RUnlock()
+		metrics.RecordSignatureCacheHit()
+		return cached, nil
+	}
+	e.cacheMu.RUnlock()
+	metrics.RecordSignatureCacheMiss()
+	
+	// 验证签名
+	valid, err := VerifyOrderSignature(order, pairTokens)
+	if err != nil {
+		return false, err
+	}
+	
+	// 更新缓存（限制缓存大小）
+	e.cacheMu.Lock()
+	if len(e.signatureCache) < 10000 {
+		e.signatureCache[orderID] = valid
+	}
+	e.cacheMu.Unlock()
+	
+	return valid, nil
+}
+
+// ClearSignatureCache 清除签名缓存（定期清理过期缓存）
+func (e *Engine) ClearSignatureCache() {
+	e.cacheMu.Lock()
+	defer e.cacheMu.Unlock()
+	// 保留最近1000个缓存项
+	if len(e.signatureCache) > 1000 {
+		// 简单策略：清空缓存（实际可以保留最近使用的）
+		e.signatureCache = make(map[string]bool, 1000)
+	}
 }
 
 // AddOrder 将订单加入订单簿（未撮合部分）；同 orderID 先移除再插入；返回是否插入成功；已过期订单不加入（Replay/过期防护）
@@ -185,26 +234,55 @@ func (e *Engine) AddOrder(o *storage.Order) bool {
 	o2 := *o
 	o2.Filled = "0"
 	o2.Amount = left.Text('f', 18)
+	// 内存管理优化：限制订单簿大小
 	if o.Side == "buy" {
+		if len(ob.Bids) >= e.maxOrdersPerPair {
+			// 移除最旧的订单（价格最低或时间最晚）
+			if len(ob.Bids) > 0 {
+				ob.Bids = ob.Bids[:len(ob.Bids)-1]
+			}
+		}
 		ob.Bids = append(ob.Bids, &o2)
-		sort.Slice(ob.Bids, func(i, j int) bool {
-			pi, pj := bigNew(ob.Bids[i].Price), bigNew(ob.Bids[j].Price)
-			if pi.Cmp(pj) != 0 {
-				return pi.Cmp(pj) > 0
-			}
-			return ob.Bids[i].CreatedAt < ob.Bids[j].CreatedAt
-		})
+		// 算法优化：使用更高效的插入排序（对于已排序列表，插入排序比完整排序更快）
+		e.insertOrderSorted(ob.Bids, true)
 	} else {
-		ob.Asks = append(ob.Asks, &o2)
-		sort.Slice(ob.Asks, func(i, j int) bool {
-			pi, pj := bigNew(ob.Asks[i].Price), bigNew(ob.Asks[j].Price)
-			if pi.Cmp(pj) != 0 {
-				return pi.Cmp(pj) < 0
+		if len(ob.Asks) >= e.maxOrdersPerPair {
+			if len(ob.Asks) > 0 {
+				ob.Asks = ob.Asks[:len(ob.Asks)-1]
 			}
-			return ob.Asks[i].CreatedAt < ob.Asks[j].CreatedAt
-		})
+		}
+		ob.Asks = append(ob.Asks, &o2)
+		e.insertOrderSorted(ob.Asks, false)
 	}
 	return true
+}
+
+// insertOrderSorted 将订单插入到已排序的列表中（优化：O(n)插入而非O(n log n)排序）
+func (e *Engine) insertOrderSorted(orders []*storage.Order, isBids bool) {
+	if len(orders) <= 1 {
+		return
+	}
+	// 找到插入位置
+	newOrder := orders[len(orders)-1]
+	newPrice := bigNew(newOrder.Price)
+	insertIdx := len(orders) - 1
+	
+	for i := len(orders) - 2; i >= 0; i-- {
+		price := bigNew(orders[i].Price)
+		var shouldSwap bool
+		if isBids {
+			shouldSwap = newPrice.Cmp(price) > 0 || (newPrice.Cmp(price) == 0 && newOrder.CreatedAt < orders[i].CreatedAt)
+		} else {
+			shouldSwap = newPrice.Cmp(price) < 0 || (newPrice.Cmp(price) == 0 && newOrder.CreatedAt < orders[i].CreatedAt)
+		}
+		if shouldSwap {
+			orders[i+1], orders[i] = orders[i], orders[i+1]
+			insertIdx = i
+		} else {
+			break
+		}
+	}
+}
 }
 
 // ReplaceOrderbook 用给定买卖盘替换某交易对的订单簿（用于 1.2 订单簿同步）；跳过已过期订单
@@ -256,21 +334,29 @@ func (e *Engine) ReplaceOrderbook(pair string, bids, asks []*storage.Order) {
 		ob.Asks = append(ob.Asks, &o2)
 		e.orderIDToPair[o.OrderID] = pair
 	}
-	sort.Slice(ob.Bids, func(i, j int) bool {
-		pi, pj := bigNew(ob.Bids[i].Price), bigNew(ob.Bids[j].Price)
-		if pi.Cmp(pj) != 0 {
-			return pi.Cmp(pj) > 0
-		}
-		return ob.Bids[i].CreatedAt < ob.Bids[j].CreatedAt
-	})
-	sort.Slice(ob.Asks, func(i, j int) bool {
-		pi, pj := bigNew(ob.Asks[i].Price), bigNew(ob.Asks[j].Price)
-		if pi.Cmp(pj) != 0 {
-			return pi.Cmp(pj) < 0
-		}
-		return ob.Asks[i].CreatedAt < ob.Asks[j].CreatedAt
-	})
+	// 算法优化：使用稳定的排序算法，减少比较次数
+	e.sortOrdersOptimized(ob.Bids, true)
+	e.sortOrdersOptimized(ob.Asks, false)
 	e.pairs[pair] = ob
+}
+
+// sortOrdersOptimized 优化的排序函数（使用稳定的排序算法）
+func (e *Engine) sortOrdersOptimized(orders []*storage.Order, isBids bool) {
+	if len(orders) <= 1 {
+		return
+	}
+	// 使用稳定的排序，保持相同价格的订单按时间顺序
+	sort.SliceStable(orders, func(i, j int) bool {
+		pi, pj := bigNew(orders[i].Price), bigNew(orders[j].Price)
+		cmp := pi.Cmp(pj)
+		if cmp != 0 {
+			if isBids {
+				return cmp > 0 // 买盘：价格降序
+			}
+			return cmp < 0 // 卖盘：价格升序
+		}
+		return orders[i].CreatedAt < orders[j].CreatedAt // 同价按时间升序
+	})
 }
 
 // RemoveOrder 从订单簿移除订单（撤单）；若 pair 为空则按 orderID 查找
@@ -302,14 +388,15 @@ func (e *Engine) RemoveOrder(pair, orderID string) bool {
 }
 
 func removeOrderFromBook(ob *OrderBook, orderID string) bool {
+	// 内存优化：使用更高效的删除方式（避免不必要的内存分配）
 	remove := func(orders []*storage.Order) []*storage.Order {
-		out := orders[:0]
-		for _, o := range orders {
-			if o.OrderID != orderID {
-				out = append(out, o)
+		for i, o := range orders {
+			if o.OrderID == orderID {
+				// 使用切片技巧快速删除
+				return append(orders[:i], orders[i+1:]...)
 			}
 		}
-		return out
+		return orders
 	}
 	before := len(ob.Bids) + len(ob.Asks)
 	ob.Bids = remove(ob.Bids)
@@ -469,6 +556,13 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 		log.Printf("[match] pair=%s taker=%s 成交 %d 笔", taker.Pair, taker.OrderID, len(trades))
 		e.addMatchStats(trades)
 	}
+	
+	// 性能监控：记录订单簿大小
+	if ob, ok := e.pairs[taker.Pair]; ok {
+		metrics.RecordOrderbookSize(taker.Pair, len(ob.Bids), len(ob.Asks))
+	}
+	metrics.RecordOrderProcessed()
+	
 	return trades
 }
 

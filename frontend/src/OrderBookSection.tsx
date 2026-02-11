@@ -1,21 +1,22 @@
 /**
  * Phase 3.5：订单簿展示、限价单下单/撤单、成交与结算状态
- * 支持多节点 P2P（VITE_NODE_API_URL 逗号分隔多个 URL 时依次尝试）；手机端本地缓存订单簿/成交/我的订单
+ * 支持多节点 P2P、WebSocket 增量更新、虚拟滚动
  */
 import { useState, useEffect, useCallback } from 'react'
-import { ethers } from 'ethers'
-import { NODE_API_URL, NODE_API_URLS } from './config'
-import { formatError } from './utils'
+import { ethers, Contract } from 'ethers'
+import { NODE_API_URL, NODE_API_URLS, TOKEN0_ADDRESS, TOKEN1_ADDRESS, ERC20_ABI } from './config'
+import { formatError, formatTokenAmount, getProvider } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { nodeGet, nodePost } from './nodeClient'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
 import { signOrder, signCancelOrder, generateOrderId } from './services/orderSigning'
 import { verifyOrderSignatureSignedData } from './services/orderVerification'
-import { TOKEN0_ADDRESS, TOKEN1_ADDRESS } from './config'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorDisplay } from './components/ErrorDisplay'
 import { FeeDisplay } from './components/FeeDisplay'
+import { VirtualList } from './components/VirtualList'
 import { useOnlineStatus } from './hooks/useOnlineStatus'
+import { p2pWS } from './services/wsClient'
 import type { Signer } from 'ethers'
 import './App.css'
 
@@ -59,13 +60,33 @@ interface OrderbookResponse {
 }
 
 const DEFAULT_PAIR = 'TKA/TKB'
-const ORDERBOOK_DISPLAY_DEPTH = 12
+const ORDERBOOK_DISPLAY_DEPTH = 100
+const ORDERBOOK_ROW_HEIGHT = 28
+const ORDERBOOK_PANEL_HEIGHT = 220
 const TRADES_DISPLAY_LIMIT = 15
 const hasNodeApi = () => !!(NODE_API_URL || NODE_API_URLS.length > 0)
+
+function normalizeOrder(o: Record<string, unknown>): Order {
+  return {
+    orderId: String(o.orderId ?? o.OrderID ?? ''),
+    trader: String(o.trader ?? o.Trader ?? ''),
+    pair: String(o.pair ?? ''),
+    side: (o.side as 'buy' | 'sell') ?? 'buy',
+    price: String(o.price ?? ''),
+    amount: String(o.amount ?? ''),
+    filled: String(o.filled ?? '0'),
+    status: String(o.status ?? 'open'),
+    nonce: Number(o.nonce ?? 0),
+    createdAt: Number(o.createdAt ?? 0),
+    expiresAt: Number(o.expiresAt ?? 0),
+    signature: o.signature != null ? String(o.signature) : undefined,
+  }
+}
 
 export function OrderBookSection({ account, getSigner }: { account: string | null; getSigner: () => Promise<Signer | null> }) {
   const [pair, setPair] = useState(DEFAULT_PAIR)
   const [orderbook, setOrderbook] = useState<OrderbookResponse | null>(null)
+  const [prevOrderbook, setPrevOrderbook] = useState<OrderbookResponse | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [myOrders, setMyOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(false)
@@ -80,6 +101,9 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
   const [connectedNode, setConnectedNode] = useState<string | null>(null)
   const [fromCache, setFromCache] = useState<{ orderbook?: boolean; trades?: boolean; myOrders?: boolean }>({})
   const [tradesFilterMine, setTradesFilterMine] = useState(false) // 连接钱包后可过滤「我的交易」
+  const [priceAnimations, setPriceAnimations] = useState<Map<string, 'up' | 'down'>>(new Map())
+  const [balance, setBalance] = useState<string>('')
+  const [balanceLoading, setBalanceLoading] = useState(false)
   const isOnline = useOnlineStatus()
   const { basePrice, quotePrice, loading: marketPriceLoading, error: marketPriceError } = usePairMarketPrice(pair)
 
@@ -89,6 +113,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
     const cacheKey = CACHE_KEYS_ORDERBOOK.orderbook(pair)
     const cached = getCached<OrderbookResponse>(cacheKey)
     if (cached) {
+      setPrevOrderbook(orderbook)
       setOrderbook(cached)
       setFromCache((f) => ({ ...f, orderbook: true }))
     }
@@ -98,6 +123,34 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
     }
     try {
       const { data, baseUrl } = await nodeGet<OrderbookResponse>('/api/orderbook', { pair })
+      // 检测价格变化并设置动画
+      if (orderbook && data) {
+        const animMap = new Map<string, 'up' | 'down'>()
+        // 检查买盘价格变化
+        if (orderbook.bids.length > 0 && data.bids.length > 0) {
+          const prevBestBid = parseFloat(orderbook.bids[0].price)
+          const newBestBid = parseFloat(data.bids[0].price)
+          if (newBestBid > prevBestBid) {
+            animMap.set(data.bids[0].orderId, 'up')
+          } else if (newBestBid < prevBestBid) {
+            animMap.set(data.bids[0].orderId, 'down')
+          }
+        }
+        // 检查卖盘价格变化
+        if (orderbook.asks.length > 0 && data.asks.length > 0) {
+          const prevBestAsk = parseFloat(orderbook.asks[0].price)
+          const newBestAsk = parseFloat(data.asks[0].price)
+          if (newBestAsk > prevBestAsk) {
+            animMap.set(data.asks[0].orderId, 'up')
+          } else if (newBestAsk < prevBestAsk) {
+            animMap.set(data.asks[0].orderId, 'down')
+          }
+        }
+        setPriceAnimations(animMap)
+        // 动画结束后清除
+        setTimeout(() => setPriceAnimations(new Map()), 600)
+      }
+      setPrevOrderbook(orderbook)
       setOrderbook(data)
       setCached(cacheKey, data)
       setConnectedNode(baseUrl)
@@ -106,7 +159,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
       if (!cached) setOrderbook(null)
       setError((e as Error).message)
     }
-  }, [pair, isOnline])
+  }, [pair, isOnline, orderbook])
 
   const fetchTrades = useCallback(async () => {
     if (!hasNodeApi()) return
@@ -170,6 +223,65 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
     )
   }, [pair, account, refreshAt, fetchOrderbook, fetchTrades, fetchMyOrders])
 
+  // 获取余额
+  const fetchBalance = useCallback(async () => {
+    if (!account) {
+      setBalance('')
+      return
+    }
+    setBalanceLoading(true)
+    try {
+      const provider = getProvider()
+      if (!provider) return
+      const tokenAddress = side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+      const token = new Contract(tokenAddress, ERC20_ABI, provider)
+      const bal = await token.balanceOf(account)
+      setBalance(formatTokenAmount(bal))
+    } catch (e) {
+      console.error('获取余额失败:', e)
+      setBalance('')
+    } finally {
+      setBalanceLoading(false)
+    }
+  }, [account, side])
+
+  useEffect(() => {
+    fetchBalance()
+  }, [fetchBalance])
+
+  // WebSocket 增量更新订单簿（pair 变化时订阅当前交易对）
+  useEffect(() => {
+    if (!hasNodeApi() || !p2pWS) return
+    p2pWS.connect()
+    const unsub = p2pWS.subscribe('orderbook_update', (msg) => {
+      if (msg.pair !== pair || !msg.data) return
+      const data = msg.data as { bids?: unknown[]; asks?: unknown[] }
+      const bids = (data.bids ?? []).map((o) => normalizeOrder(o as Record<string, unknown>))
+      const asks = (data.asks ?? []).map((o) => normalizeOrder(o as Record<string, unknown>))
+      setOrderbook((prev) => {
+        if (!prev || prev.pair !== pair) return { pair, bids, asks }
+        // 检测价格变化
+        const animMap = new Map<string, 'up' | 'down'>()
+        if (prev.bids.length > 0 && bids.length > 0) {
+          const prevBestBid = parseFloat(prev.bids[0].price)
+          const newBestBid = parseFloat(bids[0].price)
+          if (newBestBid > prevBestBid) animMap.set(bids[0].orderId, 'up')
+          else if (newBestBid < prevBestBid) animMap.set(bids[0].orderId, 'down')
+        }
+        if (prev.asks.length > 0 && asks.length > 0) {
+          const prevBestAsk = parseFloat(prev.asks[0].price)
+          const newBestAsk = parseFloat(asks[0].price)
+          if (newBestAsk > prevBestAsk) animMap.set(asks[0].orderId, 'up')
+          else if (newBestAsk < prevBestAsk) animMap.set(asks[0].orderId, 'down')
+        }
+        setPriceAnimations(animMap)
+        setTimeout(() => setPriceAnimations(new Map()), 600)
+        return { ...prev, pair, bids, asks }
+      })
+    })
+    return () => { unsub() }
+  }, [pair])
+
   const handlePlaceOrder = async () => {
     if (!account || !price.trim() || !amount.trim()) {
       setError('请填写价格和数量')
@@ -180,6 +292,22 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
     if (Number.isNaN(p) || p <= 0 || Number.isNaN(a) || a <= 0) {
       setError('价格和数量须为正数')
       return
+    }
+    if (p > 1000000) {
+      setError('价格过高，请检查输入')
+      return
+    }
+    if (a > 1000000000) {
+      setError('数量过大，请检查输入')
+      return
+    }
+    // 余额检查
+    if (balance) {
+      const balanceNum = parseFloat(balance)
+      if (!Number.isNaN(balanceNum) && !Number.isNaN(a) && a > balanceNum) {
+        setError(`余额不足。当前余额：${balance}，需要：${amount}`)
+        return
+      }
     }
     setError(null)
     setPlaceLoading(true)
@@ -322,22 +450,30 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
           {loading ? (
             <LoadingSpinner size="small" text="加载中…" />
           ) : orderbook?.asks?.length ? (
-            <table className="orderbook-table">
-              <thead>
-                <tr>
-                  <th>价格</th>
-                  <th>数量</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orderbook.asks.slice(0, ORDERBOOK_DISPLAY_DEPTH).map((o) => (
-                  <tr key={o.orderId}>
-                    <td className="ask-price">{o.price}</td>
-                    <td>{o.amount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <div className="orderbook-table-header">
+                <span>价格</span>
+                <span>数量</span>
+              </div>
+              <VirtualList
+                items={orderbook.asks.slice(0, ORDERBOOK_DISPLAY_DEPTH)}
+                itemHeight={ORDERBOOK_ROW_HEIGHT}
+                height={ORDERBOOK_PANEL_HEIGHT}
+                getKey={(o) => o.orderId}
+                className="orderbook-virtual"
+              >
+                {(o) => {
+                  const anim = priceAnimations.get(o.orderId)
+                  const animClass = anim === 'up' ? 'price-updated-up' : anim === 'down' ? 'price-updated-down' : ''
+                  return (
+                    <div className={`orderbook-row ask-row ${animClass}`}>
+                      <span className="ask-price">{o.price}</span>
+                      <span>{o.amount}</span>
+                    </div>
+                  )
+                }}
+              </VirtualList>
+            </>
           ) : (
             <p className="hint">暂无卖单</p>
           )}
@@ -347,22 +483,30 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
           {loading ? (
             <LoadingSpinner size="small" text="加载中…" />
           ) : orderbook?.bids?.length ? (
-            <table className="orderbook-table">
-              <thead>
-                <tr>
-                  <th>价格</th>
-                  <th>数量</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orderbook.bids.slice(0, ORDERBOOK_DISPLAY_DEPTH).map((o) => (
-                  <tr key={o.orderId}>
-                    <td className="bid-price">{o.price}</td>
-                    <td>{o.amount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <div className="orderbook-table-header">
+                <span>价格</span>
+                <span>数量</span>
+              </div>
+              <VirtualList
+                items={orderbook.bids.slice(0, ORDERBOOK_DISPLAY_DEPTH)}
+                itemHeight={ORDERBOOK_ROW_HEIGHT}
+                height={ORDERBOOK_PANEL_HEIGHT}
+                getKey={(o) => o.orderId}
+                className="orderbook-virtual"
+              >
+                {(o) => {
+                  const anim = priceAnimations.get(o.orderId)
+                  const animClass = anim === 'up' ? 'price-updated-up' : anim === 'down' ? 'price-updated-down' : ''
+                  return (
+                    <div className={`orderbook-row bid-row ${animClass}`}>
+                      <span className="bid-price">{o.price}</span>
+                      <span>{o.amount}</span>
+                    </div>
+                  )
+                }}
+              </VirtualList>
+            </>
           ) : (
             <p className="hint">暂无买单</p>
           )}
@@ -393,7 +537,13 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
               type="text"
               placeholder="价格"
               value={price}
-              onChange={(e) => setPrice(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value
+                if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                  setPrice(val)
+                  setError(null)
+                }
+              }}
               className="input"
             />
           </div>
@@ -402,10 +552,27 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
               type="text"
               placeholder="数量"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value
+                if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                  setAmount(val)
+                  setError(null)
+                }
+              }}
               className="input"
             />
           </div>
+          {account && (
+            <div style={{ fontSize: '0.75rem', color: '#71717a', marginTop: '0.25rem' }}>
+              {balanceLoading ? (
+                <span>加载余额中...</span>
+              ) : balance ? (
+                <span>
+                  余额：{balance} {side === 'sell' ? pair.split('/')[0] : pair.split('/')[1]}
+                </span>
+              ) : null}
+            </div>
+          )}
           <button
             type="button"
             className="btn primary"

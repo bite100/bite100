@@ -16,6 +16,10 @@ const CROSS_CHAIN_BRIDGE_ABI = [
   'function quoteBridgeFee(uint32 dstChainId, bytes calldata payload, bytes calldata options) view returns (uint256 nativeFee, uint256 lzTokenFee)',
   'function supportedTokens(address token) view returns (bool)',
   'function tokenMapping(uint16 chainId, address token) view returns (address)',
+  'function getBridgeStatus(bytes32 requestId) view returns (uint8 status, uint256 initiatedAt, uint256 completedAt, uint256 attempts)',
+  'function retryBridge(bytes32 requestId, uint32 dstChainId, bytes calldata options) payable',
+  'event BridgeInitiated(bytes32 indexed requestId, address indexed user, address indexed token, uint256 amount, uint32 dstChainId)',
+  'event BridgeStatusUpdated(bytes32 indexed requestId, uint8 status, uint256 timestamp)',
 ] as const
 
 // LayerZero EID（Endpoint ID）映射
@@ -39,6 +43,9 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [bridgeAddress, setBridgeAddress] = useState<string>('')
+  const [estimatedFee, setEstimatedFee] = useState<string>('')
+  const [bridgeStatus, setBridgeStatus] = useState<string>('')
+  const [lastRequestId, setLastRequestId] = useState<string | null>(null)
 
   // 获取余额
   const fetchBalance = useCallback(async () => {
@@ -63,32 +70,104 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     fetchBalance()
   }, [fetchBalance])
 
-  // 获取桥接费用估算
+  // 获取桥接费用估算（优化：更精确的费用计算）
   const estimateFee = useCallback(async () => {
-    if (!targetChainId || !tokenAddress || !amount || !sourceChainId) return
+    if (!targetChainId || !tokenAddress || !amount || !sourceChainId || !bridgeAddress) {
+      setEstimatedFee('')
+      return null
+    }
 
     try {
       const provider = getProvider()
-      if (!provider || !bridgeAddress) return
+      if (!provider) return null
 
       const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
-      const payload = '0x' // 简化处理
+      
+      // 构建实际的payload（包含用户地址、代币、数量等）
+      const amountBigInt = BigInt(Math.floor(parseFloat(amount) * 1e18))
+      const payload = ethers.AbiCoder.defaultAbiCoder().encode(
+        ['tuple(address,address,uint256,uint32,uint256)'],
+        [[account || ethers.ZeroAddress, tokenAddress, amountBigInt, LAYERZERO_EIDS[targetChainId] || 0, Math.floor(Date.now() / 1000)]]
+      )
       const options = '0x' // 默认选项
       
       // 获取 LayerZero EID
       const dstEid = LAYERZERO_EIDS[targetChainId]
       if (!dstEid) {
-        console.error('未找到链的 LayerZero EID:', targetChainId)
+        setEstimatedFee('无法估算费用')
         return null
       }
 
       const [nativeFee] = await bridge.quoteBridgeFee(dstEid, payload, options)
+      const feeFormatted = formatTokenAmount(nativeFee)
+      setEstimatedFee(`预计费用: ${feeFormatted} ETH`)
       return nativeFee
-    } catch (e) {
+    } catch (e: any) {
       console.error('估算费用失败:', e)
+      setEstimatedFee('费用估算失败')
       return null
     }
-  }, [targetChainId, tokenAddress, amount, sourceChainId, bridgeAddress])
+  }, [targetChainId, tokenAddress, amount, sourceChainId, bridgeAddress, account])
+  
+  // 状态查询优化：定期查询跨链状态
+  const checkBridgeStatus = useCallback(async (requestId: string) => {
+    if (!bridgeAddress || !requestId) return
+    
+    try {
+      const provider = getProvider()
+      if (!provider) return
+      
+      const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
+      const [status, initiatedAt, completedAt, attempts] = await bridge.getBridgeStatus(requestId)
+      
+      const statusMap: Record<number, string> = {
+        0: '待处理',
+        1: '处理中',
+        2: '已完成',
+        3: '失败'
+      }
+      
+      setBridgeStatus(`状态: ${statusMap[Number(status)] || '未知'} | 尝试次数: ${attempts}`)
+      
+      // 如果失败且未达到最大重试次数，提供重试选项
+      if (Number(status) === 3 && Number(attempts) < 3) {
+        // 可以显示重试按钮
+      }
+    } catch (e) {
+      console.error('查询状态失败:', e)
+    }
+  }, [bridgeAddress])
+  
+  // 监听跨链事件（状态监控）
+  useEffect(() => {
+    if (!bridgeAddress || !lastRequestId) return
+    
+    const provider = getProvider()
+    if (!provider) return
+    
+    const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
+    
+    // 监听状态更新事件
+    const statusFilter = bridge.filters.BridgeStatusUpdated(lastRequestId)
+    provider.on(statusFilter, (requestId, status, timestamp) => {
+      checkBridgeStatus(requestId)
+    })
+    
+    // 定期查询状态（每10秒）
+    const interval = setInterval(() => {
+      checkBridgeStatus(lastRequestId)
+    }, 10000)
+    
+    return () => {
+      provider.removeAllListeners(statusFilter)
+      clearInterval(interval)
+    }
+  }, [bridgeAddress, lastRequestId, checkBridgeStatus])
+  
+  // 当参数变化时重新估算费用
+  useEffect(() => {
+    estimateFee()
+  }, [estimateFee])
 
   // 执行跨链转移
   const handleBridge = useCallback(async () => {
@@ -141,12 +220,40 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           { value: feeAmount }
         )
 
-        await tx.wait()
+        const receipt = await tx.wait()
+        
+        // 错误处理优化：检查交易是否成功
+        if (receipt.status !== 1) {
+          throw new Error('交易失败')
+        }
+        
+        // 从事件中获取requestId（状态监控）
+        const bridgeInitiatedEvent = receipt.logs.find((log: any) => {
+          try {
+            const parsed = bridge.interface.parseLog(log)
+            return parsed?.name === 'BridgeInitiated'
+          } catch {
+            return false
+          }
+        })
+        
+        if (bridgeInitiatedEvent) {
+          const parsed = bridge.interface.parseLog(bridgeInitiatedEvent)
+          const requestId = parsed?.args[0]
+          if (requestId) {
+            setLastRequestId(requestId)
+            setBridgeStatus('跨链转移已发起，正在处理...')
+          }
+        }
 
         // 4. 刷新余额
         await fetchBalance()
         setAmount('')
-        alert('跨链转移已发起，请等待确认')
+        
+        // 错误处理优化：更友好的提示
+        if (!lastRequestId) {
+          alert('跨链转移已发起，请等待确认')
+        }
       })
     } catch (e: any) {
       setError(formatError(e))
@@ -232,6 +339,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
             )}
           </div>
           {balance !== '0' && <p className="hint">余额: {balance}</p>}
+          {estimatedFee && <p className="hint">{estimatedFee}</p>}
         </div>
 
         <div className="bridge-field">
@@ -254,6 +362,12 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
         </button>
       </div>
 
+          {bridgeStatus && (
+        <div className="bridge-status">
+          <p>{bridgeStatus}</p>
+        </div>
+      )}
+      
       {sourceChain && targetChain && (
         <div className="bridge-info">
           <h3>转移信息</h3>

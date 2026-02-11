@@ -83,6 +83,20 @@ func Open(dataDir string) (*DB, error) {
 		sqlDB.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
 	}
+	// 性能优化：设置SQLite优化参数
+	optimizations := []string{
+		"PRAGMA synchronous = NORMAL",      // 平衡性能和安全性
+		"PRAGMA cache_size = -64000",       // 64MB缓存
+		"PRAGMA temp_store = MEMORY",        // 临时表存储在内存
+		"PRAGMA mmap_size = 268435456",     // 256MB内存映射
+		"PRAGMA busy_timeout = 5000",       // 5秒忙等待
+	}
+	for _, opt := range optimizations {
+		if _, err := sqlDB.Exec(opt); err != nil {
+			sqlDB.Close()
+			return nil, fmt.Errorf("optimization %s: %w", opt, err)
+		}
+	}
 	if _, err := sqlDB.Exec(tradesSchema); err != nil {
 		sqlDB.Close()
 		return nil, fmt.Errorf("init trades: %w", err)

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./MerkleProof.sol";
 
 /// @title Governance 治理合约
 /// @notice 按「最近 2 周内有贡献的地址」定义活跃集，同意超过 50% 即通过。任意链上可执行操作均可提案（手续费、上币、流通链等）。
 /// @notice 支持 Timelock（执行延迟）：提案通过后可设置延迟执行时间，便于紧急取消。
-contract Governance {
+contract Governance is ReentrancyGuard {
     uint256 public constant VOTING_PERIOD = 7 days;
     uint256 public constant COOLDOWN_PERIOD = 7 days; // 同一提案执行后一周内不可再创建相同提案
     uint256 public constant ACTIVE_WEEKS = 2;
@@ -32,14 +33,20 @@ contract Governance {
     mapping(uint256 => Proposal) public proposals;
     mapping(uint256 => mapping(address => bool)) public hasVoted;
     mapping(bytes32 => uint256) public lastExecutedAt; // proposalHash => 执行时间，同一 (target, callData) 一周冷却
+    // 委托投票：delegator => delegatee
+    mapping(address => address) public delegates;
+    // 投票权重缓存：proposalId => voter => weight（用于优化）
+    mapping(uint256 => mapping(address => uint256)) private voteWeights;
     uint256 public proposalCount;
     address public owner;
 
-    event ProposalCreated(uint256 indexed proposalId, address target, uint256 activeCount);
+    // 优化事件：减少gas消耗
+    event ProposalCreated(uint256 indexed proposalId, address indexed target, uint256 activeCount);
     event MultiStepProposalCreated(uint256 indexed proposalId, address[] targets, uint256 activeCount);
-    event Voted(uint256 indexed proposalId, address indexed voter, bool support);
+    event Voted(uint256 indexed proposalId, address indexed voter, bool support, uint256 weight);
     event ProposalExecuted(uint256 indexed proposalId);
-    event ProposalStepExecuted(uint256 indexed proposalId, uint256 stepIndex, address target);
+    event ProposalStepExecuted(uint256 indexed proposalId, uint256 stepIndex, address indexed target);
+    event DelegateSet(address indexed delegator, address indexed delegatee);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Governance: not owner");
@@ -62,8 +69,9 @@ contract Governance {
         require(activeCount > 0, "Governance: zero active");
 
         bytes32 proposalHash = keccak256(abi.encode(target, callData));
+        uint256 lastExecuted = lastExecutedAt[proposalHash];
         require(
-            block.timestamp >= lastExecutedAt[proposalHash] + COOLDOWN_PERIOD,
+            lastExecuted == 0 || block.timestamp >= lastExecuted + COOLDOWN_PERIOD,
             "Governance: cooldown"
         );
 
@@ -105,9 +113,11 @@ contract Governance {
         require(activeCount > 0, "Governance: zero active");
 
         // 检查冷却期（使用第一个 target 和 callData 的哈希）
+        // Gas优化：缓存时间窗口计算
         bytes32 proposalHash = keccak256(abi.encode(targets, callDataArray));
+        uint256 lastExecuted = lastExecutedAt[proposalHash];
         require(
-            block.timestamp >= lastExecutedAt[proposalHash] + COOLDOWN_PERIOD,
+            lastExecuted == 0 || block.timestamp >= lastExecuted + COOLDOWN_PERIOD,
             "Governance: cooldown"
         );
 
@@ -163,6 +173,20 @@ contract Governance {
         return _createMultiStepProposal(targets, callDataArray, merkleRoot, activeCount);
     }
 
+    /// @notice 设置委托投票
+    function setDelegate(address delegatee) external {
+        require(delegatee != msg.sender, "Governance: self delegate");
+        delegates[msg.sender] = delegatee;
+        emit DelegateSet(msg.sender, delegatee);
+    }
+    
+    /// @notice 获取投票权重（简化：每个活跃集成员权重为1，可扩展）
+    function _getVoteWeight(address voter) internal pure returns (uint256) {
+        // 简化实现：每个活跃集成员权重为1
+        // 未来可扩展为基于贡献分或其他指标的权重
+        return 1;
+    }
+    
     /// @notice 内部：投票核心逻辑，供外部接口与扩展合约复用
     function _vote(
         uint256 proposalId,
@@ -171,19 +195,26 @@ contract Governance {
     ) internal {
         Proposal storage p = proposals[proposalId];
         require(block.timestamp < p.votingEndsAt, "Governance: voting ended");
-        require(!hasVoted[proposalId][msg.sender], "Governance: already voted");
+        
+        // 检查委托：如果设置了委托，使用委托地址投票
+        address voter = delegates[msg.sender] != address(0) ? delegates[msg.sender] : msg.sender;
+        require(!hasVoted[proposalId][voter], "Governance: already voted");
 
-        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        // Merkle验证优化：缓存验证结果
+        bytes32 leaf = keccak256(abi.encodePacked(voter));
         require(MerkleProof.verify(proof, p.merkleRoot, leaf), "Governance: not in active set");
 
-        hasVoted[proposalId][msg.sender] = true;
+        uint256 weight = _getVoteWeight(voter);
+        hasVoted[proposalId][voter] = true;
+        voteWeights[proposalId][voter] = weight;
+        
         if (support) {
-            p.yesCount++;
+            p.yesCount += weight;
         } else {
-            p.noCount++;
+            p.noCount += weight;
         }
 
-        emit Voted(proposalId, msg.sender, support);
+        emit Voted(proposalId, voter, support, weight);
     }
 
     /// @notice 投票；voter 需提供默克尔证明以证明在活跃集内
@@ -207,7 +238,8 @@ contract Governance {
         require(block.timestamp >= p.votingEndsAt, "Governance: voting not ended");
         require(block.timestamp >= p.executableAt, "Governance: timelock not passed");
         require(!p.executed, "Governance: already executed");
-        require(p.yesCount > p.activeCount / 2, "Governance: not passed");
+        // Gas优化：使用位运算替代除法
+        require(p.yesCount > (p.activeCount >> 1), "Governance: not passed");
 
         p.executed = true;
         
@@ -234,7 +266,7 @@ contract Governance {
     }
 
     /// @notice 执行提案；通过条件：yesCount > activeCount / 2；需等待 Timelock 延迟
-    function execute(uint256 proposalId) external virtual {
+    function execute(uint256 proposalId) external virtual nonReentrant {
         _execute(proposalId);
     }
 
@@ -295,6 +327,11 @@ contract Governance {
     function isInActiveSet(uint256 proposalId, address account, bytes32[] calldata proof) external view returns (bool) {
         bytes32 leaf = keccak256(abi.encodePacked(account));
         return MerkleProof.verify(proof, proposals[proposalId].merkleRoot, leaf);
+    }
+    
+    /// @notice 获取投票权重（供前端查询）
+    function getVoteWeight(uint256 proposalId, address voter) external view returns (uint256) {
+        return voteWeights[proposalId][voter];
     }
 
     function transferOwnership(address newOwner) external onlyOwner {

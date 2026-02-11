@@ -24,6 +24,9 @@ export function GovernanceSection({ account }: { account: string | null }) {
   const [proposals, setProposals] = useState<ProposalInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [proposalsPerPage] = useState(10)
+  const [votingWeights, setVotingWeights] = useState<Map<number, { yes: bigint; no: bigint }>>(new Map())
   // Vote form
   const [voteProposalId, setVoteProposalId] = useState('0')
   const [voteSupport, setVoteSupport] = useState(true)
@@ -37,6 +40,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
   const [createMerkleRoot, setCreateMerkleRoot] = useState('')
   const [createActiveCount, setCreateActiveCount] = useState('1')
   const [loadingCreate, setLoadingCreate] = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState(true)
 
   const fetchProposals = useCallback(async () => {
     if (!isGovDeployed()) return
@@ -97,8 +101,30 @@ export function GovernanceSection({ account }: { account: string | null }) {
   }, [])
 
   useEffect(() => {
-    if (account && isGovDeployed()) fetchProposals()
-  }, [account, fetchProposals])
+    if (account && isGovDeployed()) {
+      fetchProposals()
+      // 实时更新投票状态
+      if (autoRefresh) {
+        const interval = setInterval(() => {
+          fetchProposals()
+        }, 30000) // 每30秒更新一次
+        return () => clearInterval(interval)
+      }
+    }
+  }, [account, fetchProposals, autoRefresh])
+
+  // 计算投票权重
+  useEffect(() => {
+    if (!proposals.length) return
+    const weights = new Map<number, { yes: bigint; no: bigint }>()
+    proposals.forEach((p, i) => {
+      weights.set(i, {
+        yes: BigInt(p.yesCount),
+        no: BigInt(p.noCount),
+      })
+    })
+    setVotingWeights(weights)
+  }, [proposals])
 
   const withSigner = useCallback(async <T,>(fn: (gov: Contract) => Promise<T>): Promise<T> => {
     return withSignerUtil((signer) => {
@@ -148,18 +174,31 @@ export function GovernanceSection({ account }: { account: string | null }) {
   const handleCreate = useCallback(async () => {
     if (!account || !isGovDeployed()) return
     const root = createMerkleRoot.trim().toLowerCase()
-    if (!/^0x[0-9a-f]{64}$/.test(root)) {
+    if (!root) {
       setError('请填写活跃集证明（merkleRoot），需先用 merkletool 生成')
       return
     }
+    if (!/^0x[0-9a-f]{64}$/.test(root)) {
+      setError('merkleRoot 格式错误，应为 0x 开头的 64 位十六进制字符串')
+      return
+    }
     const activeCount = parseInt(createActiveCount, 10)
-    if (activeCount < 1) {
-      setError('活跃集人数至少为 1')
+    if (Number.isNaN(activeCount) || activeCount < 1) {
+      setError('活跃集人数至少为 1，且必须为有效数字')
+      return
+    }
+    if (activeCount > 10000) {
+      setError('活跃集人数不能超过 10000')
       return
     }
     const feeBps = feePercentToBps(createFeePercent)
     if (feeBps === null) {
       setError('手续费比例需在 0.01～100 之间')
+      return
+    }
+    const feeNum = parseFloat(createFeePercent)
+    if (Number.isNaN(feeNum) || feeNum <= 0 || feeNum > 100) {
+      setError('手续费比例必须在 0.01～100 之间')
       return
     }
     setError(null)
@@ -191,14 +230,30 @@ export function GovernanceSection({ account }: { account: string | null }) {
       <h2>治理</h2>
       <p className="hint">查看提案、投票、执行。参与投票需在活跃集内，proof 由 merkletool 生成。</p>
 
-      <h3 className="gov-sub">提案列表</h3>
+      <h3 className="gov-sub">
+        提案列表
+        <label style={{ marginLeft: '1rem', fontSize: '0.75rem', color: '#71717a', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={(e) => setAutoRefresh(e.target.checked)}
+            style={{ marginRight: '0.25rem' }}
+          />
+          自动刷新（30秒）
+        </label>
+      </h3>
       {loading ? (
         <p className="hint">加载中…</p>
       ) : proposals.length === 0 ? (
         <p className="hint">暂无提案</p>
       ) : (
-        <div className="proposal-list">
-          {proposals.map((p, i) => {
+        <>
+          <div className="proposal-list">
+            {proposals
+              .slice((currentPage - 1) * proposalsPerPage, currentPage * proposalsPerPage)
+              .map((p, i) => {
+                const actualIndex = (currentPage - 1) * proposalsPerPage + i
+                const weight = votingWeights.get(actualIndex)
             const now = Date.now()
             const votingEnds = Number(p.votingEndsAt) * 1000
             const executableAt = Number(p.executableAt) * 1000
@@ -230,22 +285,30 @@ export function GovernanceSection({ account }: { account: string | null }) {
               statusColor = 'gray'
             }
             
-            return (
-              <div key={i} className="proposal-item">
-                <div className="row">
-                  <span className="label">提案 #{i}</span>
-                  <span className="value" style={{ color: statusColor, fontWeight: 'bold' }}>
-                    {statusText}
-                    {p.isMultiStep && ' (多步骤)'}
-                  </span>
-                </div>
-                <div className="row">
-                  <span className="label">赞成 / 反对</span>
-                  <span className="value">
-                    {p.yesCount} / {p.noCount}（需 &gt; {Math.floor(Number(p.activeCount) / 2)}）
-                    {isPassed && !p.executed && <span style={{ color: 'green' }}> ✓</span>}
-                  </span>
-                </div>
+                return (
+                  <div key={actualIndex} className="proposal-item">
+                    <div className="row">
+                      <span className="label">提案 #{actualIndex}</span>
+                      <span className="value" style={{ color: statusColor, fontWeight: 'bold' }}>
+                        {statusText}
+                        {p.isMultiStep && ' (多步骤)'}
+                      </span>
+                    </div>
+                    <div className="row">
+                      <span className="label">赞成 / 反对</span>
+                      <span className="value">
+                        {p.yesCount} / {p.noCount}（需 &gt; {Math.floor(Number(p.activeCount) / 2)}）
+                        {isPassed && !p.executed && <span style={{ color: 'green' }}> ✓</span>}
+                      </span>
+                    </div>
+                    {weight && (
+                      <div className="row">
+                        <span className="label">投票权重</span>
+                        <span className="value">
+                          赞成：{weight.yes.toString()} | 反对：{weight.no.toString()}
+                        </span>
+                      </div>
+                    )}
                 <div className="row">
                   <span className="label">目标</span>
                   <span className="value mono">{shortAddress(p.target, 10, 8)}</span>
@@ -257,20 +320,20 @@ export function GovernanceSection({ account }: { account: string | null }) {
                       <button
                         type="button"
                         className="btn primary vote-btn vote-yes"
-                        onClick={() => handleVote(i, true)}
+                        onClick={() => handleVote(actualIndex, true)}
                         disabled={loadingVote || !account}
                         title="请在钱包中确认，完成投票"
                       >
-                        {loadingVote && parseInt(voteProposalId, 10) === i ? '处理中…' : '支持'}
+                        {loadingVote && parseInt(voteProposalId, 10) === actualIndex ? '处理中…' : '支持'}
                       </button>
                       <button
                         type="button"
                         className="btn secondary vote-btn vote-no"
-                        onClick={() => handleVote(i, false)}
+                        onClick={() => handleVote(actualIndex, false)}
                         disabled={loadingVote || !account}
                         title="请在钱包中确认，完成投票"
                       >
-                        {loadingVote && parseInt(voteProposalId, 10) === i ? '处理中…' : '反对'}
+                        {loadingVote && parseInt(voteProposalId, 10) === actualIndex ? '处理中…' : '反对'}
                       </button>
                     </span>
                   </div>
@@ -286,22 +349,47 @@ export function GovernanceSection({ account }: { account: string | null }) {
                     <button
                       className="btn primary"
                       onClick={() => {
-                        setExecProposalId(String(i))
+                        setExecProposalId(String(actualIndex))
                         handleExecute()
                       }}
                       disabled={loadingExec}
                       style={{ fontSize: '0.9em', padding: '4px 12px' }}
                     >
-                      {loadingExec ? '执行中...' : '立即执行'}
+                      {loadingExec && parseInt(execProposalId, 10) === actualIndex ? '执行中...' : '立即执行'}
                     </button>
                   </div>
                 )}
               </div>
             )
-          })}
-        </div>
+              })}
+            </div>
+          )}
+          {proposals.length > proposalsPerPage && (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', marginTop: '1rem' }}>
+              <button
+                className="btn secondary"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                上一页
+              </button>
+              <span style={{ color: '#71717a', fontSize: '0.875rem' }}>
+                第 {currentPage} / {Math.ceil(proposals.length / proposalsPerPage)} 页
+              </span>
+              <button
+                className="btn secondary"
+                onClick={() => setCurrentPage((p) => Math.min(Math.ceil(proposals.length / proposalsPerPage), p + 1))}
+                disabled={currentPage >= Math.ceil(proposals.length / proposalsPerPage)}
+              >
+                下一页
+              </button>
+            </div>
+          )}
+        </>
       )}
-      <button className="btn secondary" onClick={fetchProposals} disabled={loading}>刷新</button>
+      <button className="btn secondary" onClick={fetchProposals} disabled={loading} style={{ marginTop: '0.5rem' }}>
+        {loading ? '刷新中…' : '手动刷新'}
+      </button>
 
       <h3 className="gov-sub">投票</h3>
       <p className="hint">参与投票需在活跃集内。上方每个「投票中」的提案旁可直接点「支持」「反对」；若提示需 proof，请运行 <code>go run ./cmd/merkletool -proof-for 您的地址</code> 获取后粘贴下方。</p>

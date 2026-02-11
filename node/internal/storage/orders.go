@@ -96,18 +96,23 @@ func (db *DB) ListPairsWithOpenOrders() ([]string, error) {
 }
 
 // ListOrdersOpenByPair 查询某交易对当前盘口（open/partial），买盘价格降序、卖盘价格升序，用于订单簿展示
+// 优化：使用索引优化查询
 func (db *DB) ListOrdersOpenByPair(pair string, limit int) (bids, asks []*Order, err error) {
 	if limit <= 0 {
 		limit = 200
 	}
+	// 索引优化：使用复合索引 pair + status
 	query := `SELECT order_id, trader, pair, side, price, amount, filled, status, nonce, created_at, expires_at, signature
-		  FROM orders WHERE pair = ? AND status IN ('open', 'partial') ORDER BY created_at ASC`
-	rows, err := db.sql.Query(query, pair)
+		  FROM orders WHERE pair = ? AND status IN ('open', 'partial') ORDER BY created_at ASC LIMIT ?`
+	rows, err := db.sql.Query(query, pair, limit*2)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
 	var filled, sig sql.NullString
+	// 预分配切片容量，减少内存分配
+	bids = make([]*Order, 0, limit)
+	asks = make([]*Order, 0, limit)
 	for rows.Next() {
 		var o Order
 		if err := rows.Scan(&o.OrderID, &o.Trader, &o.Pair, &o.Side, &o.Price, &o.Amount, &filled, &o.Status, &o.Nonce, &o.CreatedAt, &o.ExpiresAt, &sig); err != nil {
@@ -241,12 +246,32 @@ func (db *DB) ListOrders(pair string, since, until int64, limit int) ([]*Order, 
 }
 
 // DeleteOrdersBefore 删除指定时间之前的订单，用于保留期清理（默认两周）
+// 优化：批量删除，避免长时间锁定
 func (db *DB) DeleteOrdersBefore(beforeUnix int64) (int64, error) {
-	res, err := db.sql.Exec("DELETE FROM orders WHERE created_at < ?", beforeUnix)
-	if err != nil {
-		return 0, err
+	var totalDeleted int64
+	batchSize := 1000 // 每批删除1000条
+	
+	for {
+		// 批量删除：每次删除batchSize条
+		res, err := db.sql.Exec(
+			"DELETE FROM orders WHERE created_at < ? AND rowid IN (SELECT rowid FROM orders WHERE created_at < ? LIMIT ?)",
+			beforeUnix, beforeUnix, batchSize,
+		)
+		if err != nil {
+			return totalDeleted, err
+		}
+		deleted, err := res.RowsAffected()
+		if err != nil {
+			return totalDeleted, err
+		}
+		totalDeleted += deleted
+		if deleted < int64(batchSize) {
+			break // 没有更多数据需要删除
+		}
+		// 短暂延迟，避免长时间锁定数据库
+		time.Sleep(10 * time.Millisecond)
 	}
-	return res.RowsAffected()
+	return totalDeleted, nil
 }
 
 // OrdersWithinRetention 按保留月数裁剪时间范围（与 TradesWithinRetention 一致）

@@ -92,10 +92,28 @@ func (db *DB) ListSnapshots(pair string, since, until int64, limit int) ([]*Orde
 }
 
 // DeleteSnapshotsBefore 删除指定时间之前的快照，用于保留期清理（默认两周）
+// 优化：批量删除，避免长时间锁定
 func (db *DB) DeleteSnapshotsBefore(beforeUnix int64) (int64, error) {
-	res, err := db.sql.Exec("DELETE FROM orderbook_snapshots WHERE snapshot_at < ?", beforeUnix)
-	if err != nil {
-		return 0, err
+	var totalDeleted int64
+	batchSize := 1000 // 每批删除1000条
+	
+	for {
+		res, err := db.sql.Exec(
+			"DELETE FROM orderbook_snapshots WHERE snapshot_at < ? AND rowid IN (SELECT rowid FROM orderbook_snapshots WHERE snapshot_at < ? LIMIT ?)",
+			beforeUnix, beforeUnix, batchSize,
+		)
+		if err != nil {
+			return totalDeleted, err
+		}
+		deleted, err := res.RowsAffected()
+		if err != nil {
+			return totalDeleted, err
+		}
+		totalDeleted += deleted
+		if deleted < int64(batchSize) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return res.RowsAffected()
+	return totalDeleted, nil
 }

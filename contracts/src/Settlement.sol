@@ -2,15 +2,17 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "./Vault.sol";
 import "./FeeDistributor.sol";
 import "./NodeRewards.sol";
 import "./MerkleProof.sol";
+import "./OrderNonceManager.sol";
 
 /// @title Settlement 交易结算
 /// @notice 根据链下撮合结果执行资产划转并收取手续费；0.01% 单边，买卖双方各自代币收取，每边最高等值 1 美元（由 feeCapPerToken 配置）。
 /// @notice 当买卖双方无原生代币付 gas 时，可由交易所（relayer）代付；gas 费卖方买方均摊，从成交额中扣除后转给交易所。
-contract Settlement {
+contract Settlement is ReentrancyGuard, OrderNonceManager {
     Vault public vault;
     FeeDistributor public feeDistributor;
     address public owner;
@@ -21,16 +23,33 @@ contract Settlement {
     mapping(address => bool) public isRelayer;
     /// @notice 单笔 settleTrade 允许的 gas 报销上限（token 最小单位之和，gasReimburseIn + gasReimburseOut <= 此值）；0 表示不设上限，防滥用
     uint256 public maxGasReimbursePerTrade;
+    
+    /// @notice Relayer 限流：每个 relayer 地址在时间窗口内的最大调用次数
+    uint256 public relayerRateLimitWindow = 1 hours;
+    uint256 public relayerRateLimitMaxCalls = 1000;
+    mapping(address => mapping(uint256 => uint256)) private relayerCallCounts; // relayer => timeWindow => count
+    
+    /// @notice Relayer 信誉机制：记录每个relayer的信誉分数和违规次数
+    struct RelayerReputation {
+        uint256 score;           // 信誉分数（0-10000）
+        uint256 violations;      // 违规次数
+        uint256 successfulTrades; // 成功交易数
+        uint256 lastUpdateTime;  // 最后更新时间
+    }
+    mapping(address => RelayerReputation) public relayerReputation;
+    uint256 public minRelayerReputation = 5000; // 最小信誉分数（50%）
+    uint256 public violationPenalty = 100;     // 每次违规扣分
 
     uint16 public feeBps = 1; // 0.01%
     address public feeToken; // 保留，兼容旧接口
     /// @notice 每代币手续费上限（该代币最小单位），0 表示不设上限；如 USDC 6 位小数下 1e6 = 1 USD
     mapping(address => uint256) public feeCapPerToken;
 
+    // 优化事件：减少gas消耗，使用indexed和打包
     event TradeSettled(
         address indexed maker,
         address indexed taker,
-        address tokenIn,
+        address indexed tokenIn,
         address tokenOut,
         uint256 amountIn,
         uint256 amountOut,
@@ -39,7 +58,7 @@ contract Settlement {
     event TradeSettledWithGasReimburse(
         address indexed maker,
         address indexed taker,
-        address tokenIn,
+        address indexed tokenIn,
         address tokenOut,
         uint256 amountIn,
         uint256 amountOut,
@@ -57,6 +76,8 @@ contract Settlement {
     event GovernanceSet(address indexed governance);
     event TradesBatchSettledWithMerkle(uint256 indexed batchId, bytes32 merkleRoot, uint256 count);
     event GasSavingsDistributed(uint256 userRebateUsdt, uint256 toFeeDistributorUsdt, uint256 toFounderUsdt);
+    event RelayerReputationUpdated(address indexed relayer, uint256 score, uint256 violations);
+    event RelayerViolationRecorded(address indexed relayer, uint256 newScore);
 
     address public nodeRewards;
     address public founder;
@@ -123,6 +144,71 @@ contract Settlement {
         maxGasReimbursePerTrade = _cap;
         emit MaxGasReimbursePerTradeSet(old, _cap);
     }
+    
+    /// @notice 设置 Relayer 限流参数
+    function setRelayerRateLimit(uint256 _window, uint256 _maxCalls) external onlyOwner {
+        require(_window > 0 && _maxCalls > 0, "Settlement: invalid rate limit");
+        relayerRateLimitWindow = _window;
+        relayerRateLimitMaxCalls = _maxCalls;
+    }
+    
+    /// @notice 检查并更新 Relayer 调用频率限制
+    function _checkRelayerRateLimit(address relayerAddr) internal {
+        if (relayerAddr == address(0)) return;
+        uint256 timeWindow = block.timestamp / relayerRateLimitWindow;
+        uint256 count = relayerCallCounts[relayerAddr][timeWindow];
+        require(count < relayerRateLimitMaxCalls, "Settlement: rate limit exceeded");
+        relayerCallCounts[relayerAddr][timeWindow] = count + 1;
+    }
+    
+    /// @notice 检查Relayer信誉（安全优化：信誉机制）
+    function _checkRelayerReputation(address relayerAddr) internal view {
+        if (relayerAddr == address(0) || relayerAddr == owner) return;
+        if (minRelayerReputation > 0) {
+            RelayerReputation memory rep = relayerReputation[relayerAddr];
+            require(rep.score >= minRelayerReputation, "Settlement: relayer reputation too low");
+        }
+    }
+    
+    /// @notice 更新Relayer信誉（成功交易加分）
+    function _updateRelayerReputationSuccess(address relayerAddr) internal {
+        if (relayerAddr == address(0) || relayerAddr == owner) return;
+        RelayerReputation storage rep = relayerReputation[relayerAddr];
+        rep.successfulTrades++;
+        // 成功交易加分（最多10000分）
+        if (rep.score < 10000) {
+            rep.score = rep.score + 1 > 10000 ? 10000 : rep.score + 1;
+        }
+        rep.lastUpdateTime = block.timestamp;
+        emit RelayerReputationUpdated(relayerAddr, rep.score, rep.violations);
+    }
+    
+    /// @notice 记录Relayer违规（安全优化：违规扣分）
+    function recordRelayerViolation(address relayerAddr) external onlyOwner {
+        require(relayerAddr != address(0), "Settlement: zero address");
+        RelayerReputation storage rep = relayerReputation[relayerAddr];
+        rep.violations++;
+        // 违规扣分
+        if (rep.score >= violationPenalty) {
+            rep.score -= violationPenalty;
+        } else {
+            rep.score = 0;
+        }
+        rep.lastUpdateTime = block.timestamp;
+        emit RelayerViolationRecorded(relayerAddr, rep.score);
+    }
+    
+    /// @notice 设置最小Relayer信誉分数
+    function setMinRelayerReputation(uint256 _minScore) external onlyOwner {
+        require(_minScore <= 10000, "Settlement: invalid score");
+        minRelayerReputation = _minScore;
+    }
+    
+    /// @notice 设置违规扣分
+    function setViolationPenalty(uint256 _penalty) external onlyOwner {
+        require(_penalty <= 10000, "Settlement: invalid penalty");
+        violationPenalty = _penalty;
+    }
 
     function setNodeRewards(address _nodeRewards) external onlyOwner {
         nodeRewards = _nodeRewards;
@@ -157,8 +243,16 @@ contract Settlement {
         uint256 gasReimburseIn,
         uint256 gasReimburseOut
     ) internal {
+        // 增强输入验证
+        require(maker != address(0) && taker != address(0), "Settlement: zero address");
+        require(tokenIn != address(0) && tokenOut != address(0), "Settlement: zero token");
+        require(maker != taker, "Settlement: same address");
+        require(tokenIn != tokenOut, "Settlement: same token");
+        require(amountIn > 0 && amountOut > 0, "Settlement: zero amount");
         require(amountIn >= feeIn + gasReimburseIn, "Settlement: amountIn < fee + gas");
         require(amountOut >= feeOut + gasReimburseOut, "Settlement: amountOut < fee + gas");
+        // 防止溢出：检查金额是否在合理范围内（小于 2^128）
+        require(amountIn < type(uint128).max && amountOut < type(uint128).max, "Settlement: amount too large");
         address _feeDist = address(feeDistributor);
         address gasRecipient = (gasReimburseIn > 0 || gasReimburseOut > 0) ? msg.sender : address(0);
         uint256 takerReceives = amountIn - feeIn - gasReimburseIn;
@@ -186,6 +280,62 @@ contract Settlement {
             emit TradeSettled(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn + feeOut);
         }
     }
+    
+    /// @notice 验证订单签名（安全优化：增强签名验证）
+    /// @dev 验证订单的EIP-712签名，确保订单未被篡改
+    function verifyOrderSignature(
+        address user,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOut,
+        uint256 price,
+        uint256 timestamp,
+        uint256 expiresAt,
+        uint256 nonce,
+        bytes memory signature
+    ) external pure returns (bool) {
+        // 构建EIP-712消息哈希
+        bytes32 domainSeparator = keccak256(abi.encode(
+            keccak256("EIP712Domain(string name,string version,uint256 chainId)"),
+            keccak256("P2P Exchange"),
+            keccak256("1"),
+            block.chainid
+        ));
+        
+        bytes32 structHash = keccak256(abi.encode(
+            keccak256("Order(address user,address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOut,uint256 price,uint256 timestamp,uint256 expiresAt,uint256 nonce)"),
+            user,
+            tokenIn,
+            tokenOut,
+            amountIn,
+            amountOut,
+            price,
+            timestamp,
+            expiresAt,
+            nonce
+        ));
+        
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        
+        // 恢复签名者
+        (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signature);
+        address signer = ecrecover(digest, v, r, s);
+        
+        return signer == user && signer != address(0);
+    }
+    
+    /// @notice 拆分签名
+    function _splitSignature(bytes memory signature) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
+        require(signature.length == 65, "Settlement: invalid signature length");
+        assembly {
+            r := mload(add(signature, 32))
+            s := mload(add(signature, 64))
+            v := byte(0, mload(add(signature, 96)))
+        }
+        if (v < 27) v += 27;
+        require(v == 27 || v == 28, "Settlement: invalid v");
+    }
 
     /// @param maker 挂单方
     /// @param taker 吃单方
@@ -204,16 +354,34 @@ contract Settlement {
         uint256 amountIn,
         uint256 amountOut,
         uint256 gasReimburseIn,
-        uint256 gasReimburseOut
-    ) external {
+        uint256 gasReimburseOut,
+        uint256 makerNonce,
+        uint256 takerNonce
+    ) external nonReentrant {
         require(_isSettlementCaller(), "Settlement: not auth");
+        
+        // 输入验证增强：验证所有参数
+        require(maker != address(0) && taker != address(0), "Settlement: zero address");
+        require(tokenIn != address(0) && tokenOut != address(0), "Settlement: zero token");
+        require(maker != taker, "Settlement: maker == taker");
+        require(tokenIn != tokenOut, "Settlement: same token");
+        require(amountIn > 0 && amountOut > 0, "Settlement: zero amount");
+        require(amountIn <= type(uint128).max && amountOut <= type(uint128).max, "Settlement: amount overflow");
+        
+        // 防重放攻击：验证nonce
+        useNonce(maker, makerNonce);
+        useNonce(taker, takerNonce);
+        
+        // Relayer 限流和信誉检查
+        if (msg.sender != owner) {
+            _checkRelayerRateLimit(msg.sender);
+            _checkRelayerReputation(msg.sender);
+        }
+        
         bool withGas = gasReimburseIn > 0 || gasReimburseOut > 0;
         if (withGas && maxGasReimbursePerTrade > 0) {
             require(gasReimburseIn + gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
         }
-        require(maker != address(0) && taker != address(0), "Settlement: zero address");
-        require(tokenIn != address(0) && tokenOut != address(0), "Settlement: zero token");
-        require(amountIn > 0 && amountOut > 0, "Settlement: zero amount");
 
         uint16 _feeBps = feeBps;
         uint256 feeIn = (amountIn * _feeBps) / 10000;
@@ -224,6 +392,11 @@ contract Settlement {
         if (capOut != 0 && feeOut > capOut) feeOut = capOut;
 
         _settleOne(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn, feeOut, gasReimburseIn, gasReimburseOut);
+        
+        // 更新Relayer信誉（成功交易）
+        if (msg.sender != owner) {
+            _updateRelayerReputationSuccess(msg.sender);
+        }
     }
 
     /// @notice 批量结算多笔交易（节省 Gas）；参数数组长度需一致
@@ -244,8 +417,13 @@ contract Settlement {
         uint256[] calldata amountOuts,
         uint256[] calldata gasReimburseIns,
         uint256[] calldata gasReimburseOuts
-    ) external {
+    ) external nonReentrant {
         require(_isSettlementCaller(), "Settlement: not auth");
+        
+        // Relayer 限流检查（批量调用只计一次）
+        if (msg.sender != owner) {
+            _checkRelayerRateLimit(msg.sender);
+        }
         uint256 len = makers.length;
         require(
             len == takers.length &&
@@ -259,18 +437,26 @@ contract Settlement {
         );
         require(len > 0 && len <= 50, "Settlement: batch size 1-50");
 
+        // Gas优化：直接调用内部函数，避免外部调用开销
+        uint16 _feeBps = feeBps;
         for (uint256 i = 0; i < len; i++) {
-            // 通过外部调用复用 settleTrade 的校验与 gas 上限逻辑
-            this.settleTrade(
-                makers[i],
-                takers[i],
-                tokenIns[i],
-                tokenOuts[i],
-                amountIns[i],
-                amountOuts[i],
-                gasReimburseIns[i],
-                gasReimburseOuts[i]
-            );
+            require(makers[i] != address(0) && takers[i] != address(0), "Settlement: zero address");
+            require(tokenIns[i] != address(0) && tokenOuts[i] != address(0), "Settlement: zero token");
+            require(amountIns[i] > 0 && amountOuts[i] > 0, "Settlement: zero amount");
+            
+            bool withGas = gasReimburseIns[i] > 0 || gasReimburseOuts[i] > 0;
+            if (withGas && maxGasReimbursePerTrade > 0) {
+                require(gasReimburseIns[i] + gasReimburseOuts[i] <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
+            }
+            
+            uint256 feeIn = (amountIns[i] * _feeBps) / 10000;
+            uint256 capIn = feeCapPerToken[tokenIns[i]];
+            if (capIn != 0 && feeIn > capIn) feeIn = capIn;
+            uint256 feeOut = (amountOuts[i] * _feeBps) / 10000;
+            uint256 capOut = feeCapPerToken[tokenOuts[i]];
+            if (capOut != 0 && feeOut > capOut) feeOut = capOut;
+            
+            _settleOne(makers[i], takers[i], tokenIns[i], tokenOuts[i], amountIns[i], amountOuts[i], feeIn, feeOut, gasReimburseIns[i], gasReimburseOuts[i]);
         }
     }
 
@@ -287,8 +473,13 @@ contract Settlement {
         uint256[] calldata gasReimburseIns,
         uint256[] calldata gasReimburseOuts,
         uint256 gasSavingsUsdt6
-    ) external {
+    ) external nonReentrant {
         require(_isSettlementCaller(), "Settlement: not auth");
+        
+        // Relayer 限流检查
+        if (msg.sender != owner) {
+            _checkRelayerRateLimit(msg.sender);
+        }
         uint256 len = makers.length;
         require(
             len == takers.length &&
@@ -303,12 +494,26 @@ contract Settlement {
         require(len > 0 && len <= 50, "Settlement: batch size 1-50");
 
         if (gasSavingsUsdt6 == 0) {
+            // Gas优化：直接调用内部函数
+            uint16 _feeBps = feeBps;
             for (uint256 i = 0; i < len; i++) {
-                // gasSavingsUsdt6 为 0 时，直接复用单笔结算逻辑
-                this.settleTrade(
-                    makers[i], takers[i], tokenIns[i], tokenOuts[i],
-                    amountIns[i], amountOuts[i], gasReimburseIns[i], gasReimburseOuts[i]
-                );
+                require(makers[i] != address(0) && takers[i] != address(0), "Settlement: zero address");
+                require(tokenIns[i] != address(0) && tokenOuts[i] != address(0), "Settlement: zero token");
+                require(amountIns[i] > 0 && amountOuts[i] > 0, "Settlement: zero amount");
+                
+                bool withGas = gasReimburseIns[i] > 0 || gasReimburseOuts[i] > 0;
+                if (withGas && maxGasReimbursePerTrade > 0) {
+                    require(gasReimburseIns[i] + gasReimburseOuts[i] <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
+                }
+                
+                uint256 feeIn = (amountIns[i] * _feeBps) / 10000;
+                uint256 capIn = feeCapPerToken[tokenIns[i]];
+                if (capIn != 0 && feeIn > capIn) feeIn = capIn;
+                uint256 feeOut = (amountOuts[i] * _feeBps) / 10000;
+                uint256 capOut = feeCapPerToken[tokenOuts[i]];
+                if (capOut != 0 && feeOut > capOut) feeOut = capOut;
+                
+                _settleOne(makers[i], takers[i], tokenIns[i], tokenOuts[i], amountIns[i], amountOuts[i], feeIn, feeOut, gasReimburseIns[i], gasReimburseOuts[i]);
             }
             return;
         }
@@ -405,8 +610,13 @@ contract Settlement {
         uint256[] calldata gasReimburseIns,
         uint256[] calldata gasReimburseOuts,
         bytes32[][] calldata proofs
-    ) external {
+    ) external nonReentrant {
         require(_isSettlementCaller(), "Settlement: not auth");
+        
+        // Relayer 限流检查
+        if (msg.sender != owner) {
+            _checkRelayerRateLimit(msg.sender);
+        }
         uint256 len = makers.length;
         require(
             len == takers.length &&
@@ -436,18 +646,26 @@ contract Settlement {
             require(MerkleProof.verify(proofs[i], merkleRoot, leaf), "Settlement: invalid merkle proof");
         }
 
-        // 验证通过后批量结算，复用单笔结算逻辑
+        // 验证通过后批量结算，Gas优化：直接调用内部函数
+        uint16 _feeBps = feeBps;
         for (uint256 i = 0; i < len; i++) {
-            this.settleTrade(
-                makers[i],
-                takers[i],
-                tokenIns[i],
-                tokenOuts[i],
-                amountIns[i],
-                amountOuts[i],
-                gasReimburseIns[i],
-                gasReimburseOuts[i]
-            );
+            require(makers[i] != address(0) && takers[i] != address(0), "Settlement: zero address");
+            require(tokenIns[i] != address(0) && tokenOuts[i] != address(0), "Settlement: zero token");
+            require(amountIns[i] > 0 && amountOuts[i] > 0, "Settlement: zero amount");
+            
+            bool withGas = gasReimburseIns[i] > 0 || gasReimburseOuts[i] > 0;
+            if (withGas && maxGasReimbursePerTrade > 0) {
+                require(gasReimburseIns[i] + gasReimburseOuts[i] <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
+            }
+            
+            uint256 feeIn = (amountIns[i] * _feeBps) / 10000;
+            uint256 capIn = feeCapPerToken[tokenIns[i]];
+            if (capIn != 0 && feeIn > capIn) feeIn = capIn;
+            uint256 feeOut = (amountOuts[i] * _feeBps) / 10000;
+            uint256 capOut = feeCapPerToken[tokenOuts[i]];
+            if (capOut != 0 && feeOut > capOut) feeOut = capOut;
+            
+            _settleOne(makers[i], takers[i], tokenIns[i], tokenOuts[i], amountIns[i], amountOuts[i], feeIn, feeOut, gasReimburseIns[i], gasReimburseOuts[i]);
         }
 
         emit TradesBatchSettledWithMerkle(batchId, merkleRoot, len);

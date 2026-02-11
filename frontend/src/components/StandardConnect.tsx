@@ -1,12 +1,19 @@
 /**
- * 发币平台连接方式：手机浏览器点击 → deep link 打开钱包 App → 钱包内置浏览器打开页面 → 连接
+ * 发币平台连接方式：手机浏览器点击「连接钱包」→ 弹出钱包列表 → 用户选择后再跳转对应 App
  * 优化：连接状态持久化、详细错误提示、连接超时处理、主流钱包可选
  */
 import { useState, useMemo, useEffect } from 'react'
 import { useConnect, useAccount } from 'wagmi'
 import { connectors } from '../walletConfig'
 import { hasInjectedProvider, requestAccountsOnUserGesture, saveConnectionState, clearConnectionState } from '../services/standardConnect'
-import { tryOpenAnyWalletApp, tryOpenWalletApp, type WalletDeepLinkKey } from '../services/walletDeepLink'
+import {
+  tryOpenWalletApp,
+  isInWalletBrowser,
+  detectWalletFromUA,
+  getDetectedWallets,
+  addDetectedWallet,
+  type WalletDeepLinkKey,
+} from '../services/walletDeepLink'
 import { formatError } from '../utils'
 
 function isMobile(): boolean {
@@ -18,12 +25,65 @@ function isMobile(): boolean {
 const injectedConnector = () => connectors.find((c) => (c as { type?: string }).type === 'injected') ?? connectors[connectors.length - 1]
 const wcConnector = () => connectors.find((c) => (c as { type?: string }).type === 'walletConnect')
 
+const MOBILE_WALLET_OPTIONS: { key: WalletDeepLinkKey; label: string }[] = [
+  { key: 'metamask', label: 'MetaMask' },
+  { key: 'trust', label: 'Trust' },
+  { key: 'okx', label: 'OKX' },
+  { key: 'tokenpocket', label: 'TokenPocket' },
+  { key: 'bitget', label: 'Bitget' },
+  { key: 'imtoken', label: 'imToken' },
+  { key: 'phantom', label: 'Phantom' },
+  { key: 'coinbase', label: 'Coinbase' },
+  { key: 'onekey', label: 'OneKey' },
+  { key: 'safepal', label: 'SafePal' },
+  { key: 'rabby', label: 'Rabby' },
+  { key: 'foxwallet', label: 'FoxWallet' },
+  { key: 'zerion', label: 'Zerion' },
+  { key: 'uniswap', label: 'Uniswap Wallet' },
+  { key: 'mathwallet', label: 'MathWallet' },
+  { key: 'coin98', label: 'Coin98' },
+  { key: 'cryptocom', label: 'Crypto.com' },
+  { key: 'argent', label: 'Argent' },
+  { key: 'ledger', label: 'Ledger' },
+  { key: 'backpack', label: 'Backpack' },
+  { key: 'solflare', label: 'Solflare' },
+  { key: 'xdefi', label: 'XDEFI' },
+  { key: 'taho', label: 'Taho' },
+  { key: 'safe', label: 'Safe' },
+  { key: 'bybit', label: 'Bybit' },
+  { key: 'gate', label: 'Gate.io' },
+  { key: 'htx', label: 'HTX' },
+  { key: 'zengo', label: 'Zengo' },
+  { key: 'ronin', label: 'Ronin' },
+  { key: 'core', label: 'Core' },
+  { key: 'brave', label: 'Brave' },
+  { key: 'frame', label: 'Frame' },
+  { key: 'frontier', label: 'Frontier' },
+  { key: 'ambire', label: 'Ambire' },
+  { key: 'exodus', label: 'Exodus' },
+  { key: 'liquality', label: 'Liquality' },
+  { key: 'rainbow', label: 'Rainbow' },
+]
+
 export function StandardConnect() {
   const { connect, isPending, error } = useConnect()
   const { address, isConnected } = useAccount()
   const [injectedError, setInjectedError] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [mobilePickerOpen, setMobilePickerOpen] = useState(false)
+  const [showAllWallets, setShowAllWallets] = useState(false)
   const mobile = useMemo(() => isMobile(), [])
+  const detectedWallets = useMemo(() => getDetectedWallets(), [mobilePickerOpen])
+  const walletOptionsToShow = useMemo((): { key: WalletDeepLinkKey; label: string }[] => {
+    const labelMap = new Map(MOBILE_WALLET_OPTIONS.map((o) => [o.key, o.label]))
+    if (showAllWallets) return MOBILE_WALLET_OPTIONS
+    if (detectedWallets.length > 0) {
+      return detectedWallets
+        .map((key) => ({ key, label: labelMap.get(key) ?? key }))
+        .filter((o): o is { key: WalletDeepLinkKey; label: string } => Boolean(o.label))
+    }
+    return MOBILE_WALLET_OPTIONS
+  }, [detectedWallets, showAllWallets])
 
   // 连接成功后保存状态
   useEffect(() => {
@@ -33,6 +93,14 @@ export function StandardConnect() {
       clearConnectionState()
     }
   }, [isConnected, address])
+
+  // 当前在钱包内置浏览器中时，记入「已安装的钱包」列表，下次在手机浏览器里只展示这些
+  useEffect(() => {
+    if (isInWalletBrowser()) {
+      const w = detectWalletFromUA()
+      if (w) addDetectedWallet(w)
+    }
+  }, [])
 
   const handleInjected = async () => {
     setInjectedError(null)
@@ -67,17 +135,13 @@ export function StandardConnect() {
     }
   }
 
-  /** 手机浏览器：点击连接 → deep link 打开钱包 App → 钱包内置浏览器打开页面 */
-  const handleMobileConnect = () => {
+  /** 手机端：用户从列表中选择某一钱包后，打开该钱包 deep link */
+  const handleMobilePickWallet = (walletKey: WalletDeepLinkKey) => {
     setInjectedError(null)
-    if (tryOpenAnyWalletApp()) {
-      // deep link 成功，用户会在钱包 App 内置浏览器里打开页面，那里会有注入的 provider
-      // 提示用户等待页面在钱包中打开
-      setInjectedError(null)
-      return
+    const opened = tryOpenWalletApp(walletKey)
+    if (!opened && hasWC) {
+      handleWalletConnect()
     }
-    // deep link 失败，fallback 到 WalletConnect
-    handleWalletConnect()
   }
 
   const hasInjected = hasInjectedProvider()
@@ -98,44 +162,73 @@ export function StandardConnect() {
         </button>
       )}
       {mobile && !hasInjected && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.4rem' }}>
-          <div style={{ fontSize: '0.9rem', color: '#ccc' }}>选择钱包：</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-            {[
-              { key: 'metamask', label: 'MetaMask' },
-              { key: 'trust', label: 'Trust' },
-              { key: 'okx', label: 'OKX' },
-              { key: 'tokenpocket', label: 'TokenPocket' },
-              { key: 'bitget', label: 'Bitget' },
-              { key: 'imtoken', label: 'imToken' },
-            ].map((w) => (
-              <button
-                key={w.key}
-                type="button"
-                className="btn secondary"
-                style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }}
-                disabled={isConnecting}
-                onClick={() => {
-                  setInjectedError(null)
-                  if (!tryOpenWalletApp(w.key as WalletDeepLinkKey)) {
-                    // 若特定钱包 deep link 失败，fallback 到自动选择
-                    tryOpenAnyWalletApp() || handleWalletConnect()
-                  }
-                }}
-              >
-                {w.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className="btn"
-              style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }}
-              disabled={isConnecting}
-              onClick={handleMobileConnect}
-            >
-              {isConnecting ? '连接中…' : '其他钱包'}
-            </button>
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem', width: '100%' }}>
+          <button
+            type="button"
+            className="btn"
+            style={{ alignSelf: 'flex-start' }}
+            disabled={isConnecting}
+            onClick={() => {
+              setMobilePickerOpen((o) => !o)
+              if (mobilePickerOpen) setShowAllWallets(false)
+            }}
+          >
+            {isConnecting ? '连接中…' : mobilePickerOpen ? '收起钱包列表' : '连接钱包'}
+          </button>
+          {mobilePickerOpen && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '0.4rem', width: '100%', padding: '0.5rem 0', borderTop: '1px solid #333' }}>
+              <div style={{ fontSize: '0.85rem', color: '#a1a1aa', marginBottom: '0.25rem' }}>
+                {detectedWallets.length > 0 && !showAllWallets
+                  ? '选择已安装的钱包（点击后跳转至该 App 打开本页）'
+                  : '选择要使用的钱包（点击后跳转至该 App 打开本页）'}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                {walletOptionsToShow.map((w) => (
+                  <button
+                    key={w.key}
+                    type="button"
+                    className="btn secondary"
+                    style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                    disabled={isConnecting}
+                    onClick={() => handleMobilePickWallet(w.key)}
+                  >
+                    {w.label}
+                  </button>
+                ))}
+              </div>
+              {detectedWallets.length > 0 && !showAllWallets && (
+                <button
+                  type="button"
+                  className="btn secondary"
+                  style={{ marginTop: '0.15rem', padding: '0.3rem 0.5rem', fontSize: '0.75rem' }}
+                  onClick={() => setShowAllWallets(true)}
+                >
+                  未列出？显示更多钱包
+                </button>
+              )}
+              {showAllWallets && (
+                <button
+                  type="button"
+                  className="btn secondary"
+                  style={{ marginTop: '0.15rem', padding: '0.3rem 0.5rem', fontSize: '0.75rem' }}
+                  onClick={() => setShowAllWallets(false)}
+                >
+                  仅显示已安装
+                </button>
+              )}
+              {hasWC && (
+                <button
+                  type="button"
+                  className="btn secondary"
+                  style={{ marginTop: '0.25rem', padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                  disabled={isConnecting}
+                  onClick={handleWalletConnect}
+                >
+                  {isConnecting ? '连接中…' : 'WalletConnect 扫码连接'}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
       {showWC && !mobile && (

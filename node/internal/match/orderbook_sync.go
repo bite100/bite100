@@ -48,6 +48,10 @@ type OrderbookSyncManager struct {
 	syncedPairs     map[string]bool // pair -> 是否已同步
 	lastSyncTime    map[string]int64 // pair -> 最后同步时间
 	syncInterval    time.Duration    // 同步间隔
+	// 同步性能监控
+	syncConflicts   map[string]int64 // pair -> 冲突次数
+	syncLatency     map[string]time.Duration // pair -> 同步延迟
+	networkPartition bool // 网络分区标志
 }
 
 // NewOrderbookSyncManager 创建订单簿同步管理器
@@ -60,6 +64,9 @@ func NewOrderbookSyncManager(consensusEngine *ConsensusEngine, engine *Engine, l
 		syncedPairs:     make(map[string]bool),
 		lastSyncTime:    make(map[string]int64),
 		syncInterval:    30 * time.Second, // 默认 30 秒同步一次
+		syncConflicts:   make(map[string]int64),
+		syncLatency:     make(map[string]time.Duration),
+		networkPartition: false,
 	}
 }
 
@@ -159,16 +166,31 @@ func (m *OrderbookSyncManager) HandleSync(syncMsg *OrderbookSync) error {
 	localHash := m.calculateSnapshotHash(syncMsg.Pair, bids, asks)
 	
 	// 比较哈希
+	syncStart := time.Now()
 	if localHash == syncMsg.SnapshotHash {
 		// 已同步
 		m.mu.Lock()
 		m.syncedPairs[syncMsg.Pair] = true
+		m.syncLatency[syncMsg.Pair] = time.Since(syncStart)
 		m.mu.Unlock()
 		return nil
 	}
 	
-	// 哈希不一致，需要同步
-	log.Printf("[sync] 订单簿不一致 pair=%s local=%s remote=%s，开始同步", syncMsg.Pair, localHash, syncMsg.SnapshotHash)
+	// 哈希不一致，需要同步（冲突检测）
+	m.mu.Lock()
+	m.syncConflicts[syncMsg.Pair]++
+	conflictCount := m.syncConflicts[syncMsg.Pair]
+	m.mu.Unlock()
+	
+	log.Printf("[sync] 订单簿不一致 pair=%s local=%s remote=%s，开始同步（冲突次数: %d）", syncMsg.Pair, localHash, syncMsg.SnapshotHash, conflictCount)
+	
+	// 网络分区检测：如果冲突次数过多，可能发生网络分区
+	if conflictCount > 10 {
+		m.mu.Lock()
+		m.networkPartition = true
+		m.mu.Unlock()
+		log.Printf("[sync] 检测到可能的网络分区 pair=%s", syncMsg.Pair)
+	}
 	
 	// 如果同步消息包含订单簿数据，直接更新
 	if len(syncMsg.Bids) > 0 || len(syncMsg.Asks) > 0 {
@@ -186,12 +208,31 @@ func (m *OrderbookSyncManager) applySync(syncMsg *OrderbookSync) {
 	if m.engine == nil {
 		return
 	}
+	syncStart := time.Now()
 	log.Printf("[sync] 应用同步数据 pair=%s bids=%d asks=%d", syncMsg.Pair, len(syncMsg.Bids), len(syncMsg.Asks))
 	m.engine.ReplaceOrderbook(syncMsg.Pair, syncMsg.Bids, syncMsg.Asks)
 	m.mu.Lock()
 	m.syncedPairs[syncMsg.Pair] = true
 	m.lastSyncTime[syncMsg.Pair] = time.Now().Unix()
+	m.syncLatency[syncMsg.Pair] = time.Since(syncStart)
+	// 同步成功后重置冲突计数
+	if m.syncConflicts[syncMsg.Pair] > 0 {
+		m.syncConflicts[syncMsg.Pair] = 0
+		m.networkPartition = false
+	}
 	m.mu.Unlock()
+}
+
+// GetSyncStatus 获取同步状态（用于监控）
+func (m *OrderbookSyncManager) GetSyncStatus(pair string) (synced bool, lastSync int64, conflicts int64, latency time.Duration, partition bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	synced = m.syncedPairs[pair]
+	lastSync = m.lastSyncTime[pair]
+	conflicts = m.syncConflicts[pair]
+	latency = m.syncLatency[pair]
+	partition = m.networkPartition
+	return
 }
 
 // requestFullOrderbook 请求完整订单簿（发布到 orderbook-request，Leader 收到后回传完整 sync）
