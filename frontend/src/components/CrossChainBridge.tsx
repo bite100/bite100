@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Contract } from 'ethers'
+import { AbiCoder, Contract, ZeroAddress } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig } from '../config/chains'
 import { getProvider, withSigner, formatTokenAmount, formatError } from '../utils'
 import { ErrorDisplay } from './ErrorDisplay'
@@ -85,9 +85,9 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       
       // 构建实际的payload（包含用户地址、代币、数量等）
       const amountBigInt = BigInt(Math.floor(parseFloat(amount) * 1e18))
-      const payload = ethers.AbiCoder.defaultAbiCoder().encode(
+      const payload = AbiCoder.defaultAbiCoder().encode(
         ['tuple(address,address,uint256,uint32,uint256)'],
-        [[account || ethers.ZeroAddress, tokenAddress, amountBigInt, LAYERZERO_EIDS[targetChainId] || 0, Math.floor(Date.now() / 1000)]]
+        [[account || ZeroAddress, tokenAddress, amountBigInt, LAYERZERO_EIDS[targetChainId] || 0, Math.floor(Date.now() / 1000)]]
       )
       const options = '0x' // 默认选项
       
@@ -118,7 +118,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       if (!provider) return
       
       const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
-      const [status, initiatedAt, completedAt, attempts] = await bridge.getBridgeStatus(requestId)
+      const [status, _initiatedAt, _completedAt, attempts] = await bridge.getBridgeStatus(requestId)
       
       const statusMap: Record<number, string> = {
         0: '待处理',
@@ -138,30 +138,15 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     }
   }, [bridgeAddress])
   
-  // 监听跨链事件（状态监控）
+  // 监听跨链事件（状态监控）：定期轮询状态，避免 ethers v6 provider 事件类型不兼容
   useEffect(() => {
     if (!bridgeAddress || !lastRequestId) return
-    
-    const provider = getProvider()
-    if (!provider) return
-    
-    const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
-    
-    // 监听状态更新事件
-    const statusFilter = bridge.filters.BridgeStatusUpdated(lastRequestId)
-    provider.on(statusFilter, (requestId, status, timestamp) => {
-      checkBridgeStatus(requestId)
-    })
-    
-    // 定期查询状态（每10秒）
+
     const interval = setInterval(() => {
       checkBridgeStatus(lastRequestId)
     }, 10000)
-    
-    return () => {
-      provider.removeAllListeners(statusFilter)
-      clearInterval(interval)
-    }
+
+    return () => clearInterval(interval)
   }, [bridgeAddress, lastRequestId, checkBridgeStatus])
   
   // 当参数变化时重新估算费用

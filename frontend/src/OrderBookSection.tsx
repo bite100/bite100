@@ -86,7 +86,7 @@ function normalizeOrder(o: Record<string, unknown>): Order {
 export function OrderBookSection({ account, getSigner }: { account: string | null; getSigner: () => Promise<Signer | null> }) {
   const [pair, setPair] = useState(DEFAULT_PAIR)
   const [orderbook, setOrderbook] = useState<OrderbookResponse | null>(null)
-  const [prevOrderbook, setPrevOrderbook] = useState<OrderbookResponse | null>(null)
+  const [_prevOrderbook, setPrevOrderbook] = useState<OrderbookResponse | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [myOrders, setMyOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(false)
