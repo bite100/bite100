@@ -17,6 +17,7 @@ import { FeeDisplay } from './components/FeeDisplay'
 import { VirtualList } from './components/VirtualList'
 import { useOnlineStatus } from './hooks/useOnlineStatus'
 import { p2pWS } from './services/wsClient'
+import { p2pOrderBroadcast } from './p2p/orderBroadcast'
 import type { Signer } from 'ethers'
 import './App.css'
 
@@ -83,7 +84,14 @@ function normalizeOrder(o: Record<string, unknown>): Order {
   }
 }
 
-export function OrderBookSection({ account, getSigner }: { account: string | null; getSigner: () => Promise<Signer | null> }) {
+export interface OrderBookSectionProps {
+  account: string | null
+  getSigner: () => Promise<Signer | null>
+  /** 从「完整订单簿」返回 Dashboard 简洁视图时调用 */
+  onBackToDashboard?: () => void
+}
+
+export function OrderBookSection({ account, getSigner, onBackToDashboard }: OrderBookSectionProps) {
   const [pair, setPair] = useState(DEFAULT_PAIR)
   const [orderbook, setOrderbook] = useState<OrderbookResponse | null>(null)
   const [_prevOrderbook, setPrevOrderbook] = useState<OrderbookResponse | null>(null)
@@ -249,6 +257,18 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
     fetchBalance()
   }, [fetchBalance])
 
+  // P2P 订单广播：启动 libp2p（Bootstrap + DHT），收到订单时刷新订单簿
+  useEffect(() => {
+    if (!hasNodeApi()) return
+    let unsub: (() => void) | undefined
+    p2pOrderBroadcast.start().then(() => {
+      unsub = p2pOrderBroadcast.addOrderListener(() => {
+        setRefreshAt((x) => x + 1)
+      })
+    })
+    return () => { unsub?.() }
+  }, [])
+
   // WebSocket 增量更新订单簿（pair 变化时订阅当前交易对）
   useEffect(() => {
     if (!hasNodeApi() || !p2pWS) return
@@ -351,6 +371,7 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
         signature,
       }
       await nodePost('/api/order', order)
+      await p2pOrderBroadcast.publishOrder({ ...order, signature: order.signature ?? '' })
       setPrice('')
       setAmount('')
       setRefreshAt((x) => x + 1)
@@ -392,7 +413,14 @@ export function OrderBookSection({ account, getSigner }: { account: string | nul
 
   return (
     <div className="card vault-section orderbook-section">
-      <h2>链下订单簿</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ margin: 0 }}>链下订单簿</h2>
+        {onBackToDashboard && (
+          <button type="button" className="btn secondary" onClick={onBackToDashboard} style={{ minHeight: 40 }}>
+            返回简洁视图
+          </button>
+        )}
+      </div>
       <p className="hint">
         限价单下单/撤单、成交与结算状态（数据来自节点 API）
         {nodeType && (

@@ -617,3 +617,15 @@
 .trades-panel .orderbook-table {
   margin-top: 0.5rem;
 }
+
+/* Dashboard 可拖拽网格：移动端触控优化（≥48px 触控区）、安全区由 #root 已处理 */
+@media (max-width: 768px) {
+  .layout .drag-handle {
+    min-height: 48px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 0;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+}

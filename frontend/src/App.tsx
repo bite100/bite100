@@ -5,6 +5,7 @@ import { StandardConnect } from './components/StandardConnect'
 import { CHAIN_ID, VAULT_ABI, ERC20_ABI, AMM_ABI, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
+import { Dashboard } from './components/dashboard/Dashboard'
 import { OrderBookSection } from './OrderBookSection'
 import { CrossChainBridge } from './components/CrossChainBridge'
 import { LiquidityPoolInfo } from './components/LiquidityPoolInfo'
@@ -129,7 +130,8 @@ function App() {
     const valid: Tab[] = ['vault', 'orderbook', 'swap', 'data', 'bridge', 'governance', 'contribution']
     return valid.includes(t as Tab) ? (t as Tab) : 'vault'
   })
-  
+  const [showFullOrderbook, setShowFullOrderbook] = useState(false)
+
   // 链切换
   const { currentChainId, switchChain } = useChain()
   const [currentChainConfig, setCurrentChainConfig] = useState(() => getChainConfig(CHAIN_ID))
@@ -574,7 +576,7 @@ function App() {
             </div>
           )}
 
-          {activeTab === 'orderbook' && (
+          {activeTab === 'orderbook' && (showFullOrderbook ? (
             <OrderBookSection
               account={account}
               getSigner={async () => {
@@ -586,8 +588,23 @@ function App() {
                   return null
                 }
               }}
+              onBackToDashboard={() => setShowFullOrderbook(false)}
             />
-          )}
+          ) : (
+            <Dashboard
+              account={account}
+              getSigner={async () => {
+                try {
+                  const p = getProvider()
+                  if (!p) return null
+                  return await p.getSigner()
+                } catch {
+                  return null
+                }
+              }}
+              onShowFullOrderbook={() => setShowFullOrderbook(true)}
+            />
+          ))}
 
           {activeTab === 'swap' && (
             <div className="swap-liq-grid">

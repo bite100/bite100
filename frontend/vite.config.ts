@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   base: process.env.VITE_BASE || '/',
   server: { port: 5173, host: true },
+  worker: { format: 'es' },
   build: {
     target: 'esnext',
     // 性能优化：树摇，排除开发依赖
@@ -29,6 +30,9 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
+    esbuildOptions: {
+      target: 'es2020',
+    },
     // 仅包含生产依赖
     include: [
       'libp2p',

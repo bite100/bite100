@@ -7,22 +7,39 @@ import { gossipsub } from '@libp2p/gossipsub'
 import { kadDHT } from '@libp2p/kad-dht'
 import { bootstrap } from '@libp2p/bootstrap'
 import { identify } from '@libp2p/identify'
+import { P2P_CONFIG } from '../config'
+
+/** 订单广播 GossipSub topic（与节点/relay 约定一致） */
+export const ORDERS_TOPIC = 'bite100/orders'
+
+/** 公共 Bootstrap 节点（libp2p 官方/社区，用于 DHT 发现引导） */
+const DEFAULT_BOOTSTRAP_LIST = [
+  '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5LpPjTsojpum7',
+  '/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
+  '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
+  '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
+  '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
+]
 
 export interface P2PNodeOptions {
-  /** Bootstrap 节点 multiaddr 列表（可选，用于 DHT 发现） */
+  /** Bootstrap 节点 multiaddr 列表（可选；不传则用 DEFAULT_BOOTSTRAP_LIST + P2P_CONFIG.BOOTSTRAP_PEERS） */
   bootstrapList?: string[]
   /** 最大连接数（默认 100） */
   maxConnections?: number
-  /** 是否启用 DHT 缓存热门订单 */
+  /** 是否启用 DHT（Kademlia 发现，默认 true） */
   enableDHTCache?: boolean
 }
 
 export async function createP2PNode(options: P2PNodeOptions = {}): Promise<Libp2p> {
   const {
-    bootstrapList = [],
+    bootstrapList: customBootstrap = [],
     maxConnections = 100,
     enableDHTCache = true,
   } = options
+  const bootstrapList =
+    customBootstrap.length > 0
+      ? customBootstrap
+      : [...DEFAULT_BOOTSTRAP_LIST, ...(P2P_CONFIG.BOOTSTRAP_PEERS ?? [])]
   const node = await createLibp2p({
     addresses: {
       listen: [
@@ -101,9 +118,22 @@ export async function createP2PNode(options: P2PNodeOptions = {}): Promise<Libp2
   } as any)
 
   await node.start()
-  console.log('✅ P2P 节点已启动')
+
+  node.addEventListener('peer:discovery', (evt) => {
+    console.log('[libp2p] 发现新 peer:', evt.detail.id.toString())
+  })
+
+  console.log('✅ P2P 节点已启动（Bootstrap + DHT）')
   console.log('📍 PeerID:', node.peerId.toString())
-  console.log('🔗 传输协议: WebRTC (优先) + WebSocket (fallback)')
-  
+  console.log('🔗 传输: WebRTC (优先) + WebSocket (fallback)')
+
   return node
+}
+
+/**
+ * 创建浏览器用 P2P 节点（Bootstrap + DHT 发现，GossipSub 订单广播）
+ * 供订单簿页或 App 在需要时启动；可与 relay WS 并存，peer 少时 fallback 到 relay。
+ */
+export async function createBrowserP2PNode(options: P2PNodeOptions = {}): Promise<Libp2p> {
+  return createP2PNode(options)
 }
