@@ -125,10 +125,10 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const isOnline = useOnlineStatus()
   const [activeTab, setActiveTab] = useState<Tab>(() => {
-    if (typeof window === 'undefined') return 'vault'
+    if (typeof window === 'undefined') return 'orderbook'
     const t = new URLSearchParams(window.location.search).get('tab')
     const valid: Tab[] = ['vault', 'orderbook', 'swap', 'data', 'bridge', 'governance', 'contribution']
-    return valid.includes(t as Tab) ? (t as Tab) : 'vault'
+    return valid.includes(t as Tab) ? (t as Tab) : 'orderbook'
   })
   const [showFullOrderbook, setShowFullOrderbook] = useState(false)
 
@@ -457,6 +457,11 @@ function App() {
             <LiquidityPoolInfo />
             <RewardPoolInfo />
           </div>
+          <ErrorDisplay
+            error={error}
+            onRetry={() => { setError(null); fetchReserves() }}
+            onDismiss={() => setError(null)}
+          />
         </>
       ) : (
           <div className="card">
@@ -481,6 +486,16 @@ function App() {
       {account && (
         <>
           <Navigation activeTab={activeTab} onTabChange={setActiveTab} account={account} />
+          <ErrorDisplay
+            error={error}
+            onRetry={() => {
+              setError(null)
+              if (account && isValidAddress(tokenAddr)) fetchBalances()
+              fetchReserves()
+            }}
+            onDismiss={() => setError(null)}
+            className="error-below-nav"
+          />
 
           {(activeTab === 'vault' || activeTab === 'swap') && (
             <div className="vault-layout">
@@ -705,15 +720,6 @@ function App() {
         </>
       )}
 
-      <ErrorDisplay
-        error={error}
-        onRetry={() => {
-          setError(null)
-          if (account && isValidAddress(tokenAddr)) fetchBalances()
-          fetchReserves()
-        }}
-        onDismiss={() => setError(null)}
-      />
     </div>
   )
 }

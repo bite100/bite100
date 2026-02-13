@@ -19,14 +19,26 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   padding: 1rem;
-  padding-left: max(1rem, env(safe-area-inset-left));
-  padding-right: max(1rem, env(safe-area-inset-right));
-  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
-  padding-top: max(1rem, env(safe-area-inset-top));
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+  padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+  padding-top: max(0.75rem, env(safe-area-inset-top));
   max-width: 100%;
+  overflow-x: hidden;
 }
 @media (min-width: 480px) {
   #root {
+    padding: 1.5rem;
+  }
+}
+@media (min-width: 768px) {
+  #root {
     padding: 2rem;
+  }
+}
+/* 手机端：避免 100vh 被地址栏压缩 */
+@supports (min-height: 100dvh) {
+  #root {
+    min-height: 100dvh;
   }
 }

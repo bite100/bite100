@@ -18,7 +18,8 @@ node:
   reward_wallet: ""  # 必填：领奖钱包（0x 开头 42 字符）
 
 network:
-  bootstrap: []      # 留空也能运行；填了则自动连接这些节点
+  # libp2p + 公共 bootstrap + DHT 发现（去中心化发现）。留空也可运行（DHT 尝试发现）；填 multiaddr 则启动时自动连接
+  bootstrap: []
   use_tor: false     # 高级：true=经 Tor 代理出站，隐藏 IP
   tor_socks_addr: "127.0.0.1:9050"
   topics:            # 一般无需改

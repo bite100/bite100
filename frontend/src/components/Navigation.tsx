@@ -14,16 +14,16 @@ export function Navigation({ activeTab, onTabChange, account }: NavigationProps)
   return (
     <nav className="main-nav">
       <button
+        className={`nav-tab ${activeTab === 'orderbook' ? 'active' : ''}`}
+        onClick={() => onTabChange('orderbook')}
+      >
+        买卖
+      </button>
+      <button
         className={`nav-tab ${activeTab === 'vault' ? 'active' : ''}`}
         onClick={() => onTabChange('vault')}
       >
         存提
-      </button>
-      <button
-        className={`nav-tab ${activeTab === 'orderbook' ? 'active' : ''}`}
-        onClick={() => onTabChange('orderbook')}
-      >
-        订单簿
       </button>
       <button
         className={`nav-tab ${activeTab === 'swap' ? 'active' : ''}`}

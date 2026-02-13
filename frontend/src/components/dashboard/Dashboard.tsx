@@ -17,6 +17,13 @@ const defaultLayout: LayoutItem[] = [
   { i: 'chart', x: 3, y: 0, w: 6, h: 12, minW: 4, minH: 8 },
   { i: 'orderform', x: 9, y: 0, w: 3, h: 12, minW: 2, minH: 6 },
 ]
+/** 手机端单列垂直堆叠，避免拖拽误触 */
+const mobileLayout: LayoutItem[] = [
+  { i: 'orderbook', x: 0, y: 0, w: 4, h: 10, minW: 4, minH: 6 },
+  { i: 'chart', x: 0, y: 10, w: 4, h: 10, minW: 4, minH: 6 },
+  { i: 'orderform', x: 0, y: 20, w: 4, h: 10, minW: 4, minH: 6 },
+]
+const MOBILE_BREAKPOINT = 768
 
 export interface DashboardProps {
   account: string | null
@@ -84,24 +91,28 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
     }
   }, [])
 
-  const cols = width >= 1200 ? 12 : width >= 768 ? 10 : 6
-  const rowHeight = 32
-  const containerWidth = Math.max(320, width - 48)
+  const isMobile = width < MOBILE_BREAKPOINT
+  const cols = width >= 1200 ? 12 : width >= 768 ? 10 : 4
+  const rowHeight = isMobile ? 36 : 32
+  const containerWidth = Math.max(280, width - (isMobile ? 24 : 48))
+  const effectiveLayout = isMobile ? mobileLayout : layout
+  const effectiveDragConfig = isMobile ? { handle: '.mobile-no-drag' } : { handle: '.drag-handle' }
+  const effectiveResizeConfig = isMobile ? { enabled: false } : { enabled: true }
 
   return (
     <GridLayout
-      className="layout"
+      className={`layout ${isMobile ? 'layout-mobile' : ''}`}
       width={containerWidth}
-      layout={layout}
+      layout={effectiveLayout}
       gridConfig={{
         cols,
         rowHeight,
-        margin: [8, 8],
+        margin: isMobile ? [6, 6] : [8, 8],
         containerPadding: null,
         maxRows: Infinity,
       }}
-      dragConfig={{ handle: '.drag-handle' }}
-      resizeConfig={{ enabled: true }}
+      dragConfig={effectiveDragConfig as { handle: string }}
+      resizeConfig={effectiveResizeConfig as { enabled: boolean }}
       compactor={verticalCompactor}
       onLayoutChange={onLayoutChange}
     >
@@ -146,12 +157,13 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
         key="orderform"
         p="md"
         shadow="xs"
+        className="dashboard-orderform"
         style={{
           background: theme.colors.dark[8] ?? '#2C2E33',
           borderRadius: 8,
         }}
       >
-        <Text className="drag-handle" size="sm" fw={600} c="gray.3" style={{ cursor: 'grab' }}>
+        <Text className="drag-handle" size="sm" fw={600} c="gray.3" style={{ cursor: isMobile ? 'default' : 'grab' }}>
           挂单
         </Text>
         <LimitOrderFormWidget

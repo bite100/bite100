@@ -91,7 +91,7 @@ description: Guides work on the 比特100 (Bit 100) codebase: doc structure, con
 | 手续费与治理 | contracts/src/FeeDistributor.sol、Governance*.sol；frontend GovernanceSection、governanceUtils | API-接口说明、治理部署与提案执行指南 |
 | 贡献分 | contracts/src/ContributorReward.sol；node/internal/reward/、metrics/；frontend UnifiedRewardClaim、contributorRewardUtils | 贡献奖励接口、贡献分领取机制实现指南 |
 | 订单簿与撮合 | node/internal/match/、storage/、sync/；frontend OrderBookSection、OrderForm、nodeClient、wsClient | 技术架构说明、P2P节点整合交易撮合指南 |
-| P2P 节点与中继 | node/internal/p2p/、relay/；config.example.yaml | 节点部署、Relay部署与Nginx、节点发现与Bootstrap |
+| P2P 节点与中继 | node/internal/p2p/、relay/；config.example.yaml；frontend p2p/node.ts、orderBroadcast | 节点部署、Relay部署与Nginx；libp2p + 公共 bootstrap + DHT 发现（去中心化发现） |
 | 前端主流程 | frontend/src/App.tsx、walletConfig、config/chains、ChainSwitcher、ErrorDisplay | 部署与使用说明、前端验证-订单簿 |
 | 跨链桥接 | contracts/src/CrossChainBridge.sol；frontend CrossChainBridge | 跨链桥接完整指南 |
 | PWA 与移动端 | frontend/public/manifest.webmanifest、sw.js；frontend ServiceWorkerUpdate、MobileConnectHint | 手机端开发指南、手机端架构与数据保存策略 |

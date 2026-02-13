@@ -130,9 +130,16 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
           min={0}
           decimalScale={4}
         />
-        {error && <Text size="xs" c="red">{error}</Text>}
+        {error && (
+          <Text size="sm" c="red" mb={4} role="alert">
+            {error}
+          </Text>
+        )}
         <Button
+          className="btn-primary-action"
           fullWidth
+          color="yellow"
+          size="md"
           onClick={handlePlaceOrder}
           loading={loading}
           disabled={!account || !price || !amount}

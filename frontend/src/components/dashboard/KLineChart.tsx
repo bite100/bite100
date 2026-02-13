@@ -5,6 +5,9 @@ import { Text } from '@mantine/core'
 
 const DEFAULT_PAIR = 'TKA/TKB'
 
+const CHART_HEIGHT_DESKTOP = 380
+const CHART_HEIGHT_MOBILE = 280
+
 /** K 线图：从 /api/trades 聚合 1h OHLC，并订阅 WS trade 实时更新（币安风格深底、绿涨红跌） */
 export function KLineChart() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -14,10 +17,12 @@ export function KLineChart() {
 
   useEffect(() => {
     if (!containerRef.current) return
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
+    const chartHeight = isMobile ? CHART_HEIGHT_MOBILE : CHART_HEIGHT_DESKTOP
 
     const chart = createChart(containerRef.current, {
       width: containerRef.current.offsetWidth,
-      height: 380,
+      height: chartHeight,
       layout: {
         background: { color: '#1A1B1E' },
         textColor: '#D9D9D9',
@@ -41,7 +46,10 @@ export function KLineChart() {
     seriesRef.current = candlestickSeries
 
     const handleResize = () => {
-      if (containerRef.current && chartRef.current) chartRef.current.applyOptions({ width: containerRef.current.offsetWidth })
+      if (!containerRef.current || !chartRef.current) return
+      const mobile = window.innerWidth < 768
+      const h = mobile ? CHART_HEIGHT_MOBILE : CHART_HEIGHT_DESKTOP
+      chartRef.current.applyOptions({ width: containerRef.current.offsetWidth, height: h } as unknown as Parameters<IChartApi['applyOptions']>[0])
     }
     window.addEventListener('resize', handleResize)
 
@@ -68,10 +76,10 @@ export function KLineChart() {
   }, [bars])
 
   return (
-    <div style={{ width: '100%', minHeight: 380 }}>
+    <div className="kline-chart-wrap" style={{ width: '100%', minHeight: CHART_HEIGHT_DESKTOP }}>
       {loading && <Text size="xs" c="dimmed">K 线加载中…</Text>}
       {error && <Text size="xs" c="red">K 线加载失败：{error}</Text>}
-      <div ref={containerRef} style={{ width: '100%', minHeight: 380 }} />
+      <div ref={containerRef} style={{ width: '100%', minHeight: CHART_HEIGHT_DESKTOP }} />
     </div>
   )
 }

@@ -71,8 +71,8 @@ export function OrderBookWidget({ onBookUpdate }: OrderBookWidgetProps = {}) {
             <Table.Tbody>
               {asks.slice(0, 8).map((r, i) => (
                 <Table.Tr key={`a-${i}`}>
-                  <Table.Td style={{ color: '#EF5350' }}>{Number(r.price).toFixed(4)}</Table.Td>
-                  <Table.Td>{Number(r.amount).toFixed(4)}</Table.Td>
+                  <Table.Td className="ob-number" style={{ color: '#EF5350' }}>{Number(r.price).toFixed(4)}</Table.Td>
+                  <Table.Td className="ob-number">{Number(r.amount).toFixed(4)}</Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>
@@ -87,8 +87,8 @@ export function OrderBookWidget({ onBookUpdate }: OrderBookWidgetProps = {}) {
             <Table.Tbody>
               {bids.slice(0, 8).map((r, i) => (
                 <Table.Tr key={`b-${i}`}>
-                  <Table.Td style={{ color: '#26A69A' }}>{Number(r.price).toFixed(4)}</Table.Td>
-                  <Table.Td>{Number(r.amount).toFixed(4)}</Table.Td>
+                  <Table.Td className="ob-number" style={{ color: '#26A69A' }}>{Number(r.price).toFixed(4)}</Table.Td>
+                  <Table.Td className="ob-number">{Number(r.amount).toFixed(4)}</Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>
