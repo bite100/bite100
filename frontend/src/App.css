@@ -359,39 +359,6 @@
   gap: 1rem;
 }
 
-/* Swap 页：居中主卡（兑换是视觉主角），流动性为次级卡同列收纳 */
-.swap-page {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1rem;
-}
-.swap-page > .card {
-  width: 100%;
-  max-width: 480px;
-}
-.swap-hero {
-  padding: 1.75rem;
-  box-shadow: 0 8px 32px rgba(16, 16, 20, 0.07);
-}
-.swap-hero h2 {
-  font-size: 1.125rem;
-}
-.swap-out {
-  background: var(--b100-input-bg);
-  border-radius: 16px;
-  padding: 0.875rem 1rem;
-}
-.swap-out .value {
-  font-family: var(--b100-font-num);
-  font-size: 1.0625rem;
-}
-@media (max-width: 640px) {
-  .swap-hero {
-    padding: 1.25rem;
-  }
-}
-
 .hint {
   color: var(--b100-text-2);
   font-size: 0.8125rem;

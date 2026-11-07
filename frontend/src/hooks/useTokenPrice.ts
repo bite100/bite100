@@ -1,6 +1,6 @@
 /**
  * 价格参考集成：从 CoinGecko 获取市场参考价，用于订单簿/下单表单展示
- * 突出「P2P 零滑点限价单 vs 主流 AMM 滑点」
+ * 与订单簿成交价对照展示
  */
 import { useState, useEffect, useCallback } from 'react'
 

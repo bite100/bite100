@@ -165,10 +165,8 @@ export function cacheInvalidate(keyPrefix: string) {
 /** 缓存 key 前缀与 TTL（毫秒） */
 export const CACHE_KEYS = {
   BALANCE: 'p2p_balance_',
-  RESERVES: 'p2p_reserves',
-  SWAP_PREVIEW: 'p2p_swap_',
 } as const
-export const CACHE_TTL = { BALANCE: 20000, RESERVES: 15000, SWAP_PREVIEW: 10000 }
+export const CACHE_TTL = { BALANCE: 20000 }
 
 /** 调试日志工具（仅在开发环境输出） */
 const isDev = import.meta.env.DEV || import.meta.env.MODE === 'development'

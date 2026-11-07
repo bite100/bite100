@@ -40,7 +40,6 @@ export const VAULT_ADDRESS = currentChainConfig.contracts.vault
 export const SETTLEMENT_ADDRESS = currentChainConfig.contracts.settlement
 export const TOKEN0_ADDRESS = currentChainConfig.contracts.token0
 export const TOKEN1_ADDRESS = currentChainConfig.contracts.token1
-export const AMM_POOL_ADDRESS = currentChainConfig.contracts.ammPool
 export const CONTRIBUTOR_REWARD_ADDRESS = currentChainConfig.contracts.contributorReward
 export const FEE_DISTRIBUTOR_ADDRESS = currentChainConfig.contracts.feeDistributor
 export const GOVERNANCE_ADDRESS = currentChainConfig.contracts.governance
@@ -69,16 +68,6 @@ export const ERC20_ABI = [
   'function balanceOf(address account) view returns (uint256)',
   'function approve(address spender, uint256 amount) returns (bool)',
   'function allowance(address owner, address spender) view returns (uint256)',
-] as const
-
-export const AMM_ABI = [
-  'function token0() view returns (address)',
-  'function token1() view returns (address)',
-  'function reserve0() view returns (uint256)',
-  'function reserve1() view returns (uint256)',
-  'function getAmountOut(address tokenIn, uint256 amountIn) view returns (uint256)',
-  'function swap(address tokenIn, uint256 amountIn) returns (uint256)',
-  'function addLiquidity(uint256 amount0, uint256 amount1)',
 ] as const
 
 export const GOVERNANCE_ABI = [

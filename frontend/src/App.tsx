@@ -2,13 +2,12 @@ import { useState, useEffect, useCallback, Component, type ReactNode } from 'rea
 import { Contract } from 'ethers'
 import { useConnection, useDisconnect } from 'wagmi'
 import { StandardConnect } from './components/StandardConnect'
-import { CHAIN_ID, VAULT_ABI, ERC20_ABI, AMM_ABI, AMM_POOL_ADDRESS, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
+import { CHAIN_ID, VAULT_ABI, ERC20_ABI, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
 import { Dashboard } from './components/dashboard/Dashboard'
 import { OrderBookSection } from './OrderBookSection'
 import { CrossChainBridge } from './components/CrossChainBridge'
-import { LiquidityPoolInfo } from './components/LiquidityPoolInfo'
 import { RewardPoolInfo } from './components/RewardPoolInfo'
 import { UnifiedRewardClaim } from './components/UnifiedRewardClaim'
 import { MerkleAirdropClaim } from './components/MerkleAirdropClaim'
@@ -133,21 +132,6 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [loadingDeposit, setLoadingDeposit] = useState(false)
   const [loadingWithdraw, setLoadingWithdraw] = useState(false)
-  const [loadingSwap, setLoadingSwap] = useState(false)
-  const [loadingAddLiq, setLoadingAddLiq] = useState(false)
-  const [swapTokenIn, setSwapTokenIn] = useState<'token0' | 'token1'>(() => {
-    try {
-      if (typeof window === 'undefined') return 'token0'
-      const r = localStorage.getItem(`${STORAGE_KEY}_swapTokenIn`)
-      return r === 'token1' ? 'token1' : 'token0'
-    } catch { return 'token0' }
-  })
-  const [swapAmount, setSwapAmount] = useState<string>('')
-  const [swapAmountOut, setSwapAmountOut] = useState<string>('')
-  const [addLiqAmount0, setAddLiqAmount0] = useState<string>('')
-  const [addLiqAmount1, setAddLiqAmount1] = useState<string>('')
-  const [reserve0, setReserve0] = useState<string>('')
-  const [reserve1, setReserve1] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const isOnline = useOnlineStatus()
   const [activeTab, setActiveTab] = useState<Tab>(() => {
@@ -160,9 +144,10 @@ function App() {
       vault: 'assets',
       governance: 'govern',
       contribution: 'govern',
+      swap: 'trade', // 第十七轮 AMM 兑换下线：旧「兑换」链接落到交易分区
     }
     if (t && legacy[t]) return legacy[t]
-    const valid: Tab[] = ['trade', 'swap', 'assets', 'bridge', 'govern', 'data']
+    const valid: Tab[] = ['trade', 'assets', 'bridge', 'govern', 'data']
     return valid.includes(t as Tab) ? (t as Tab) : 'trade'
   })
   const [governSub, setGovernSub] = useState<'governance' | 'contribution'>(() => {
@@ -182,17 +167,15 @@ function App() {
       const config = getChainConfig(currentChainId)
       if (config) {
         setCurrentChainConfig(config)
-        // 刷新余额和储备
+        // 刷新余额
         if (account) {
           fetchBalances()
-          fetchReserves()
         }
       }
     }
   }, [currentChainId, account])
 
   useEffect(() => { setStored('tokenAddress', tokenAddress) }, [tokenAddress])
-  useEffect(() => { setStored('swapTokenIn', swapTokenIn) }, [swapTokenIn])
 
   const tokenAddr = tokenAddress.trim()
 
@@ -297,125 +280,6 @@ function App() {
     })
   }, [account, tokenAddr, withdrawAmount, fetchBalances, currentChainConfig])
 
-  const fetchReserves = useCallback(async () => {
-    if (!currentChainConfig || currentChainConfig.contracts.ammPool === '0x0000000000000000000000000000000000000000') {
-      setReserve0('0')
-      setReserve1('0')
-      return
-    }
-    const cached = cacheGet<[string, string]>(CACHE_KEYS.RESERVES)
-    if (cached) {
-      setReserve0(cached[0])
-      setReserve1(cached[1])
-      return
-    }
-    try {
-      const provider = getProvider()
-      if (!provider) return
-      const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, provider)
-      const [r0, r1] = await Promise.all([amm.reserve0(), amm.reserve1()])
-      const r0Str = formatTokenAmount(r0)
-      const r1Str = formatTokenAmount(r1)
-      setReserve0(r0Str)
-      setReserve1(r1Str)
-      cacheSet(CACHE_KEYS.RESERVES, [r0Str, r1Str], CACHE_TTL.RESERVES)
-    } catch {
-      setReserve0('0')
-      setReserve1('0')
-    }
-  }, [currentChainConfig])
-
-  const fetchSwapPreview = useCallback(async () => {
-    const amount = parseAmount(swapAmount)
-    if (amount === 0n || !account || !currentChainConfig) {
-      setSwapAmountOut('')
-      return
-    }
-    const cacheKey = CACHE_KEYS.SWAP_PREVIEW + swapTokenIn + '_' + swapAmount + '_' + currentChainConfig.chainId
-    const cached = cacheGet<string>(cacheKey)
-    if (cached) {
-      setSwapAmountOut(cached)
-      return
-    }
-    try {
-      const provider = getProvider()
-      if (!provider) return
-      const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, provider)
-      const tokenIn = swapTokenIn === 'token0' ? currentChainConfig.contracts.token0 : currentChainConfig.contracts.token1
-      const out = await amm.getAmountOut(tokenIn, amount)
-      const outStr = formatTokenAmount(out)
-      setSwapAmountOut(outStr)
-      cacheSet(cacheKey, outStr, CACHE_TTL.SWAP_PREVIEW)
-    } catch {
-      setSwapAmountOut('')
-    }
-  }, [account, swapAmount, swapTokenIn])
-
-  useEffect(() => {
-    fetchSwapPreview()
-  }, [fetchSwapPreview])
-
-  useEffect(() => {
-    if (account) fetchReserves()
-  }, [account, fetchReserves])
-
-  const handleSwap = useCallback(async () => {
-    const amount = parseAmount(swapAmount)
-    if (amount === 0n) {
-      setError('请输入数量')
-      return
-    }
-    if (!currentChainConfig || currentChainConfig.contracts.ammPool === '0x0000000000000000000000000000000000000000') {
-      setError('当前链的 AMM 池尚未部署，请切换到已部署的链（如 Sepolia）')
-      return
-    }
-    await runWithLoading(setLoadingSwap, setError, async () => {
-      const tokenIn = swapTokenIn === 'token0' ? currentChainConfig.contracts.token0 : currentChainConfig.contracts.token1
-      await withSigner(async (signer) => {
-        const token = new Contract(tokenIn, ERC20_ABI, signer)
-        const bal = await token.balanceOf(account!)
-        if (bal < amount) throw new Error(`余额不足，钱包仅有 ${formatTokenAmount(bal)}`)
-        const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, signer)
-        await ensureAllowance(token, account!, currentChainConfig.contracts.ammPool, amount)
-        await (await amm.swap(tokenIn, amount)).wait()
-      })
-      setSwapAmount('')
-      setSwapAmountOut('')
-      cacheInvalidate(CACHE_KEYS.BALANCE)
-      cacheInvalidate(CACHE_KEYS.RESERVES)
-      await fetchReserves()
-    })
-  }, [account, swapAmount, swapTokenIn, fetchReserves, currentChainConfig])
-
-  const handleAddLiquidity = useCallback(async () => {
-      const amt0 = parseAmount(addLiqAmount0)
-      const amt1 = parseAmount(addLiqAmount1)
-      if (amt0 === 0n || amt1 === 0n) {
-        setError('请输入 TKA 与 TKB 的数量')
-        return
-      }
-      if (!currentChainConfig || currentChainConfig.contracts.ammPool === '0x0000000000000000000000000000000000000000') {
-        setError('当前链的 AMM 池尚未部署，请切换到已部署的链（如 Sepolia）')
-        return
-      }
-      await runWithLoading(setLoadingAddLiq, setError, async () => {
-        await withSigner(async (signer) => {
-          const token0C = new Contract(currentChainConfig.contracts.token0, ERC20_ABI, signer)
-          const token1C = new Contract(currentChainConfig.contracts.token1, ERC20_ABI, signer)
-          const amm = new Contract(currentChainConfig.contracts.ammPool, AMM_ABI, signer)
-          await Promise.all([
-            ensureAllowance(token0C, account!, currentChainConfig.contracts.ammPool, amt0),
-            ensureAllowance(token1C, account!, currentChainConfig.contracts.ammPool, amt1),
-          ])
-          await (await amm.addLiquidity(amt0, amt1)).wait()
-        })
-        setAddLiqAmount0('')
-        setAddLiqAmount1('')
-        cacheInvalidate(CACHE_KEYS.RESERVES)
-        await fetchReserves()
-      })
-    }, [account, addLiqAmount0, addLiqAmount1, fetchReserves, currentChainConfig])
-
   const handleMaxDeposit = useCallback(() => {
     if (walletTokenBalance) setDepositAmount(walletTokenBalance)
     else setError('请先查询该代币余额')
@@ -426,45 +290,6 @@ function App() {
     else if (vaultBalance) setWithdrawAmount(vaultBalance)
     else setError('请先查询该代币余额')
   }, [vaultAvailable, vaultBalance])
-
-  const fetchTokenBalance = useCallback(async (tokenAddress: string): Promise<string> => {
-    const provider = getProvider()
-    if (!provider || !account) return '0'
-    const token = new Contract(tokenAddress, ERC20_ABI, provider)
-    const bal = await token.balanceOf(account)
-    return formatTokenAmount(bal)
-  }, [account])
-
-  const handleMaxSwap = useCallback(async () => {
-    if (!account || !currentChainConfig) return
-    setError(null)
-    try {
-      const addr = swapTokenIn === 'token0' ? currentChainConfig.contracts.token0 : currentChainConfig.contracts.token1
-      setSwapAmount(await fetchTokenBalance(addr))
-    } catch (e) {
-      setError(formatError(e))
-    }
-  }, [account, swapTokenIn, fetchTokenBalance, currentChainConfig])
-
-  const handleMaxAddLiq0 = useCallback(async () => {
-    if (!account || !currentChainConfig) return
-    setError(null)
-    try {
-      setAddLiqAmount0(await fetchTokenBalance(currentChainConfig.contracts.token0))
-    } catch (e) {
-      setError(formatError(e))
-    }
-  }, [account, fetchTokenBalance, currentChainConfig])
-
-  const handleMaxAddLiq1 = useCallback(async () => {
-    if (!account || !currentChainConfig) return
-    setError(null)
-    try {
-      setAddLiqAmount1(await fetchTokenBalance(currentChainConfig.contracts.token1))
-    } catch (e) {
-      setError(formatError(e))
-    }
-  }, [account, fetchTokenBalance, currentChainConfig])
 
   useEffect(() => {
     if (!account) return
@@ -547,7 +372,6 @@ function App() {
         onRetry={() => {
           setError(null)
           if (account && isValidAddress(tokenAddr)) fetchBalances()
-          fetchReserves()
         }}
         onDismiss={() => setError(null)}
         className="error-below-nav"
@@ -657,9 +481,8 @@ function App() {
 
           {activeTab === 'data' && (
             <>
-              <PageHead title="数据" desc="AMM 流动性池与贡献奖励池的链上公开数据，无需连接钱包即可查看。" />
+              <PageHead title="数据" desc="贡献奖励池的链上公开数据，无需连接钱包即可查看。" />
               <div className="public-data-section">
-                <LiquidityPoolInfo />
                 <RewardPoolInfo />
               </div>
             </>
@@ -678,89 +501,6 @@ function App() {
               onShowFullOrderbook={() => setShowFullOrderbook(true)}
             />
           ))}
-
-          {activeTab === 'swap' && (
-            <>
-              <PageHead title="兑换" desc="通过 AMM 流动性池即时兑换 TKA 与 TKB，或向池中添加流动性。" />
-              {account ? (
-            <div className="swap-page">
-              <div className="card vault-section swap-hero">
-                <h2>兑换</h2>
-                <p className="hint">TKA 与 TKB 按池内储备比例即时兑换，手续费 0.01%，从成交金额中扣除。步骤：填入数量，确认兑换方向与到手数量后提交，并在钱包中确认（兑换是链上交易）。注意：实际成交价按提交上链时的池内储备计算，大额兑换可能产生滑点；池中流动性不足时兑换会失败。</p>
-                <div className="row">
-                  <span className="label">池内储备</span>
-                  <span className="value mono">TKA: {reserve0} · TKB: {reserve1}</span>
-                </div>
-                <select
-                  value={swapTokenIn}
-                  onChange={(e) => setSwapTokenIn(e.target.value as 'token0' | 'token1')}
-                  className="input"
-                >
-                  <option value="token0">TKA → TKB</option>
-                  <option value="token1">TKB → TKA</option>
-                </select>
-                <div className="input-row">
-                  <input
-                    type="text"
-                    placeholder="输入数量"
-                    value={swapAmount}
-                    onChange={(e) => setSwapAmount(e.target.value)}
-                    className="input"
-                  />
-                  <button type="button" className="btn-max" onClick={handleMaxSwap}>最大</button>
-                </div>
-                {swapAmountOut && (
-                  <div className="row result swap-out">
-                    <span className="label">预计获得</span>
-                    <span className="value">{swapAmountOut}</span>
-                  </div>
-                )}
-                <button
-                  className="btn primary"
-                  onClick={handleSwap}
-                  disabled={loadingSwap || !swapAmount.trim() || parseAmount(swapAmount) === 0n}
-                >
-                  {loadingSwap ? '处理中…' : '兑换'}
-                </button>
-              </div>
-
-              <div className="card vault-section">
-                <h2>添加流动性</h2>
-                <p className="hint">向 AMM 池同时存入 TKA 与 TKB，增加池内流动性深度。</p>
-                <div className="input-row">
-                  <input
-                    type="text"
-                    placeholder="TKA 数量"
-                    value={addLiqAmount0}
-                    onChange={(e) => setAddLiqAmount0(e.target.value)}
-                    className="input"
-                  />
-                  <button type="button" className="btn-max" onClick={handleMaxAddLiq0}>最大</button>
-                </div>
-                <div className="input-row">
-                  <input
-                    type="text"
-                    placeholder="TKB 数量"
-                    value={addLiqAmount1}
-                    onChange={(e) => setAddLiqAmount1(e.target.value)}
-                    className="input"
-                  />
-                  <button type="button" className="btn-max" onClick={handleMaxAddLiq1}>最大</button>
-                </div>
-                <button
-                  className="btn secondary"
-                  onClick={handleAddLiquidity}
-                  disabled={loadingAddLiq || !addLiqAmount0.trim() || !addLiqAmount1.trim()}
-                >
-                  {loadingAddLiq ? '处理中…' : '添加流动性'}
-                </button>
-              </div>
-            </div>
-              ) : (
-                <ConnectGate title="连接钱包后即可兑换" desc="兑换与添加流动性需要连接钱包签名；池内储备等公开数据可在「数据」分区查看。" />
-              )}
-            </>
-          )}
 
           {activeTab === 'govern' && (
             <>
@@ -805,7 +545,6 @@ function App() {
       <details className="card contracts-details">
         <summary>合约地址（链上验证）</summary>
         <div className="row"><span className="label">当前网络</span><span className="value">{currentChainConfig?.name || '未知网络'}</span></div>
-        <div className="row"><span className="label">AMM 池</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{AMM_POOL_ADDRESS}</span></div>
         <div className="row"><span className="label">治理合约 Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
         <div className="row"><span className="label">结算合约 Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
       </details>
