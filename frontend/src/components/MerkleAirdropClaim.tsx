@@ -68,7 +68,7 @@ export function MerkleAirdropClaim({ account, onError }: MerkleAirdropClaimProps
       proof = JSON.parse(proofJson)
       if (!Array.isArray(proof)) throw new Error('proof 需为数组')
     } catch {
-      setErr('proof 格式错误，需为 JSON 数组，如 ["0x...","0x..."]')
+      setErr('proof 格式错误：需为 JSON 数组，如 ["0x...","0x..."]')
       return
     }
     setClaiming(true)
@@ -119,7 +119,7 @@ export function MerkleAirdropClaim({ account, onError }: MerkleAirdropClaimProps
             <input type="text" placeholder="0" value={index} onChange={(e) => setIndex(e.target.value)} />
           </div>
           <div className="form-group">
-            <label>amount（token 最小单位，如 wei）</label>
+            <label>amount（代币最小单位，如 wei）</label>
             <input type="text" placeholder="1000000000000000000" value={amount} onChange={(e) => setAmount(e.target.value)} />
           </div>
           <div className="form-group">
