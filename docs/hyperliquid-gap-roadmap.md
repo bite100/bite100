@@ -180,6 +180,14 @@ Go 节点侧（`node/`，均为机械性腐坏，不改行为）：
 
 ---
 
+## 6. 第二轮进展（2026-11-07）
+
+- **P0-2 ✅**：统一 EIP-712 签名规范（`docs/eip712-order-spec.md` 为唯一事实源：四字段域 + Order 含链上结算 nonce + amountOut 公式），前端/Go 节点/Settlement 合约三方对齐；`settleTrade` 与全部批量入口真实验签、按订单 digest 累计记账防超额重放、消耗 nonce。合约测试含伪造/篡改/重放/批量用例。
+- **P0-3 ✅**：节点 `internal/settlement/submit.go` 已实现真实上链提交；本地 anvil 全链路验证通过（部署→签名→撮合→结算→链上断言+重放被拒），证据见 `docs/anvil-e2e-verification.md`。Sepolia 手工验证仍待后续（本轮按要求未碰线上）。
+- **P0-5 ✅**：新增 `.github/workflows/contracts.yml`（forge build + forge test），另顺带 node/frontend 基础 CI。
+- **ContributorReward 方案 A ✅**（Ren 2026-11-07 定案）：单次领取上限=奖池 10%（保留）、领取窗=周期结束后 90 天（恢复并由合约强制）、逾期未领经 `rolloverUnclaimed` 回流下一期；`claimable()` 改为单次可领额、新增 `claimableTotal()`，前端展示已对齐。合约测试 62/62 全绿。
+- 基线更新：合约 62/62、前端 77/77、Go 节点 internal 包全绿（`cmd/reputation-updater` 示例 stub 的既有编译错误仍未处理）。
+
 ## 附：Hyperliquid 公开来源清单（2026-11-07 查阅）
 
 - 官方文档 docs.hyperliquid.xyz（经官方 GitBook 镜像读取）：HyperCore Overview、Order Book、Fees、Oracle、Liquidations、Protocol Vaults、Nonces and API Wallets 各页面。

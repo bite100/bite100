@@ -1,0 +1,34 @@
+# 节点 CI：go vet + go test（internal 包）
+# 注：cmd/reputation-updater 是未完成的示例 stub（既有编译错误），暂不纳入；修复后可放开为 ./...
+name: Node tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "node/**"
+      - ".github/workflows/node-tests.yml"
+  pull_request:
+    paths:
+      - "node/**"
+      - ".github/workflows/node-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: node/go.sum
+
+      - name: Vet
+        working-directory: node
+        run: go vet ./internal/...
+
+      - name: Test
+        working-directory: node
+        run: go test ./internal/...

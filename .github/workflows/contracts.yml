@@ -1,0 +1,33 @@
+# 合约 CI：forge build + forge test（仅 contracts 目录变更时触发）
+name: Contracts
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contracts.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contracts.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Build contracts
+        working-directory: contracts
+        run: forge build
+
+      - name: Run contract tests
+        working-directory: contracts
+        run: forge test -v
