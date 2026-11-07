@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import GridLayout, { verticalCompactor } from 'react-grid-layout'
-import { Paper, Text, useMantineTheme, Button } from '@mantine/core'
+import { Paper, Text, Button } from '@mantine/core'
 import { OrderBookWidget } from './OrderBookWidget'
 import { KLineChart } from './KLineChart'
 import { LimitOrderFormWidget } from './LimitOrderFormWidget'
@@ -45,7 +45,6 @@ function computeMidFromBook(
 }
 
 export function Dashboard({ account, getSigner, onShowFullOrderbook }: DashboardProps) {
-  const theme = useMantineTheme()
   const [layout, setLayout] = useState(defaultLayout)
   const [width, setWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200)
   const [recommendedPrice, setRecommendedPrice] = useState('')
@@ -120,17 +119,14 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
         key="orderbook"
         p="md"
         shadow="xs"
-        style={{
-          background: theme.colors.dark[8] ?? '#2C2E33',
-          borderRadius: 8,
-        }}
+        withBorder
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-          <Text className="drag-handle" size="sm" fw={600} c="gray.3" style={{ cursor: 'grab' }}>
+          <Text className="drag-handle" size="sm" fw={600} style={{ cursor: 'grab' }}>
             订单簿
           </Text>
           {onShowFullOrderbook && (
-            <Button variant="subtle" size="xs" color="gray" onClick={onShowFullOrderbook}>
+            <Button variant="subtle" size="xs" color="dark" onClick={onShowFullOrderbook}>
               完整订单簿
             </Button>
           )}
@@ -143,12 +139,9 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
         key="chart"
         p="md"
         shadow="xs"
-        style={{
-          background: theme.colors.dark[8] ?? '#2C2E33',
-          borderRadius: 8,
-        }}
+        withBorder
       >
-        <Text className="drag-handle" size="sm" fw={600} c="gray.3" style={{ cursor: 'grab' }}>
+        <Text className="drag-handle" size="sm" fw={600} style={{ cursor: 'grab' }}>
           K 线图
         </Text>
         <KLineChart />
@@ -157,13 +150,10 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
         key="orderform"
         p="md"
         shadow="xs"
+        withBorder
         className="dashboard-orderform"
-        style={{
-          background: theme.colors.dark[8] ?? '#2C2E33',
-          borderRadius: 8,
-        }}
       >
-        <Text className="drag-handle" size="sm" fw={600} c="gray.3" style={{ cursor: isMobile ? 'default' : 'grab' }}>
+        <Text className="drag-handle" size="sm" fw={600} style={{ cursor: isMobile ? 'default' : 'grab' }}>
           挂单
         </Text>
         <LimitOrderFormWidget

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Paper, Text, Table, useMantineTheme } from '@mantine/core'
+import { Paper, Text, Table } from '@mantine/core'
 import { nodeGet } from '../../nodeClient'
 
 const DEFAULT_PAIR = 'TKA/TKB'
@@ -16,7 +16,6 @@ export interface OrderBookWidgetProps {
 }
 
 export function OrderBookWidget({ onBookUpdate }: OrderBookWidgetProps = {}) {
-  const theme = useMantineTheme()
   const [bids, setBids] = useState<OrderBookRow[]>([])
   const [asks, setAsks] = useState<OrderBookRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -53,8 +52,8 @@ export function OrderBookWidget({ onBookUpdate }: OrderBookWidgetProps = {}) {
   }, [onBookUpdate])
 
   return (
-    <Paper p="md" style={{ background: theme.colors.dark[8] ?? '#2C2E33', height: '100%', minHeight: 280 }}>
-      <Text size="sm" fw={600} mb="xs" c="gray.3">
+    <Paper p="md" style={{ background: 'transparent', height: '100%', minHeight: 280 }}>
+      <Text size="sm" fw={600} mb="xs">
         订单簿 · {DEFAULT_PAIR}
       </Text>
       {loading ? (
@@ -64,14 +63,14 @@ export function OrderBookWidget({ onBookUpdate }: OrderBookWidgetProps = {}) {
           <Table striped highlightOnHover withTableBorder={false}>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th style={{ color: '#EF5350' }}>卖价</Table.Th>
+                <Table.Th style={{ color: 'var(--b100-down)' }}>卖价</Table.Th>
                 <Table.Th>数量</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {asks.slice(0, 8).map((r, i) => (
                 <Table.Tr key={`a-${i}`}>
-                  <Table.Td className="ob-number" style={{ color: '#EF5350' }}>{Number(r.price).toFixed(4)}</Table.Td>
+                  <Table.Td className="ob-number" style={{ color: 'var(--b100-down)' }}>{Number(r.price).toFixed(4)}</Table.Td>
                   <Table.Td className="ob-number">{Number(r.amount).toFixed(4)}</Table.Td>
                 </Table.Tr>
               ))}
@@ -80,14 +79,14 @@ export function OrderBookWidget({ onBookUpdate }: OrderBookWidgetProps = {}) {
           <Table striped highlightOnHover withTableBorder={false}>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th style={{ color: '#26A69A' }}>买价</Table.Th>
+                <Table.Th style={{ color: 'var(--b100-up)' }}>买价</Table.Th>
                 <Table.Th>数量</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {bids.slice(0, 8).map((r, i) => (
                 <Table.Tr key={`b-${i}`}>
-                  <Table.Td className="ob-number" style={{ color: '#26A69A' }}>{Number(r.price).toFixed(4)}</Table.Td>
+                  <Table.Td className="ob-number" style={{ color: 'var(--b100-up)' }}>{Number(r.price).toFixed(4)}</Table.Td>
                   <Table.Td className="ob-number">{Number(r.amount).toFixed(4)}</Table.Td>
                 </Table.Tr>
               ))}

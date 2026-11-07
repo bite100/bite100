@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Paper, Text, Select, NumberInput, Button, Stack } from '@mantine/core'
-import { useMantineTheme } from '@mantine/core'
 import { ethers } from 'ethers'
 import { formatError } from '../../utils'
 import { nodePost } from '../../nodeClient'
@@ -20,7 +19,6 @@ interface LimitOrderFormWidgetProps {
 }
 
 export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onSuccess }: LimitOrderFormWidgetProps) {
-  const theme = useMantineTheme()
   const [side, setSide] = useState<string>('buy')
   const [price, setPrice] = useState(recommendedPrice ?? '')
   const [amount, setAmount] = useState('')
@@ -103,14 +101,14 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
   }
 
   return (
-    <Paper p="md" style={{ background: theme.colors.dark[8] ?? '#2C2E33', height: '100%', minHeight: 280 }}>
-      <Text size="sm" fw={600} mb="xs" c="gray.3">
+    <Paper p="md" style={{ background: 'transparent', height: '100%', minHeight: 280 }}>
+      <Text size="sm" fw={600} mb="xs">
         挂单 · {DEFAULT_PAIR}
       </Text>
       <Stack gap="sm">
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button size="xs" color="green" onClick={handleQuickBuy}>一键买</Button>
-          <Button size="xs" color="red" variant="light" onClick={handleQuickSell}>一键卖</Button>
+          <Button size="xs" color="up" variant="light" onClick={handleQuickBuy}>一键买</Button>
+          <Button size="xs" color="down" variant="light" onClick={handleQuickSell}>一键卖</Button>
         </div>
         <Select
           label="方向"
@@ -141,7 +139,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
         <Button
           className="btn-primary-action"
           fullWidth
-          color="yellow"
+          color="brand"
           size="md"
           onClick={handlePlaceOrder}
           loading={loading}

@@ -423,36 +423,37 @@ function App() {
           当前处于离线状态，请检查网络后重试
         </div>
       )}
-      <div className="app-header-top">
-        <div>
-          <h1>比特100</h1>
-          <p className="subtitle">
-            {currentChainConfig?.name || '未知网络'} · 连钱包 · 存提 · Swap · 添加流动性
-          </p>
+      <header className="app-header-top">
+        <div className="brand-lockup">
+          <img className="brand-mark" src={`${import.meta.env.BASE_URL}icon.svg`} alt="" />
+          <div>
+            <h1>比特100</h1>
+            <p className="subtitle">
+              {currentChainConfig?.name || '未知网络'} · P2P 去中心化交易所
+            </p>
+          </div>
         </div>
-        <ChainSwitcher
-          currentChainId={currentChainId}
-          onChainChange={switchChain}
-        />
-      </div>
-
-      <div className="card" style={{ marginBottom: '0.5rem' }}>
-        <p className="hint" style={{ margin: 0 }}>当前合约（验证用）</p>
-        <div className="row"><span className="label">网络</span><span className="value">{currentChainConfig?.name || '未知'}</span></div>
-        <div className="row"><span className="label">AMM 池</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{AMM_POOL_ADDRESS}</span></div>
-        <div className="row"><span className="label">Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
-        <div className="row"><span className="label">Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
-      </div>
+        <div className="header-actions">
+          <ChainSwitcher
+            currentChainId={currentChainId}
+            onChainChange={switchChain}
+          />
+        </div>
+      </header>
 
       <ContributionSection account={account} />
 
       {!account ? (
         <>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
-            <StandardConnect />
-            <MobileConnectHint />
+          <div className="card hero-connect">
+            <h2>欢迎来到比特100</h2>
+            <p className="hint" style={{ margin: 0 }}>连接钱包，即可存提、兑换与下单交易。</p>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
+              <StandardConnect />
+              <MobileConnectHint />
+            </div>
+            <AddNetworkButton chainId={currentChainId ?? undefined} className="add-network-below-connect" />
           </div>
-          <AddNetworkButton chainId={currentChainId ?? undefined} className="add-network-below-connect" />
           <div className="public-data-section" style={{ marginTop: '1rem' }}>
             <LiquidityPoolInfo />
             <RewardPoolInfo />
@@ -464,7 +465,7 @@ function App() {
           />
         </>
       ) : (
-          <div className="card">
+          <div className="card wallet-bar">
             <div className="row">
               <span className="label">当前账户</span>
               <span className="value mono">{shortAddress(account)}</span>
@@ -622,9 +623,9 @@ function App() {
           ))}
 
           {activeTab === 'swap' && (
-            <div className="swap-liq-grid">
-              <div className="card vault-section">
-                <h2>AMM Swap</h2>
+            <div className="swap-page">
+              <div className="card vault-section swap-hero">
+                <h2>兑换</h2>
                 <p className="hint">Token A ↔ Token B，0.01% 手续费，单笔最高等值 1 USD。池子需有流动性。</p>
                 <div className="row">
                   <span className="label">池子储备</span>
@@ -649,7 +650,7 @@ function App() {
                   <button type="button" className="btn-max" onClick={handleMaxSwap}>最大</button>
                 </div>
                 {swapAmountOut && (
-                  <div className="row result">
+                  <div className="row result swap-out">
                     <span className="label">预计获得</span>
                     <span className="value">{swapAmountOut}</span>
                   </div>
@@ -715,10 +716,18 @@ function App() {
             <CrossChainBridge account={account} currentChainId={currentChainId} />
           )}
 
-          {/* 添加流动性已在 Swap 标签下与 Swap 并排展示 */}
+          {/* 添加流动性在 Swap 标签下作为次级卡，位于兑换主卡下方 */}
 
         </>
       )}
+
+      <details className="card contracts-details">
+        <summary>合约地址（验证用）</summary>
+        <div className="row"><span className="label">网络</span><span className="value">{currentChainConfig?.name || '未知'}</span></div>
+        <div className="row"><span className="label">AMM 池</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{AMM_POOL_ADDRESS}</span></div>
+        <div className="row"><span className="label">Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
+        <div className="row"><span className="label">Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
+      </details>
 
     </div>
   )

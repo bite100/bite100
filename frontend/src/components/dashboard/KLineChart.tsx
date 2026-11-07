@@ -8,7 +8,7 @@ const DEFAULT_PAIR = 'TKA/TKB'
 const CHART_HEIGHT_DESKTOP = 380
 const CHART_HEIGHT_MOBILE = 280
 
-/** K 线图：从 /api/trades 聚合 1h OHLC，并订阅 WS trade 实时更新（币安风格深底、绿涨红跌） */
+/** K 线图：从 /api/trades 聚合 1h OHLC，并订阅 WS trade 实时更新（浅底、绿涨红跌，涨跌色仅数据语义） */
 export function KLineChart() {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -24,22 +24,24 @@ export function KLineChart() {
       width: containerRef.current.offsetWidth,
       height: chartHeight,
       layout: {
-        background: { color: '#1A1B1E' },
-        textColor: '#D9D9D9',
+        background: { color: '#FFFFFF' },
+        textColor: '#737378',
       },
       grid: {
-        vertLines: { color: '#2C2E33' },
-        horzLines: { color: '#2C2E33' },
+        vertLines: { color: '#F0F0F2' },
+        horzLines: { color: '#F0F0F2' },
       },
-      rightPriceScale: { borderColor: '#414449' },
-      timeScale: { borderColor: '#414449', timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: '#E2E2E7' },
+      timeScale: { borderColor: '#E2E2E7', timeVisible: true, secondsVisible: false },
     })
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#26A69A',
-      downColor: '#EF5350',
-      borderDownColor: '#EF5350',
-      borderUpColor: '#26A69A',
+      upColor: '#30A46C',
+      downColor: '#E5484D',
+      borderDownColor: '#E5484D',
+      borderUpColor: '#30A46C',
+      wickUpColor: '#30A46C',
+      wickDownColor: '#E5484D',
     })
 
     chartRef.current = chart
