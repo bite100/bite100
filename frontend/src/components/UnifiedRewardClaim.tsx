@@ -225,7 +225,7 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
   return (
     <div className="card unified-reward-claim">
       <h3 className="card-title">奖励领取</h3>
-      <p className="unified-reward-hint">可一键领取全部可领奖励，或在下方按项领取。</p>
+      <p className="unified-reward-hint">这里汇总当前账户可领取的全部奖励：手续费分成与各周期贡献奖励。可一键领取全部（逐项在钱包中确认），或在下方按项领取。贡献奖励须在周期结束后 90 天内领取，单次领取上限为奖池 10%，未领完的部分可再次领取。</p>
 
       {claimableItems.length > 0 && (
         <button

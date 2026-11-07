@@ -103,9 +103,9 @@ export function ContributionSection({ account }: { account: string | null }) {
 
   return (
     <div className="card vault-section">
-      <h2>贡献看板</h2>
+      <h2>贡献奖励</h2>
       <p className="hint">
-        输入领奖地址后点击「查询」。仅展示最近两个自然周（UTC）的记录：未领取奖励需在周期结束后 90 天内领取，逾期未领部分回流下一期奖池；已领取记录不受影响。领取需连接钱包，且查询地址须为当前账户。
+        贡献奖励按周期发放：每两个自然周（UTC）为一个周期，节点在撮合（40%）、存储（25%）、流动性（20%）、中继（15%）四方面的贡献会被计分，周期结束后按分数生成可领奖励。怎么查：输入领奖地址（留空则用当前账户）后点击「查询」，页面仅展示最近两个周期的记录。怎么领：在记录中点击「领取」。前提：领取时需连接钱包，且查询地址必须与当前账户一致，只能为自己领取、不能代领。注意：未领取奖励须在周期结束后 90 天内领取，逾期未领部分回流下一期奖池；已领取记录不受期限影响。
       </p>
       <p className="hint" style={{ marginTop: '0.25rem', marginBottom: '0.5rem' }}>
         <a href={contributorRewardExplorerUrl} target="_blank" rel="noopener noreferrer">在区块浏览器查看贡献奖励合约</a>
