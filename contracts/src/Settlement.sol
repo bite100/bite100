@@ -9,9 +9,19 @@ import "./NodeRewards.sol";
 import "./MerkleProof.sol";
 import "./OrderNonceManager.sol";
 
+/// @notice ChainConfig 中 Settlement 需要的只读接口（gas 换算参考价）
+interface IChainConfig {
+    function quoteToken() external view returns (address);
+    function ethPriceInQuote() external view returns (uint256);
+}
+
 /// @title Settlement 交易结算
 /// @notice 根据链下撮合结果执行资产划转并收取手续费；0.01% 单边，买卖双方各自代币收取，每边最高等值 1 美元（由 feeCapPerToken 配置）。
-/// @notice 当买卖双方无原生代币付 gas 时，可由交易所（relayer）代付；gas 费卖方买方均摊，从成交额中扣除后转给交易所。
+/// @notice gas 规则（第二十一轮，Ren 拍板）：中继代付的 gas 不是补贴——结算成功时由合约**链上计量**
+/// 本笔实际 gas 成本（gasleft 差值 + 内在成本），按 ChainConfig 参考价换算后，由 maker 与 taker
+/// 各承担 50%，以各自收到的资产扣除（单方不超过其收到金额的 gasDeductCapBps，默认 10%，
+/// 超出部分协议吸收）；失败/revert 的可归责 gas 由发起者承担（见 chargeFailedSettlement）。
+/// Fill.gasReimburseIn/Out 为旧版节点自报字段，自本轮起**被合约忽略**（结构保留以兼容既有 ABI）。
 contract Settlement is ReentrancyGuard, OrderNonceManager {
     Vault public vault;
     FeeDistributor public feeDistributor;
@@ -47,6 +57,35 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     address public feeToken; // 保留，兼容旧接口
     /// @notice 每代币手续费上限（该代币最小单位），0 表示不设上限；如 USDC 6 位小数下 1e6 = 1 USD
     mapping(address => uint256) public feeCapPerToken;
+
+    // ---------- gas 对半回收（第二十一轮） ----------
+    /// @notice ChainConfig 地址（提供 quoteToken 与 ETH 参考价，供 gas 换算）；0 = 未配置（不扣 gas 分摊）
+    address public chainConfig;
+    /// @notice 单方 gas 扣除占其该笔收到金额的上限（万分比），默认 1000 = 10%；超出部分协议吸收，不向用户多扣
+    uint16 public gasDeductCapBps = 1000;
+    /// @notice gasDeductCapBps 硬顶：50%
+    uint16 public constant MAX_GAS_DEDUCT_CAP_BPS = 5000;
+    /// @notice 扣费执行段（补扣划转 + 事件）的固定 gas 预算：计量点在补扣之前，其执行成本以此常量计入
+    uint256 public constant GAS_CHARGE_OVERHEAD = 85_000;
+    /// @notice 净成本校准系数（万分比）：gasleft() 计量为 SSTORE 退款前的毛 gas，提交者实付为退款
+    /// 后净值（回执 gasUsed）。anvil 实测（2026-11-07，详见 docs/round21-gas-rules-2026-11-07.md）：
+    /// 全量成交计量 704,117 vs 净 532,047；部分成交计量 682,057 vs 净 557,987。默认 7600 时
+    /// 收费误差约 +0.6% / −7.1%——校准纪律：宁可少收（差额协议吸收），不许系统性多收用户；
+    /// 主网部署前须在主网分叉重新校准。
+    uint16 public meterKeepBps = 7600;
+    /// @notice GasCostShared.reason 取值
+    uint8 public constant GAS_SHARE_OK = 0;
+    uint8 public constant GAS_SHARE_NO_PRICE = 1; // 参考价未配置，整笔不扣
+    uint8 public constant GAS_SHARE_NOT_QUOTED = 2; // 交易对两币均非 quote，无法换算，整笔不扣
+
+    // ---------- 失败结算归责扣费（第二十一轮） ----------
+    /// @notice 单笔失败扣费的上限（以 quote 计价，最小单位）；0 = 功能关闭（默认）
+    uint256 public maxFailureGasChargeQuote;
+    /// @notice 订单摘要 => 是否已收过失败扣费（同一订单的失败 gas 只收一次，防重复上报重复扣）
+    mapping(bytes32 => bool) public failureCharged;
+    /// @notice chargeFailedSettlement 的归责原因（须可链上验证，见函数注释）
+    uint8 public constant FAIL_ORDER_EXPIRED = 1;
+    uint8 public constant FAIL_LOCK_RELEASED = 2;
 
     /// @notice 统一订单结构（EIP-712 签名对象）：字段顺序即编码顺序，前端/节点/合约三方规范见 docs/eip712-order-spec.md
     struct Order {
@@ -117,6 +156,39 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     event FeeDistributorSet(address indexed oldDistributor, address indexed newDistributor);
     event FeeTokenSet(address indexed token);
     event FeeCapSet(address indexed token, uint256 cap);
+    /// @notice 每笔结算的 gas 对半回收明细（第二十一轮）：gasUsed/gasCostWei 为本笔计量的实际
+    /// gas 与 ETH 成本；maker 侧以 makerToken（其收到的 tokenOut）扣除 makerDeduct，
+    /// taker 侧以 takerToken（tokenIn）扣除 takerDeduct；Shortfall 为因安全阀/余额不足
+    /// 未能扣足、由协议吸收的部分（同资产计）。reason 见 GAS_SHARE_* 常量。
+    event GasCostShared(
+        address indexed maker,
+        address indexed taker,
+        address indexed gasRecipient,
+        uint256 gasUsed,
+        uint256 gasCostWei,
+        uint8 reason,
+        address makerToken,
+        uint256 makerDeduct,
+        uint256 makerShortfall,
+        address takerToken,
+        uint256 takerDeduct,
+        uint256 takerShortfall
+    );
+    event ChainConfigSet(address indexed oldConfig, address indexed newConfig);
+    event GasDeductCapSet(uint16 oldBps, uint16 newBps);
+    event MaxFailureGasChargeSet(uint256 oldCapQuote, uint256 newCapQuote);
+    event MeterKeepBpsSet(uint16 oldBps, uint16 newBps);
+    /// @notice 失败结算归责扣费已执行：digest 为发起者订单摘要，chargedUser 为被扣方（墓碑归属），
+    /// reporter 为实际烧掉 gas 的结算提交方（收款方），gasUsedClaimed 为其申报的失败交易 gas 用量
+    event FailedSettlementCharged(
+        bytes32 indexed digest,
+        address indexed chargedUser,
+        address indexed reporter,
+        address token,
+        uint256 amount,
+        uint8 reason,
+        uint256 gasUsedClaimed
+    );
     event RelayerSet(address indexed relayer);
     event RelayerAllowedSet(address indexed account, bool allowed);
     event MaxGasReimbursePerTradeSet(uint256 oldCap, uint256 newCap);
@@ -209,10 +281,42 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     }
 
     /// @notice 设置单笔 settleTrade 的 gas 报销上限（token 最小单位之和）；0 表示不设上限
+    /// @dev 【已弃用，第二十一轮】Fill.gasReimburseIn/Out 自本轮起被合约忽略（gas 改为链上计量
+    /// 对半回收），本上限随之失效；保留函数仅为 ABI 兼容，不再有任何结算路径读取它。
     function setMaxGasReimbursePerTrade(uint256 _cap) external onlyOwner {
         uint256 old = maxGasReimbursePerTrade;
         maxGasReimbursePerTrade = _cap;
         emit MaxGasReimbursePerTradeSet(old, _cap);
+    }
+
+    /// @notice 设置 ChainConfig（gas 换算参考价来源）；0 地址表示停用换算（结算不扣 gas 分摊）
+    function setChainConfig(address _chainConfig) external onlyOwner {
+        address old = chainConfig;
+        chainConfig = _chainConfig;
+        emit ChainConfigSet(old, _chainConfig);
+    }
+
+    /// @notice 设置单方 gas 扣除上限比例（万分比，默认 1000 = 收到金额的 10%）；硬顶 50%
+    function setGasDeductCapBps(uint16 _bps) external onlyOwnerOrGovernance {
+        require(_bps <= MAX_GAS_DEDUCT_CAP_BPS, "Settlement: deduct cap too high");
+        uint16 old = gasDeductCapBps;
+        gasDeductCapBps = _bps;
+        emit GasDeductCapSet(old, _bps);
+    }
+
+    /// @notice 设置单笔失败扣费上限（以 quote 计价）；0 = 关闭失败扣费（默认）
+    function setMaxFailureGasChargeQuote(uint256 _capQuote) external onlyOwnerOrGovernance {
+        uint256 old = maxFailureGasChargeQuote;
+        maxFailureGasChargeQuote = _capQuote;
+        emit MaxFailureGasChargeSet(old, _capQuote);
+    }
+
+    /// @notice 设置净成本校准系数（万分比，≤10000）；主网分叉校准后由治理更新
+    function setMeterKeepBps(uint16 _bps) external onlyOwnerOrGovernance {
+        require(_bps <= 10_000, "Settlement: keep bps too high");
+        uint16 old = meterKeepBps;
+        meterKeepBps = _bps;
+        emit MeterKeepBpsSet(old, _bps);
     }
     
     /// @notice 设置 Relayer 限流参数
@@ -368,6 +472,122 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         }
     }
     
+    /// @notice 内部：交易内在成本 = 基础 21000 + calldata 成本（按非零字节单价 16 的上界估算，
+    /// 零字节实际为 4，上界口径使计量只多不少，差额由安全阀与协议吸收兜底，不会少算用户应担份额的基准）
+    function _intrinsicGas() internal view returns (uint256) {
+        return 21_000 + msg.data.length * 16;
+    }
+
+    /// @notice 内部：读取 gas 换算参考价；未配置 ChainConfig 时返回 (0, 0)
+    function _gasPricing() internal view returns (address quote, uint256 ethPrice) {
+        if (chainConfig == address(0)) return (address(0), 0);
+        quote = IChainConfig(chainConfig).quoteToken();
+        ethPrice = IChainConfig(chainConfig).ethPriceInQuote();
+    }
+
+    /// @notice 内部：把某方应担的半份 gas（已换算为 quote 计价的 halfQuote）换算为其收到资产的数量。
+    /// 收到资产即 quote 时直接相等；否则用本笔成交价换算（对手侧成交量为 quote 量）。
+    /// 交易对两币均非 quote 时返回 ok=false（无法换算，整笔不扣）。
+    function _gasWantForSide(
+        address recvToken,
+        uint256 recvTradedAmt,
+        address otherToken,
+        uint256 otherTradedAmt,
+        uint256 halfQuote,
+        address quote
+    ) internal pure returns (uint256 want, bool ok) {
+        if (recvToken == quote) return (halfQuote, true);
+        if (otherToken != quote || otherTradedAmt == 0) return (0, false);
+        want = (halfQuote * recvTradedAmt) / otherTradedAmt;
+        return (want, true);
+    }
+
+    /// @notice 内部：对单方执行 gas 扣除，双钳制——安全阀（收到金额的 gasDeductCapBps）与
+    /// Vault 可用余额（总余额 − 挂单锁定）；扣除经 transferOut 转给 gas 收款方（结算提交者）。
+    /// 未扣足部分即 shortfall，由协议吸收（中继少回收），不向任何人另行收取。
+    function _deductGasSide(
+        address user,
+        address token,
+        uint256 want,
+        uint256 receivedAmt,
+        address gasRecipient
+    ) internal returns (uint256 deduct, uint256 shortfall) {
+        uint256 cap = (receivedAmt * gasDeductCapBps) / 10_000;
+        deduct = want < cap ? want : cap;
+        uint256 avail = vault.availableBalance(user, token);
+        if (deduct > avail) deduct = avail;
+        if (deduct > 0) {
+            vault.transferOut(user, gasRecipient, token, deduct);
+        }
+        shortfall = want - deduct;
+    }
+
+    /// @notice 内部：gas 对半回收主逻辑——本笔 gas 成本（ETH）由 maker/taker 各承担一半，
+    /// 以各自收到的资产扣除（maker 收 tokenOut、taker 收 tokenIn），与交易费分开记账：
+    /// 交易费已在 _settleOne 内按 feeIn/feeOut 落地，本函数只动 gas 这一条线并独立发事件。
+    /// makerReceived/takerReceived 为扣交易费后、扣 gas 前的应收额（安全阀基数）。
+    function _chargeGasShares(
+        address maker,
+        address taker,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint256 amountOut,
+        uint256 makerReceived,
+        uint256 takerReceived,
+        uint256 gasUsed
+    ) internal {
+        uint256 gasCostWei = gasUsed * tx.gasprice;
+        uint256 makerDeduct;
+        uint256 makerShortfall;
+        uint256 takerDeduct;
+        uint256 takerShortfall;
+        uint8 reason = GAS_SHARE_OK;
+
+        if (gasCostWei > 0) {
+            (address quote, uint256 ethPrice) = _gasPricing();
+            if (quote == address(0) || ethPrice == 0) {
+                reason = GAS_SHARE_NO_PRICE;
+            } else {
+                uint256 halfWei = gasCostWei / 2; // 奇数 wei 时 1 wei 余数由协议吸收，两侧严格同额
+                uint256 halfQuote = (halfWei * ethPrice) / 1e18;
+                (uint256 wantMaker, bool okMaker) =
+                    _gasWantForSide(tokenOut, amountOut, tokenIn, amountIn, halfQuote, quote);
+                (uint256 wantTaker, bool okTaker) =
+                    _gasWantForSide(tokenIn, amountIn, tokenOut, amountOut, halfQuote, quote);
+                if (!okMaker || !okTaker) {
+                    reason = GAS_SHARE_NOT_QUOTED;
+                } else {
+                    (makerDeduct, makerShortfall) =
+                        _deductGasSide(maker, tokenOut, wantMaker, makerReceived, msg.sender);
+                    (takerDeduct, takerShortfall) =
+                        _deductGasSide(taker, tokenIn, wantTaker, takerReceived, msg.sender);
+                }
+            }
+        }
+
+        emit GasCostShared(
+            maker, taker, msg.sender, gasUsed, gasCostWei, reason,
+            tokenOut, makerDeduct, makerShortfall,
+            tokenIn, takerDeduct, takerShortfall
+        );
+    }
+
+    /// @notice 内部：按 Fill 与已定费用对一笔成交执行 gas 对半回收（各入口在结算落地后调用）
+    function _chargeGasForFill(Fill calldata fill, uint256 feeIn, uint256 feeOut, uint256 gasUsed) internal {
+        _chargeGasShares(
+            fill.makerOrder.order.userAddress,
+            fill.takerOrder.order.userAddress,
+            fill.tokenIn,
+            fill.tokenOut,
+            fill.amountIn,
+            fill.amountOut,
+            fill.amountOut - feeOut, // maker 收到 tokenOut（扣交易费后、扣 gas 前）
+            fill.amountIn - feeIn, // taker 收到 tokenIn
+            gasUsed
+        );
+    }
+
     /// @notice EIP-712 域分隔符（绑定 chainId 与本合约地址；统一规范见 docs/eip712-order-spec.md）
     function domainSeparator() public view returns (bytes32) {
         return keccak256(abi.encode(_DOMAIN_TYPEHASH, _DOMAIN_NAME_HASH, _DOMAIN_VERSION_HASH, block.chainid, address(this)));
@@ -495,9 +715,10 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
 
     /// @notice 结算一笔成交：双方订单必须为统一规范的 EIP-712 签名订单（docs/eip712-order-spec.md）。
     /// 合约逐项验签、校验累计成交量不超签名量并消耗双方 nonce，中继者只是无须信任的搬运工。
-    /// @param fill makerOrder/takerOrder 为双方签名订单；amountIn = maker 卖出 tokenIn 量，amountOut = taker 卖出 tokenOut 量；
-    /// gasReimburseIn/Out 为从 maker/taker 侧扣除给 gas 代付方的数量（0 表示无代付），非 0 时受 maxGasReimbursePerTrade 上限约束
+    /// gas 自本轮起由合约计量并对半回收（见 _chargeGasShares）；fill.gasReimburseIn/Out 被忽略。
+    /// @param fill makerOrder/takerOrder 为双方签名订单；amountIn = maker 卖出 tokenIn 量，amountOut = taker 卖出 tokenOut 量
     function settleTrade(Fill calldata fill) external nonReentrant {
+        uint256 gasStart = gasleft();
         require(_isSettlementCaller(), "Settlement: not auth");
 
         address maker = fill.makerOrder.order.userAddress;
@@ -505,11 +726,6 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         require(maker != address(0) && taker != address(0), "Settlement: zero address");
         require(fill.tokenIn != address(0) && fill.tokenOut != address(0), "Settlement: zero token");
         require(fill.amountIn <= type(uint128).max && fill.amountOut <= type(uint128).max, "Settlement: amount overflow");
-
-        bool withGas = fill.gasReimburseIn > 0 || fill.gasReimburseOut > 0;
-        if (withGas && maxGasReimbursePerTrade > 0) {
-            require(fill.gasReimburseIn + fill.gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
-        }
 
         // Relayer 限流和信誉检查
         if (msg.sender != owner) {
@@ -522,7 +738,13 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
 
         (uint256 feeIn, uint256 feeOut) = _feesFor(fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, feeBps);
 
-        _settleOne(maker, taker, fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, feeIn, feeOut, fill.gasReimburseIn, fill.gasReimburseOut);
+        _settleOne(maker, taker, fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, feeIn, feeOut, 0, 0);
+
+        // gas 对半回收：计量 = 执行差值 + 内在成本 + 扣费执行常量（其 gas 在计量点之后发生），
+        // 再乘净成本校准系数（毛计量 → 退款后净值）
+        uint256 gasUsed = gasStart - gasleft() + _intrinsicGas() + GAS_CHARGE_OVERHEAD;
+        gasUsed = (gasUsed * meterKeepBps) / 10_000;
+        _chargeGasForFill(fill, feeIn, feeOut, gasUsed);
 
         // 更新Relayer信誉（成功交易）
         if (msg.sender != owner) {
@@ -530,8 +752,11 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         }
     }
 
-    /// @notice 批量结算多笔成交（节省 Gas）；每笔 Fill 与单笔走同一套验签/防重放校验，无例外路径
+    /// @notice 批量结算多笔成交（节省 Gas）；每笔 Fill 与单笔走同一套验签/防重放校验，无例外路径。
+    /// gas 对半回收：整批计量（入口 gasStart 至全部结算落地的差值 + 内在成本）后按笔均摊，
+    /// 逐笔补扣（每笔另加扣费执行常量）——同批同价，归属口径见 docs/round21-gas-rules-2026-11-07.md
     function settleTradesBatch(Fill[] calldata fills) external nonReentrant {
+        uint256 gasStart = gasleft();
         require(_isSettlementCaller(), "Settlement: not auth");
 
         // Relayer 限流检查（批量调用只计一次）
@@ -544,6 +769,13 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         uint16 _feeBps = feeBps;
         for (uint256 i = 0; i < len; i++) {
             _settleBatchItem(fills[i], _feeBps);
+        }
+
+        uint256 perItemGas = ((gasStart - gasleft() + _intrinsicGas()) / len + GAS_CHARGE_OVERHEAD) * meterKeepBps / 10_000;
+        for (uint256 i = 0; i < len; i++) {
+            (uint256 feeIn, uint256 feeOut) =
+                _feesFor(fills[i].tokenIn, fills[i].tokenOut, fills[i].amountIn, fills[i].amountOut, _feeBps);
+            _chargeGasForFill(fills[i], feeIn, feeOut, perItemGas);
         }
     }
 
@@ -561,20 +793,16 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         ));
     }
 
-    /// @notice 内部：批量结算的单笔逻辑（gas 报销上限 + 验签记账 + 计费 + 结算），供三个批量入口共用
+    /// @notice 内部：批量结算的单笔逻辑（验签记账 + 计费 + 结算），供三个批量入口共用；
+    /// gas 补扣不在此处，由各入口在整批结算后按均摊计量逐笔执行（见 settleTradesBatch）
     function _settleBatchItem(Fill calldata fill, uint16 _feeBps) internal {
-        bool withGas = fill.gasReimburseIn > 0 || fill.gasReimburseOut > 0;
-        if (withGas && maxGasReimbursePerTrade > 0) {
-            require(fill.gasReimburseIn + fill.gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
-        }
-
         _verifyFill(fill);
 
         (uint256 feeIn, uint256 feeOut) = _feesFor(fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, _feeBps);
         _settleOne(
             fill.makerOrder.order.userAddress, fill.takerOrder.order.userAddress,
             fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut,
-            feeIn, feeOut, fill.gasReimburseIn, fill.gasReimburseOut
+            feeIn, feeOut, 0, 0
         );
     }
 
@@ -585,6 +813,7 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         Fill[] calldata fills,
         uint256 gasSavingsUsdt6
     ) external nonReentrant {
+        uint256 gasStart = gasleft();
         require(_isSettlementCaller(), "Settlement: not auth");
 
         // Relayer 限流检查
@@ -599,6 +828,12 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
             for (uint256 i = 0; i < len; i++) {
                 _settleBatchItem(fills[i], _feeBps0);
             }
+            uint256 perItemGas0 = ((gasStart - gasleft() + _intrinsicGas()) / len + GAS_CHARGE_OVERHEAD) * meterKeepBps / 10_000;
+            for (uint256 i = 0; i < len; i++) {
+                (uint256 feeIn0, uint256 feeOut0) =
+                    _feesFor(fills[i].tokenIn, fills[i].tokenOut, fills[i].amountIn, fills[i].amountOut, _feeBps0);
+                _chargeGasForFill(fills[i], feeIn0, feeOut0, perItemGas0);
+            }
             return;
         }
 
@@ -610,10 +845,6 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
 
         for (uint256 i = 0; i < len; i++) {
             Fill calldata fill = fills[i];
-            bool withGas = fill.gasReimburseIn > 0 || fill.gasReimburseOut > 0;
-            if (withGas && maxGasReimbursePerTrade > 0) {
-                require(fill.gasReimburseIn + fill.gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
-            }
             _verifyFill(fill);
             (uint256 feeIn, uint256 feeOut) = _feesFor(fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, _feeBps);
             feeIns[i] = feeIn;
@@ -636,8 +867,14 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
             _settleOne(
                 fill.makerOrder.order.userAddress, fill.takerOrder.order.userAddress,
                 fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut,
-                feeIns[i], feeOuts[i], fill.gasReimburseIn, fill.gasReimburseOut
+                feeIns[i], feeOuts[i], 0, 0
             );
+        }
+
+        // gas 对半回收：整批计量后按笔均摊，用返利后的最终费用算各方收到额
+        uint256 perItemGas = ((gasStart - gasleft() + _intrinsicGas()) / len + GAS_CHARGE_OVERHEAD) * meterKeepBps / 10_000;
+        for (uint256 i = 0; i < len; i++) {
+            _chargeGasForFill(fills[i], feeIns[i], feeOuts[i], perItemGas);
         }
 
         _distributeGasSavings(gasSavingsUsdt6, userRebateUsdt);
@@ -696,6 +933,7 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         Fill[] calldata fills,
         bytes32[][] calldata proofs
     ) external nonReentrant {
+        uint256 gasStart = gasleft();
         require(_isSettlementCaller(), "Settlement: not auth");
 
         // Relayer 限流检查
@@ -718,6 +956,84 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
             _settleBatchItem(fills[i], _feeBps);
         }
 
+        // gas 对半回收：整批计量（含证明验证段）按笔均摊后逐笔补扣
+        uint256 perItemGas = ((gasStart - gasleft() + _intrinsicGas()) / len + GAS_CHARGE_OVERHEAD) * meterKeepBps / 10_000;
+        for (uint256 i = 0; i < len; i++) {
+            (uint256 feeIn, uint256 feeOut) =
+                _feesFor(fills[i].tokenIn, fills[i].tokenOut, fills[i].amountIn, fills[i].amountOut, _feeBps);
+            _chargeGasForFill(fills[i], feeIn, feeOut, perItemGas);
+        }
+
         emit TradesBatchSettledWithMerkle(batchId, merkleRoot, len);
+    }
+
+    /// @notice 失败结算归责扣费（第二十一轮）：一笔结算交易已上链且 revert、gas 已被提交者实际
+    /// 消耗时，由提交者（msg.sender，即 gas 的实际承担人）上报，对可归责的发起者收取补偿。
+    /// 归责只认链上可验证事实，不认口头归责：
+    /// - 订单必须在 Vault 落过锁（lockTombstones 有记录）——被扣用户与资产由 Vault 在验签落锁时
+    ///   写定，无法伪造；从未落锁的订单不在此列（其失败应在落锁/接单环节被拦下，无结算 gas 可言）。
+    /// - reason = FAIL_ORDER_EXPIRED：订单确已过期（expiresAt < 当前时间），过期后提交必然 revert。
+    /// - reason = FAIL_LOCK_RELEASED：订单未被完全结算、但活动锁已不存在（被释放），结算必然
+    ///   revert 于 consumeOrderLock；锁正常耗尽 ⟺ 订单已填满，故「未填满而无锁」只能是被释放。
+    /// 金额：申报 gasUsed 按 tx.gasprice 与参考价换算为 quote 值，受 maxFailureGasChargeQuote
+    /// 单笔上限封顶，再按订单签名价换算为墓碑资产数量，并受被扣方可用余额钳制。gasUsed 本身
+    /// 链上不可验证（失败交易的 receipt 不上链），靠上限封顶 + relayer 信誉机制（违规扣分）制衡。
+    /// 同一订单只收一次（failureCharged）。不可归责类别（撮合参数错误、重复提交已填满的订单、
+    /// 提交方自身问题、系统性失败）不走此入口，gas 由提交方自担；完整归责表见 round21 文档。
+    function chargeFailedSettlement(
+        SignedOrder calldata signedOrder,
+        uint8 reason,
+        uint256 gasUsedClaimed
+    ) external nonReentrant {
+        require(_isSettlementCaller(), "Settlement: not auth");
+        require(maxFailureGasChargeQuote > 0, "Settlement: failure charge disabled");
+        require(gasUsedClaimed > 0, "Settlement: zero gas claim");
+
+        Order calldata order = signedOrder.order;
+        bytes32 digest = _orderDigest(order);
+        require(!failureCharged[digest], "Settlement: failure already charged");
+
+        (address tombUser, address tombToken) = vault.lockTombstones(digest);
+        require(tombUser != address(0), "Settlement: order never locked");
+        require(tombToken == order.tokenIn || tombToken == order.tokenOut, "Settlement: tombstone token mismatch");
+
+        if (reason == FAIL_ORDER_EXPIRED) {
+            require(order.expiresAt != 0 && block.timestamp > order.expiresAt, "Settlement: order not expired");
+        } else if (reason == FAIL_LOCK_RELEASED) {
+            (address lockUser,,,) = vault.orderLocks(digest);
+            require(lockUser == address(0), "Settlement: lock still active");
+            if (tombToken == order.tokenIn) {
+                require(orderFilledIn[digest] < order.amountIn, "Settlement: order already filled");
+            } else {
+                require(orderFilledOut[digest] < order.amountOut, "Settlement: order already filled");
+            }
+        } else {
+            revert("Settlement: unknown failure reason");
+        }
+
+        (address quote, uint256 ethPrice) = _gasPricing();
+        require(quote != address(0) && ethPrice != 0, "Settlement: no gas pricing");
+        require(quote == order.tokenIn || quote == order.tokenOut, "Settlement: pair not quoted");
+        require(order.price > 0, "Settlement: zero order price");
+
+        uint256 wantQuote = (gasUsedClaimed * tx.gasprice * ethPrice) / 1e18;
+        uint256 capQuote = wantQuote < maxFailureGasChargeQuote ? wantQuote : maxFailureGasChargeQuote;
+        uint256 amount;
+        if (tombToken == quote) {
+            amount = capQuote;
+        } else if (quote == order.tokenOut) {
+            // price = amountOut/amountIn（1e18 定点）：quote 在 tokenOut 侧，墓碑资产为 tokenIn（base）
+            amount = (capQuote * 1e18) / order.price;
+        } else {
+            // quote 在 tokenIn 侧，墓碑资产为 tokenOut
+            amount = (capQuote * order.price) / 1e18;
+        }
+        uint256 avail = vault.availableBalance(tombUser, tombToken);
+        if (amount > avail) amount = avail;
+        require(amount > 0, "Settlement: nothing chargeable");
+
+        failureCharged[digest] = true;
+        vault.transferOut(tombUser, msg.sender, tombToken, amount);
+        emit FailedSettlementCharged(digest, tombUser, msg.sender, tombToken, amount, reason, gasUsedClaimed);
     }
 }

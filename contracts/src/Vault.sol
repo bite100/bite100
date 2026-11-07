@@ -45,6 +45,16 @@ contract Vault {
     }
     mapping(bytes32 => OrderLock) public orderLocks;
 
+    /// @notice 锁定墓碑（第二十一轮）：订单摘要 => 曾落锁的归属（用户 + 锁定代币）。
+    /// 落锁时写入，释放/耗尽后**不删除**。用途：失败结算归责扣费（Settlement.chargeFailedSettlement）
+    /// 需要在链上证明「该订单确实落过锁、且归属是谁」——活动锁记录会被删除，无法充当证据；
+    /// 墓碑由 Vault 在验签落锁时写入，归属不可伪造。
+    struct LockTombstone {
+        address user;
+        address token;
+    }
+    mapping(bytes32 => LockTombstone) public lockTombstones;
+
     /// @notice 挂单锁定操作员（节点/中继身份）；仅 owner 可增删。
     /// 测试网阶段为部署/运营身份，主网须换成领导者/BFT 授权的中继集合。
     mapping(address => bool) public lockers;
@@ -143,6 +153,8 @@ contract Vault {
             remaining: amount,
             expiresAt: order.expiresAt
         });
+        // 墓碑与锁同写：归属在验签通过后落定，后续释放/耗尽不清除
+        lockTombstones[digest] = LockTombstone({user: order.userAddress, token: token});
         locked[order.userAddress][token] += amount;
         emit OrderLocked(digest, order.userAddress, token, amount);
     }

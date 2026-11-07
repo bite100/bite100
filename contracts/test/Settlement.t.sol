@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "../src/Vault.sol";
 import "../src/Settlement.sol";
 import "../src/FeeDistributor.sol";
+import "../src/ChainConfig.sol";
 import "../src/mock/MockERC20.sol";
 
 contract SettlementTest is Test {
@@ -168,23 +169,56 @@ contract SettlementTest is Test {
         assertEq(tokenB.balanceOf(address(feeDistributor)), 0.01e18);
     }
 
+    /// @notice 第二十一轮新口径：Fill.gasReimburseIn/Out 被合约忽略（哪怕填天文数字），
+    /// gas 改由链上计量对半回收——本用例配好参考价并设 gasprice，断言扣费只来自计量：
+    /// maker 收 tokenB（quote）扣 halfQuote，taker 收 tokenA 按成交价换算扣 halfQuote 等值，
+    /// 两侧 ETH 份额恰好各半；收款方为提交结算的 relayer；交易费仍独立进 FeeDistributor。
     function test_SettleTrade_WithGasReimburse() public {
         address exchange = makeAddr("exchange");
         settlement.setRelayer(exchange);
-        uint256 gasIn = 0.5e18;  // 卖方均摊（从 tokenIn 扣给交易所）
-        uint256 gasOut = 0.5e18; // 买方均摊（从 tokenOut 扣给交易所）
-        Settlement.Fill memory fill = _stdFill(100e18, 100e18, gasIn, gasOut);
+
+        // 参考价：quote = tokenB，1 ETH = 2000 tokenB；gasprice 1 gwei 使应扣额不触安全阀
+        ChainConfig cc = new ChainConfig();
+        cc.setQuotePricing(address(tokenB), 2000e18);
+        settlement.setChainConfig(address(cc));
+        vm.txGasPrice(1 gwei);
+
+        Settlement.Fill memory fill = _stdFill(100e18, 100e18, 5e18, 5e18); // 自报值应被忽略
         _lockFill(fill);
+        vm.recordLogs();
         vm.prank(exchange);
         settlement.settleTrade(fill);
 
-        // feeIn=0.01e18, feeOut=0.01e18；maker 收 amountOut - feeOut - gasOut = 99.49e18，taker 收 amountIn - feeIn - gasIn = 99.49e18
-        assertEq(vault.balanceOf(address(tokenB), maker), 99.49e18);
-        assertEq(vault.balanceOf(address(tokenA), taker), 99.49e18);
+        // 从 GasCostShared 事件反推期望扣费（与合约同一整数公式）
+        (uint256 gasUsed, uint256 makerDeduct, uint256 takerDeduct) = _lastGasShared();
+        uint256 halfQuote = ((gasUsed * 1 gwei) / 2) * 2000e18 / 1e18;
+        assertEq(makerDeduct, halfQuote);
+        assertEq(takerDeduct, halfQuote); // 1:1 成交价下两侧 token 量相同
+
+        assertEq(vault.balanceOf(address(tokenB), maker), 99.99e18 - makerDeduct);
+        assertEq(vault.balanceOf(address(tokenA), taker), 99.99e18 - takerDeduct);
         assertEq(tokenA.balanceOf(address(feeDistributor)), 0.01e18);
         assertEq(tokenB.balanceOf(address(feeDistributor)), 0.01e18);
-        assertEq(tokenA.balanceOf(exchange), 0.5e18);
-        assertEq(tokenB.balanceOf(exchange), 0.5e18);
+        // gas 扣除转给提交者 exchange 的外部钱包（transferOut 口径）
+        assertEq(tokenB.balanceOf(exchange), makerDeduct);
+        assertEq(tokenA.balanceOf(exchange), takerDeduct);
+    }
+
+    /// @notice 解析最近一条 GasCostShared 事件的 (gasUsed, makerDeduct, takerDeduct)
+    function _lastGasShared() internal returns (uint256 gasUsed, uint256 makerDeduct, uint256 takerDeduct) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 topic = keccak256(
+            "GasCostShared(address,address,address,uint256,uint256,uint8,address,uint256,uint256,address,uint256,uint256)"
+        );
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length > 0 && logs[i].topics[0] == topic) {
+                (uint256 gu,,,, uint256 md,,, uint256 td,) =
+                    abi.decode(logs[i].data, (uint256, uint256, uint8, address, uint256, uint256, address, uint256, uint256));
+                gasUsed = gu;
+                makerDeduct = md;
+                takerDeduct = td;
+            }
+        }
     }
 
     /// @notice Relayer 防滥用：白名单 isRelayer 可调用 settleTrade
@@ -229,32 +263,23 @@ contract SettlementTest is Test {
         settlement.settleTrade(fill);
     }
 
-    /// @notice Relayer 防滥用：maxGasReimbursePerTrade 超限 revert
-    function test_SettleTrade_MaxGasReimburseCap() public {
+    /// @notice 第二十一轮：旧版自报字段与 maxGasReimbursePerTrade 上限全部失效——
+    /// 填值合计远超旧上限也照常结算，且不按填值扣款（无参考价配置时计量扣费为 0，
+    /// 事件 reason = GAS_SHARE_NO_PRICE）。防滥用改由链上计量 + 安全阀承担，不再靠自报上限。
+    function test_SettleTrade_LegacyGasFieldsIgnored() public {
         address exchange = makeAddr("exchange");
         settlement.setRelayer(exchange);
-        settlement.setMaxGasReimbursePerTrade(0.5e18); // 单笔 gas 报销上限 0.5e18
-        uint256 gasIn = 0.3e18;
-        uint256 gasOut = 0.3e18; // gasIn + gasOut = 0.6e18 > 0.5e18
-        Settlement.Fill memory fill = _stdFill(100e18, 100e18, gasIn, gasOut);
-        vm.prank(exchange);
-        vm.expectRevert("Settlement: gas reimburse cap");
-        settlement.settleTrade(fill);
-    }
-
-    /// @notice Relayer 防滥用：maxGasReimbursePerTrade 等于上限可成功
-    function test_SettleTrade_MaxGasReimburseAtCap() public {
-        address exchange = makeAddr("exchange");
-        settlement.setRelayer(exchange);
-        settlement.setMaxGasReimbursePerTrade(0.5e18);
-        uint256 gasIn = 0.25e18;
-        uint256 gasOut = 0.25e18; // gasIn + gasOut = 0.5e18 == cap
-        Settlement.Fill memory fill = _stdFill(100e18, 100e18, gasIn, gasOut);
+        settlement.setMaxGasReimbursePerTrade(0.5e18); // 旧上限，结算路径已不再读取
+        Settlement.Fill memory fill = _stdFill(100e18, 100e18, 0.3e18, 0.3e18); // 合计 0.6e18 > 旧上限
         _lockFill(fill);
         vm.prank(exchange);
-        settlement.settleTrade(fill);
-        assertEq(tokenA.balanceOf(exchange), 0.25e18);
-        assertEq(tokenB.balanceOf(exchange), 0.25e18);
+        settlement.settleTrade(fill); // 不 revert
+
+        // 未配参考价 → 不扣 gas 分摊，双方只扣交易费；exchange 拿不到任何自报 gas
+        assertEq(vault.balanceOf(address(tokenB), maker), 99.99e18);
+        assertEq(vault.balanceOf(address(tokenA), taker), 99.99e18);
+        assertEq(tokenA.balanceOf(exchange), 0);
+        assertEq(tokenB.balanceOf(exchange), 0);
     }
 
     // ---------- 验签与防重放（P0-2 新增） ----------

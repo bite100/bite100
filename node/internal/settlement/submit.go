@@ -191,3 +191,87 @@ func DecimalToWei(s string) *big.Int {
 	i, _ := f.Int(nil)
 	return i
 }
+
+// ---------- 第二十一轮：失败结算归责扣费（节点侧入口） ----------
+
+// 失败归责原因（与合约 Settlement.FAIL_ORDER_EXPIRED / FAIL_LOCK_RELEASED 一一对应）。
+// 合约只接受这两类「链上事实可验证」的归责：订单已过期、订单锁已被释放；其余失败
+// （参数错误、重复提交已成交订单、提交者自身问题、系统性故障）不在此列，gas 由提交者自担。
+const (
+	FailReasonOrderExpired  uint8 = 1 // 订单已过期（expiresAt < 当前时间，链上可验）
+	FailReasonLockReleased  uint8 = 2 // 订单锁已被释放/取消且未成交完（链上可验）
+)
+
+// failureChargeABIJSON 为 Settlement.chargeFailedSettlement 的 ABI（自 contracts/out 提取）
+const failureChargeABIJSON = `[{"type":"function","name":"chargeFailedSettlement","inputs":[{"name":"signedOrder","type":"tuple","internalType":"struct Settlement.SignedOrder","components":[{"name":"order","type":"tuple","internalType":"struct Settlement.Order","components":[{"name":"orderId","type":"string","internalType":"string"},{"name":"userAddress","type":"address","internalType":"address"},{"name":"tokenIn","type":"address","internalType":"address"},{"name":"tokenOut","type":"address","internalType":"address"},{"name":"amountIn","type":"uint256","internalType":"uint256"},{"name":"amountOut","type":"uint256","internalType":"uint256"},{"name":"price","type":"uint256","internalType":"uint256"},{"name":"timestamp","type":"uint256","internalType":"uint256"},{"name":"expiresAt","type":"uint256","internalType":"uint256"},{"name":"nonce","type":"uint256","internalType":"uint256"}]},{"name":"signature","type":"bytes","internalType":"bytes"}]},{"name":"reason","type":"uint8","internalType":"uint8"},{"name":"gasUsedClaimed","type":"uint256","internalType":"uint256"}],"outputs":[],"stateMutability":"nonpayable"}]`
+
+// ChargeFailedSettlement 在一笔结算因对手方订单可归责原因 revert 后，向合约申报失败扣费：
+// 合约侧凭 Vault 落锁墓碑核实「被扣方/被扣资产」不可伪造，凭订单自身事实核实归责类别，
+// 扣费额 = min(gasUsedClaimed × 本笔 tx.gasprice × 参考价, 合约硬上限)，且同一订单只收一次。
+//
+// 注意 gasUsedClaimed 无法在链上核验（revert 的交易回执不上链）——本函数只应由节点在
+// 确有链下回执证据（本节点提交且 revert 的交易）时调用，并如实传入该回执的 gasUsed；
+// 硬上限与中继信誉机制是合约侧的双重约束。节点默认不在撮合主路径自动调用本函数：
+// 是否申报由运营策略决定（见 docs/round21-gas-rules-2026-11-07.md 的归责表与已知限制）。
+func ChargeFailedSettlement(ctx context.Context, so *storage.SignedOrder, reason uint8, gasUsedClaimed *big.Int, rpcURL, settlementAddr, privateKeyHex string) (string, error) {
+	if so == nil {
+		return "", fmt.Errorf("settlement: signed order missing")
+	}
+	if reason != FailReasonOrderExpired && reason != FailReasonLockReleased {
+		return "", fmt.Errorf("settlement: unsupported failure reason %d", reason)
+	}
+	if gasUsedClaimed == nil || gasUsedClaimed.Sign() <= 0 {
+		return "", fmt.Errorf("settlement: gasUsedClaimed must be positive")
+	}
+
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		return "", fmt.Errorf("settlement: dial rpc: %w", err)
+	}
+	defer client.Close()
+
+	chainID, err := client.ChainID(ctx)
+	if err != nil {
+		return "", fmt.Errorf("settlement: chain id: %w", err)
+	}
+
+	key, err := crypto.HexToECDSA(strings.TrimPrefix(privateKeyHex, "0x"))
+	if err != nil {
+		return "", fmt.Errorf("settlement: bad private key: %w", err)
+	}
+
+	parsed, err := abi.JSON(strings.NewReader(failureChargeABIJSON))
+	if err != nil {
+		return "", fmt.Errorf("settlement: parse abi: %w", err)
+	}
+	contract := bind.NewBoundContract(common.HexToAddress(settlementAddr), parsed, client, client, client)
+
+	opts, err := bind.NewKeyedTransactorWithChainID(key, chainID)
+	if err != nil {
+		return "", fmt.Errorf("settlement: transactor: %w", err)
+	}
+	opts.Context = ctx
+
+	tx, err := contract.Transact(opts, "chargeFailedSettlement", signedOrderToABI(so), reason, gasUsedClaimed)
+	if err != nil {
+		return "", fmt.Errorf("settlement: submit chargeFailedSettlement: %w", err)
+	}
+
+	receipt, err := bind.WaitMined(ctx, client, tx)
+	if err != nil {
+		return tx.Hash().Hex(), fmt.Errorf("settlement: wait mined: %w", err)
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return tx.Hash().Hex(), fmt.Errorf("settlement: chargeFailedSettlement reverted on-chain, tx=%s", tx.Hash().Hex())
+	}
+	return tx.Hash().Hex(), nil
+}
+
+// packFailureCharge 构造 chargeFailedSettlement 的 calldata（供单测校验 ABI 与参数编码）
+func packFailureCharge(so *storage.SignedOrder, reason uint8, gasUsedClaimed *big.Int) ([]byte, error) {
+	parsed, err := abi.JSON(strings.NewReader(failureChargeABIJSON))
+	if err != nil {
+		return nil, err
+	}
+	return parsed.Pack("chargeFailedSettlement", signedOrderToABI(so), reason, gasUsedClaimed)
+}

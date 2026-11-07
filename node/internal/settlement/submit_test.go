@@ -2,7 +2,10 @@ package settlement
 
 import (
 	"math/big"
+	"strings"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/accounts/abi"
 
 	"github.com/P2P-P2P/p2p/node/internal/storage"
 )
@@ -83,5 +86,51 @@ func TestTradeToFill_MakerBuysToken0(t *testing.T) {
 func TestTradeToFill_MissingOrders(t *testing.T) {
 	if _, err := TradeToFill(&storage.Trade{}); err == nil {
 		t.Error("expected error when signed orders missing")
+	}
+}
+
+// 第二十一轮：失败扣费 calldata 必须能用合约 ABI 正确编码（选择器 + 参数往返解码一致）
+func TestPackFailureCharge(t *testing.T) {
+	const (
+		t0 = "0x1111111111111111111111111111111111111111"
+		t1 = "0x2222222222222222222222222222222222222222"
+	)
+	so := testSignedOrder("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", t0, t1,
+		"100000000000000000000", "100000000000000000000", "1000000000000000000", 5)
+	data, err := packFailureCharge(so, FailReasonOrderExpired, big.NewInt(500_000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) < 4 {
+		t.Fatalf("calldata too short: %d", len(data))
+	}
+	// 选择器 = chargeFailedSettlement 的函数签名哈希前 4 字节
+	parsed, err := abi.JSON(strings.NewReader(failureChargeABIJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	method, err := parsed.MethodById(data[:4])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method.Name != "chargeFailedSettlement" {
+		t.Errorf("method = %s, want chargeFailedSettlement", method.Name)
+	}
+	args, err := method.Inputs.Unpack(data[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 3 {
+		t.Fatalf("args = %d, want 3", len(args))
+	}
+	if got := args[1].(uint8); got != FailReasonOrderExpired {
+		t.Errorf("reason = %d, want %d", got, FailReasonOrderExpired)
+	}
+	if got := args[2].(*big.Int); got.Cmp(big.NewInt(500_000)) != 0 {
+		t.Errorf("gasUsedClaimed = %s, want 500000", got)
+	}
+	// 不支持的归责类别在离线校验层就应被拒（与合约白名单一致）
+	if FailReasonLockReleased != 2 {
+		t.Errorf("FailReasonLockReleased = %d, want 2 (contract FAIL_LOCK_RELEASED)", FailReasonLockReleased)
 	}
 }
