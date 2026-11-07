@@ -36,6 +36,8 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
   const [bids, setBids] = useState<OrderBookRow[]>([])
   const [asks, setAsks] = useState<OrderBookRow[]>([])
   const [loading, setLoading] = useState(true)
+  /** 节点不可达/未配置时为 true，用于把「无盘口」与「节点未连接」两种空态区分开 */
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -50,11 +52,13 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
         const newAsks = (data.asks ?? []).slice(0, 15).map((o) => ({ price: o.price, amount: o.amount, side: 'sell' as const }))
         setBids(newBids)
         setAsks(newAsks)
+        setFailed(false)
         onBookUpdate?.(newBids, newAsks)
       } catch {
         if (!cancelled) {
           setBids([])
           setAsks([])
+          setFailed(true)
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -123,6 +127,10 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
       </div>
       {loading ? (
         <Text size="xs" c="dimmed" py="sm">加载中…</Text>
+      ) : failed && bids.length === 0 && asks.length === 0 ? (
+        <Text size="xs" c="dimmed" py="sm">
+          节点未连接，暂时无法加载盘口（配置节点 API 后可用）
+        </Text>
       ) : (
         <>
           <div className="book-side">

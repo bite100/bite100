@@ -7,6 +7,7 @@ import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
 import { TOKEN0_ADDRESS, TOKEN1_ADDRESS, ERC20_ABI } from '../../config'
+import { StandardConnect } from '../StandardConnect'
 import type { Signer } from 'ethers'
 
 const DEFAULT_PAIR = 'TKA/TKB'
@@ -249,6 +250,14 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
           <Text size="sm" c="red" mb={4} role="alert">
             {error}
           </Text>
+        )}
+        {!account && (
+          <div className="order-connect-cta">
+            <Text size="sm" c="dimmed">
+              行情与盘口可直接浏览；下单需要先连接钱包。
+            </Text>
+            <StandardConnect />
+          </div>
         )}
         <Button
           className="btn-primary-action"

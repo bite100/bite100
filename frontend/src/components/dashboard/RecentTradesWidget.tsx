@@ -19,6 +19,8 @@ interface RecentTrade {
 export function RecentTradesWidget() {
   const [trades, setTrades] = useState<RecentTrade[]>([])
   const [loading, setLoading] = useState(true)
+  /** 节点不可达/未配置时为 true，区分「暂无成交」与「节点未连接」 */
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -44,8 +46,12 @@ export function RecentTradesWidget() {
           .filter((t) => t.price > 0)
           .sort((a, b) => b.timestamp - a.timestamp)
         setTrades(normalized.slice(0, DISPLAY_LIMIT))
+        setFailed(false)
       } catch {
-        if (!cancelled) setTrades([])
+        if (!cancelled) {
+          setTrades([])
+          setFailed(true)
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -76,7 +82,9 @@ export function RecentTradesWidget() {
       {loading ? (
         <Text size="xs" c="dimmed" py="sm">加载中…</Text>
       ) : trades.length === 0 ? (
-        <Text size="xs" c="dimmed" py={4}>暂无成交</Text>
+        <Text size="xs" c="dimmed" py={4}>
+          {failed ? '节点未连接，暂无成交数据' : '暂无成交'}
+        </Text>
       ) : (
         trades.map((t, i) => {
           const older = trades[i + 1]

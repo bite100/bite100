@@ -219,6 +219,17 @@ button.book-row:hover {
   width: 100%;
 }
 
+/* 未连接时下单面板内的连接 CTA（第十三轮公开行情模式：表单可见、提交禁用、连接入口在面板内） */
+.order-connect-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--b100-surface-2);
+  border-radius: 12px;
+}
+
 .order-total-row {
   display: flex;
   align-items: baseline;

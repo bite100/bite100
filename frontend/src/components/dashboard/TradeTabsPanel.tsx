@@ -56,6 +56,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
   const [trades, setTrades] = useState<Trade[]>([])
   const [balances, setBalances] = useState<BalanceRow[]>([])
   const [nodeError, setNodeError] = useState(false)
+  const [tradesError, setTradesError] = useState(false)
   const [cancelLoading, setCancelLoading] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -81,8 +82,10 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
     try {
       const { data } = await nodeGet<Trade[]>('/api/trades', { pair: DEFAULT_PAIR, limit: '30' })
       setTrades(Array.isArray(data) ? data : [])
+      setTradesError(false)
     } catch {
-      /* 成交拉取失败保留旧数据，挂单错误已单独提示 */
+      /* 成交拉取失败保留旧数据；从未成功过时由 tradesError 呈现节点未连接空态 */
+      setTradesError(true)
     }
   }, [])
 
@@ -224,7 +227,9 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
 
         <Tabs.Panel value="trades" pt="sm">
           {sortedTrades.length === 0 ? (
-            <Text size="sm" c="dimmed" py="sm">暂无成交</Text>
+            <Text size="sm" c="dimmed" py="sm">
+              {tradesError ? '节点 API 未连接，暂时无法加载成交记录（配置 VITE_NODE_API_URL 后可用）' : '暂无成交'}
+            </Text>
           ) : (
             <div className="trade-table-wrap">
               <table className="trade-table">
@@ -261,7 +266,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
           {!account ? (
             <Text size="sm" c="dimmed" py="sm">连接钱包后查看余额</Text>
           ) : balances.length === 0 ? (
-            <Text size="sm" c="dimmed" py="sm">余额读取中…（存入/提取请到「存提」页）</Text>
+            <Text size="sm" c="dimmed" py="sm">余额读取中…（存入/提取请到「资产」页）</Text>
           ) : (
             <div className="trade-table-wrap">
               <table className="trade-table">
