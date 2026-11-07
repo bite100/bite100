@@ -83,7 +83,7 @@ export function RecentTradesWidget() {
         <Text size="xs" c="dimmed" py="sm">加载中…</Text>
       ) : trades.length === 0 ? (
         <Text size="xs" c="dimmed" py={4}>
-          {failed ? '节点未连接，暂无成交数据' : '暂无成交'}
+          {failed ? '节点未连接，成交数据暂不可用' : '暂无成交'}
         </Text>
       ) : (
         trades.map((t, i) => {

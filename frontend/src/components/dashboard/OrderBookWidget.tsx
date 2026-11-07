@@ -129,7 +129,7 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
         <Text size="xs" c="dimmed" py="sm">加载中…</Text>
       ) : failed && bids.length === 0 && asks.length === 0 ? (
         <Text size="xs" c="dimmed" py="sm">
-          节点未连接，暂时无法加载盘口（配置节点 API 后可用）
+          节点未连接，盘口暂不可用（需配置节点 API）
         </Text>
       ) : (
         <>
@@ -150,7 +150,7 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
                 </span>
               </>
             ) : (
-              <span className="book-spread-val">暂无盘口</span>
+              <span className="book-spread-val">暂无盘口数据</span>
             )}
           </div>
           <div className="book-side">

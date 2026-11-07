@@ -154,7 +154,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
 
   const renderOrdersTable = (orders: Order[], withCancel: boolean) => {
     if (!account) return <Text size="sm" c="dimmed" py="sm">连接钱包后查看订单</Text>
-    if (nodeError) return <Text size="sm" c="dimmed" py="sm">节点 API 未连接，暂时无法加载订单（配置 VITE_NODE_API_URL 后可用）</Text>
+    if (nodeError) return <Text size="sm" c="dimmed" py="sm">节点未连接，订单暂不可用（需配置节点 API）</Text>
     if (orders.length === 0) return <Text size="sm" c="dimmed" py="sm">暂无订单</Text>
     return (
       <div className="trade-table-wrap">
@@ -228,7 +228,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
         <Tabs.Panel value="trades" pt="sm">
           {sortedTrades.length === 0 ? (
             <Text size="sm" c="dimmed" py="sm">
-              {tradesError ? '节点 API 未连接，暂时无法加载成交记录（配置 VITE_NODE_API_URL 后可用）' : '暂无成交'}
+              {tradesError ? '节点未连接，成交记录暂不可用（需配置节点 API）' : '暂无成交'}
             </Text>
           ) : (
             <div className="trade-table-wrap">
@@ -266,7 +266,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
           {!account ? (
             <Text size="sm" c="dimmed" py="sm">连接钱包后查看余额</Text>
           ) : balances.length === 0 ? (
-            <Text size="sm" c="dimmed" py="sm">余额读取中…（存入/提取请到「资产」页）</Text>
+            <Text size="sm" c="dimmed" py="sm">余额加载中…（存入与提取请前往「资产」分区）</Text>
           ) : (
             <div className="trade-table-wrap">
               <table className="trade-table">
@@ -274,7 +274,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
                   <tr>
                     <th>资产</th>
                     <th>钱包余额</th>
-                    <th>Vault 可用余额</th>
+                    <th>Vault 余额</th>
                   </tr>
                 </thead>
                 <tbody>

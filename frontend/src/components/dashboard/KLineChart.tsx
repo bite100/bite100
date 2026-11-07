@@ -103,7 +103,7 @@ export function KLineChart() {
       {loading && <Text size="xs" c="dimmed">K 线加载中…</Text>}
       {error && <Text size="xs" c="red">K 线加载失败：{error}</Text>}
       {!loading && !error && bars.length === 0 && (
-        <Text size="xs" c="dimmed">暂无 K 线数据（尚无成交记录）</Text>
+        <Text size="xs" c="dimmed">暂无 K 线数据（暂无成交记录）</Text>
       )}
       <div ref={containerRef} style={{ width: '100%', minHeight: CHART_HEIGHT_DESKTOP }} />
     </div>

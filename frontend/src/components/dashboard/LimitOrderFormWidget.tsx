@@ -234,7 +234,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
             {account
               ? balance
                 ? `可用 ${balance} ${spendSymbol}`
-                : '余额读取中…'
+                : '可用余额加载中…'
               : '连接钱包后可按比例下单'}
           </Text>
         </div>

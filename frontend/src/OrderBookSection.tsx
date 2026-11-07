@@ -60,6 +60,17 @@ interface OrderbookResponse {
   asks: Order[]
 }
 
+/** 订单状态的中文显示（与交易主屏页签区口径一致；未知状态原样显示） */
+const STATUS_LABEL: Record<string, string> = {
+  open: '挂单中',
+  partial: '部分成交',
+  filled: '已成交',
+  cancelled: '已撤销',
+  canceled: '已撤销',
+  expired: '已过期',
+  settled: '已结算',
+}
+
 const DEFAULT_PAIR = 'TKA/TKB'
 const ORDERBOOK_DISPLAY_DEPTH = 100
 const ORDERBOOK_ROW_HEIGHT = 28
@@ -406,9 +417,9 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   if (!hasNodeApi()) {
     return (
       <div className="card vault-section">
-        <h2>链下订单簿</h2>
+        <h2>完整订单簿</h2>
         <p className="hint">
-          请配置节点 API 地址（VITE_NODE_API_URL 或 .env 中 NODE_API_URL），并确保节点已开启 <code>api.listen</code>（如 :8080）。多节点可用逗号分隔，将按 P2P 方式依次尝试连接。
+          尚未配置节点 API，订单簿暂不可用。请设置节点 API 地址（VITE_NODE_API_URL 或 .env 中 NODE_API_URL），并确保节点已开启 <code>api.listen</code>（如 :8080）。多个节点地址以逗号分隔，系统将依次尝试连接。
         </p>
       </div>
     )
@@ -417,15 +428,15 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   return (
     <div className="card vault-section orderbook-section">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-        <h2 style={{ margin: 0 }}>链下订单簿</h2>
+        <h2 style={{ margin: 0 }}>完整订单簿</h2>
         {onBackToDashboard && (
           <button type="button" className="btn secondary" onClick={onBackToDashboard} style={{ minHeight: 40 }}>
-            返回简洁视图
+            返回交易台
           </button>
         )}
       </div>
       <p className="hint">
-        限价单下单/撤单、成交与结算状态（数据来自节点 API）
+        限价单下单与撤单、成交与链上结算状态，数据来自节点 API。
         {nodeType && (
           <span className="node-type"> · 节点类型：{nodeType === 'match' ? '撮合' : nodeType === 'storage' ? '存储' : '中继'}</span>
         )}
@@ -436,13 +447,13 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
           <span className="node-type"> · 当前节点：{connectedNode.replace(/^https?:\/\//, '').slice(0, 32)}{(connectedNode.length > 32 ? '…' : '')}</span>
         )}
         {(fromCache.orderbook || fromCache.trades || fromCache.myOrders) && (
-          <span className="cache-hint"> · 部分为缓存数据（约 5 分钟内）</span>
+          <span className="cache-hint"> · 部分数据来自本地缓存（5 分钟内）</span>
         )}
       </p>
 
       {!isOnline && (
         <p className="hint">
-          当前为离线模式，将显示最近缓存的订单簿和成交记录，暂无法下新单或撤单。
+          当前处于离线状态，显示最近缓存的订单簿与成交记录；恢复网络后可下单与撤单。
         </p>
       )}
 
@@ -464,7 +475,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
               {' '}({basePrice.usd_24h_change >= 0 ? '+' : ''}{basePrice.usd_24h_change.toFixed(2)}% 24h)
             </span>
           )}
-          <span className="muted"> · P2P 零滑点限价 vs 主流 AMM 滑点 0.5%+</span>
+          <span className="muted"> · 限价单按指定价格成交，无滑点</span>
         </p>
       )}
       {!marketPriceLoading && marketPriceError && (
@@ -477,7 +488,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
 
       <div className="orderbook-grid">
         <div className="orderbook-panel">
-          <h3>卖盘 Asks</h3>
+          <h3>卖盘</h3>
           {loading ? (
             <LoadingSpinner size="small" text="加载中…" />
           ) : orderbook?.asks?.length ? (
@@ -510,7 +521,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
           )}
         </div>
         <div className="orderbook-panel">
-          <h3>买盘 Bids</h3>
+          <h3>买盘</h3>
           {loading ? (
             <LoadingSpinner size="small" text="加载中…" />
           ) : orderbook?.bids?.length ? (
@@ -546,7 +557,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
 
       {account && (
         <div className="place-order">
-          <h3>下限价单</h3>
+          <h3>限价下单</h3>
           <div className="row">
             <button
               type="button"
@@ -596,10 +607,10 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
           {account && (
             <div style={{ fontSize: '0.75rem', color: '#71717a', marginTop: '0.25rem' }}>
               {balanceLoading ? (
-                <span>加载余额中...</span>
+                <span>余额加载中…</span>
               ) : balance ? (
                 <span>
-                  余额：{balance} {side === 'sell' ? pair.split('/')[0] : pair.split('/')[1]}
+                  可用余额：{balance} {side === 'sell' ? pair.split('/')[0] : pair.split('/')[1]}
                 </span>
               ) : null}
             </div>
@@ -614,7 +625,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
           </button>
           {!isOnline && (
             <p className="hint" style={{ marginTop: '0.5rem' }}>
-              离线状态下仅可查看缓存订单簿，待恢复网络后再下新单。
+              离线状态下仅可查看缓存数据，恢复网络后可下单。
             </p>
           )}
         </div>
@@ -640,7 +651,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
                     <td>{o.side === 'buy' ? '买' : '卖'}</td>
                     <td>{o.price}</td>
                     <td>{o.amount}</td>
-                    <td>{o.status}</td>
+                    <td>{STATUS_LABEL[o.status] ?? o.status}</td>
                     <td>
                       {(o.status === 'open' || o.status === 'partial') && (
                         <button

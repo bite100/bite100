@@ -32,7 +32,7 @@ export function FeeDisplay({
       <h3 className="fee-display-title">预计费用</h3>
       <div className="fee-display-rows">
         <div className="fee-display-row">
-          <span className="label">平台手续费</span>
+          <span className="label">交易手续费</span>
           <span className="value">{platformFeePercent}%</span>
         </div>
         {showGasEstimate && (
@@ -43,7 +43,7 @@ export function FeeDisplay({
             ) : gasEstimate ? (
               <span className="value">
                 ≈ {formatEther(gasEstimate.totalCost)} ETH
-                <span className="gas-relayer">（由 relayer 代付）</span>
+                <span className="gas-relayer">（由中继代付，结算时由交易双方对半分摊）</span>
                 {gasEstimate.suggestion && (
                   <span className="gas-suggestion" title={gasEstimate.suggestion}>
                     {gasEstimate.suggestion}
@@ -57,7 +57,7 @@ export function FeeDisplay({
         )}
       </div>
       <div className="fee-display-split">
-        <h4 className="fee-display-subtitle">手续费分成去向</h4>
+        <h4 className="fee-display-subtitle">手续费分成</h4>
         <div className="fee-display-rows">
           <div className="fee-display-row">
             <span className="label">节点运行者</span>
