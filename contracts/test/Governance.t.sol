@@ -7,14 +7,11 @@ import "../src/Settlement.sol";
 import "../src/ContributorReward.sol";
 import "../src/Vault.sol";
 import "../src/FeeDistributor.sol";
-import "../src/AMMPool.sol";
-import "../src/mock/MockERC20.sol";
 
 contract GovernanceTest is Test {
     Governance gov;
     Settlement settlement;
     ContributorReward reward;
-    AMMPool pool;
     FeeDistributor fd;
 
     address owner;
@@ -31,12 +28,8 @@ contract GovernanceTest is Test {
         fd = new FeeDistributor();
         settlement = new Settlement(address(vault), address(fd));
         reward = new ContributorReward();
-        MockERC20 t0 = new MockERC20("T0", "T0", 1e24);
-        MockERC20 t1 = new MockERC20("T1", "T1", 1e24);
-        pool = new AMMPool(address(t0), address(t1), address(fd));
 
         settlement.setGovernance(address(gov));
-        pool.setGovernance(address(gov));
         reward.setGovernance(address(gov));
         fd.setGovernance(address(gov));
     }

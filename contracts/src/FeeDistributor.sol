@@ -93,7 +93,7 @@ contract FeeDistributor {
         emit DeveloperShareSet(oldBps, _shareBps);
     }
 
-    /// @notice 接收手续费（由 Settlement 或 AMM 转入）：按 developerShareBps 自动转开发者，其余进入分配池供 claim
+    /// @notice 接收手续费（由 Settlement 转入）：按 developerShareBps 自动转开发者，其余进入分配池供 claim
     function receiveFee(address token, uint256 amount) external {
         require(token != address(0) && amount > 0, "FeeDistributor: invalid input");
         require(IERC20(token).transferFrom(msg.sender, address(this), amount), "FeeDistributor: transfer failed");

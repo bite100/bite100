@@ -1,6 +1,6 @@
 package settlement
 
-// Sepolia 测试网端到端验证：使用已部署的合约（forge script Deploy.runWithAmmAndMocks）跑一笔真实结算。
+// Sepolia 测试网端到端验证：使用已部署的合约（forge script Deploy.runWithMocks）跑一笔真实结算。
 // 仅当环境变量 BIT100_SEPOLIA_RPC 等齐全时运行；默认 go test 不触发。
 // 断言口径与 anvil 版基本一致：maker 卖 100 TKA、价 2 TKB/TKA，taker 全额吃单；费率 1bp 双边：
 // maker 得 199.98 TKB，taker 得 99.99 TKA，双方 nonce 各 +1；同一成交再次提交必须被链上拒绝。

@@ -52,7 +52,7 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $rpc --broadcast
 **部署核心合约 + Mock 代币 + AMM 池：**
 
 ```powershell
-forge script script/Deploy.s.sol:Deploy --sig "runWithAmmAndMocks()" --rpc-url $rpc --broadcast
+forge script script/Deploy.s.sol:Deploy --sig "runWithMocks()" --rpc-url $rpc --broadcast
 ```
 
 部署成功后，合约地址会打印在终端，交易记录在 `broadcast/Deploy.s.sol/84532/`（Base Sepolia chainId 为 84532）。
