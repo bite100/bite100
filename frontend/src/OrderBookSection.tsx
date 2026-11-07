@@ -436,7 +436,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         )}
       </div>
       <p className="hint">
-        限价单下单与撤单、成交与链上结算状态，数据来自节点 API。
+        完整的盘口深度、全部挂单与成交记录，数据来自节点 API。在此下单与撤单只需钱包签名、订单不上链；成交后由中继提交链上结算，结算从 Vault 余额扣款。下单前请先在「资产」中存入并保持 Vault 余额充足；撤单在下方「我的订单」中操作。
         {nodeType && (
           <span className="node-type"> · 节点类型：{nodeType === 'match' ? '撮合' : nodeType === 'storage' ? '存储' : '中继'}</span>
         )}

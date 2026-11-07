@@ -219,6 +219,11 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
             </Text>
           )}
           {renderOrdersTable(openOrders, true)}
+          {account && openOrders.length > 0 && (
+            <Text size="xs" c="dimmed" pt="xs">
+              撤单只需钱包签名，不上链、不付 gas；已成交部分不受撤单影响。
+            </Text>
+          )}
         </Tabs.Panel>
 
         <Tabs.Panel value="history" pt="sm">

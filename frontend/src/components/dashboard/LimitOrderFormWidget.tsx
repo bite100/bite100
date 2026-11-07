@@ -270,6 +270,9 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
         >
           {side === 'buy' ? `买入 ${BASE_SYMBOL}` : `卖出 ${BASE_SYMBOL}`}
         </Button>
+        <Text size="xs" c="dimmed">
+          限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas；成交后由中继提交链上结算，结算 gas 由买卖双方对半分摊、手续费从成交金额中扣除。下单使用 Vault 余额，下单前请先在「资产」中存入，并保持余额充足，否则成交时结算会失败。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
+        </Text>
       </Stack>
     </Paper>
   )
