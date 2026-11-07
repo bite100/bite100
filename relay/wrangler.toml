@@ -1,0 +1,27 @@
+# 比特100 订单公告栏中继（无节点化阶段 1，候选 A：Cloudflare Workers + D1）
+# 部署步骤见 README.md「运维手册」。database_id 是占位值：本地 wrangler dev /
+# miniflare 不校验它；正式部署前 Ren 建好 D1 后把真实 id 填回这里。
+name = "bit100-relay"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 过期订单清理：每 15 分钟删一次已过期超过 1 天的订单（查询侧本就按 expires_at 过滤，
+# 这只是控制表体积；见 src/index.ts 的 scheduled 处理器）
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bit100-relay-orders"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[vars]
+# Nostr 镜像目标中继（逗号分隔）。镜像是 best-effort：连不上只记日志，不阻塞入库。
+NOSTR_RELAYS = "wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band"
+# 订单事件 kind：NIP-78 应用专属数据（参数化可替换事件，30000–39999 段）。
+# 可用 wrangler.toml / dashboard 变量覆盖。
+NOSTR_KIND = "30078"
+# Nostr 邮差私钥绝不写在这里：生产用 `wrangler secret put NOSTR_POSTMAN_SECRET_HEX`，
+# 本地用 gitignore 的 .dev.vars。二者缺失时镜像自动跳过（主入库不受影响）。

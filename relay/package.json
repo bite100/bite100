@@ -1,0 +1,30 @@
+{
+  "dependencies": {
+    "nostr-tools": "^2.17.3",
+    "viem": "^2.45.2"
+  },
+  "description": "比特100 无节点化阶段 1：订单公告栏中继（Cloudflare Workers + D1）+ Nostr 并行镜像",
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.9.13",
+    "@cloudflare/workers-types": "^5.0.0",
+    "@types/ws": "^8.18.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.45.0",
+    "ws": "^8.18.0"
+  },
+  "name": "bit100-relay",
+  "private": true,
+  "scripts": {
+    "db:migrate:local": "wrangler d1 migrations apply bit100-relay-orders --local",
+    "db:migrate:remote": "wrangler d1 migrations apply bit100-relay-orders --remote",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "vitest run --config vitest.unit.config.ts && vitest run --config vitest.workers.config.ts",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:workers": "vitest run --config vitest.workers.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "version": "0.1.0"
+}
