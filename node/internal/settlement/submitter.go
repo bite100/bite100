@@ -33,6 +33,7 @@ package settlement
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -388,10 +389,20 @@ func (s *Submitter) settleOnce(ctx context.Context, t *storage.Trade) {
 		log.Printf("[settle] trade=%s 结算成功 tx=%s", t.TradeID, hash)
 		return
 	}
-	if hash != "" {
-		// 已广播且链上 revert：确定性失败，记录 tx 备查
+	if hash != "" && !errors.Is(err, ErrTxPending) && !errors.Is(err, ErrTxDropped) {
+		// 已广播且链上 revert：确定性失败，记录 tx 备查。契约（第二十七轮）：
+		// SubmitFn（submit.go 的 waitMinedVerdict）在 WaitMined 超时后按 hash
+		// 查回执定论——回执确认 revert 时返回 (hash, revert 错误)；交易仍在
+		// mempool（ErrTxPending）或已丢弃（ErrTxDropped）时也带回 hash，但那是
+		// 瞬时失败，必须走下面的重试分支（重试前先链上对账），绝不能把「未见
+		// 回执」误记为终态。模拟 revert 与过期预检在前面已直接记终态。
 		s.markFailed(t, hash, "settleTrade reverted on-chain: "+err.Error())
 		return
+	}
+	if hash != "" {
+		// 瞬时失败但交易已广播：hash 仅记日志（不记入失败 tx），重试前链上对账
+		// 会先排除已落账的重复提交。
+		log.Printf("[settle] trade=%s 结算未定论（tx=%s 已广播，%v），重试前先链上对账", t.TradeID, hash, err)
 	}
 	s.retryOrFail(t, err.Error())
 }

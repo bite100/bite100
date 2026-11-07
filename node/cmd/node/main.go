@@ -341,6 +341,12 @@ func main() {
 	}
 
 	// 10. HTTP API
+	// 合约用户（做市金库）的 ERC-1271 链上验签兜底需要 RPC 与 Settlement 地址；
+	// 未配置时 API 只做纯 ecrecover 验签（EOA 不受影响）。
+	apiSettlementAddr := cfg.Chain.Settlement
+	if apiSettlementAddr == "" {
+		apiSettlementAddr = match.CurrentDomain().VerifyingContract
+	}
 	srv := &api.Server{
 		Store:                    store,
 		MatchEngine:              matchEngine,
@@ -350,6 +356,8 @@ func main() {
 		WSServer:                 wsServer,
 		RateLimitOrdersPerMinute: cfg.API.RateLimitOrdersPerMinute,
 		BlockedTraders:           api.BuildTraderBlacklist(cfg.API.BlockedTraders),
+		RPCURL:                   cfg.Chain.RPCURL,
+		SettlementAddr:           apiSettlementAddr,
 	}
 	if cfg.API.Listen != "" {
 		srv.Run(cfg.API.Listen)

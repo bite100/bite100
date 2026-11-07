@@ -1,15 +1,20 @@
 package match
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 
 	"github.com/P2P-P2P/p2p/node/internal/storage"
@@ -240,6 +245,163 @@ func VerifyOrderSignature(order *storage.Order, pairTokens *PairTokens) (bool, e
 		return false, fmt.Errorf("missing signature")
 	}
 	return VerifySignedOrder(BuildSignedOrder(order, pairTokens))
+}
+
+// ---------- ERC-1271 链上验签（第二十七轮：合约用户，如做市金库） ----------
+//
+// 纯 ecrecover 只能验 EOA 签名——userAddress 为合约（MakerVault）时，签名者是
+// 金库登记的签名者 EOA，恢复地址 ≠ userAddress，纯验签必为 false。链上回退：
+// 先查 userAddress 是否有代码，无代码直接 false；有代码则 eth_call
+// Settlement.verifyOrderSignature（与 Vault 落锁/结算同一验签口径，EOA 与
+// ERC-1271 统一处理）。本函数只在纯验签失败后由 API 调用（合约用户极少，
+// 不影响 EOA 的快路径）；RPC 不可用时返回错误、调用方 fail-closed。
+
+const verifyOrderSigABIJSON = `[{"type":"function","name":"verifyOrderSignature","inputs":[{"name":"order","type":"tuple","components":[{"name":"orderId","type":"string"},{"name":"userAddress","type":"address"},{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"amountIn","type":"uint256"},{"name":"amountOut","type":"uint256"},{"name":"price","type":"uint256"},{"name":"timestamp","type":"uint256"},{"name":"expiresAt","type":"uint256"},{"name":"nonce","type":"uint256"}]},{"name":"signature","type":"bytes"}],"outputs":[{"name":"","type":"bool"}],"stateMutability":"view"}]`
+
+const isValidSignatureABIJSON = `[{"type":"function","name":"isValidSignature","inputs":[{"name":"hash","type":"bytes32"},{"name":"signature","type":"bytes"}],"outputs":[{"name":"magicValue","type":"bytes4"}],"stateMutability":"view"}]`
+
+// erc1271MagicValue 为 EIP-1271 成功返回值 0x1626ba7e
+var erc1271MagicValue = [4]byte{0x16, 0x26, 0xba, 0x7e}
+
+// abiOrder 为 ABI 编码用的订单结构（与合约 Settlement.Order 字段一一对应）
+type abiOrder struct {
+	OrderId     string         `abi:"orderId"`
+	UserAddress common.Address `abi:"userAddress"`
+	TokenIn     common.Address `abi:"tokenIn"`
+	TokenOut    common.Address `abi:"tokenOut"`
+	AmountIn    *big.Int       `abi:"amountIn"`
+	AmountOut   *big.Int       `abi:"amountOut"`
+	Price       *big.Int       `abi:"price"`
+	Timestamp   *big.Int       `abi:"timestamp"`
+	ExpiresAt   *big.Int       `abi:"expiresAt"`
+	Nonce       *big.Int       `abi:"nonce"`
+}
+
+func signedOrderToABIOrder(so *storage.SignedOrder) abiOrder {
+	dec := func(s string) *big.Int {
+		v, ok := new(big.Int).SetString(s, 10)
+		if !ok {
+			return big.NewInt(0)
+		}
+		return v
+	}
+	return abiOrder{
+		OrderId:     so.OrderID,
+		UserAddress: common.HexToAddress(so.UserAddress),
+		TokenIn:     common.HexToAddress(so.TokenIn),
+		TokenOut:    common.HexToAddress(so.TokenOut),
+		AmountIn:    dec(so.AmountIn),
+		AmountOut:   dec(so.AmountOut),
+		Price:       dec(so.Price),
+		Timestamp:   big.NewInt(so.Timestamp),
+		ExpiresAt:   big.NewInt(so.ExpiresAt),
+		Nonce:       big.NewInt(so.Nonce),
+	}
+}
+
+// VerifySignedOrderOnChain 对签名订单做链上验签：纯验签先行（EOA 快路径）；
+// 纯验签失败且 userAddress 有代码时，调 Settlement.verifyOrderSignature 兜底。
+// 返回 (false, nil) = 签名无效；(false, err) = 链上查询失败（调用方应 fail-closed）。
+func VerifySignedOrderOnChain(ctx context.Context, rpcURL, settlementAddr string, so *storage.SignedOrder) (bool, error) {
+	if ok, err := VerifySignedOrder(so); err == nil && ok {
+		return true, nil
+	}
+	if rpcURL == "" || settlementAddr == "" {
+		return false, nil
+	}
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		return false, fmt.Errorf("dial rpc: %w", err)
+	}
+	defer client.Close()
+	user := common.HexToAddress(so.UserAddress)
+	code, err := client.CodeAt(ctx, user, nil)
+	if err != nil {
+		return false, fmt.Errorf("code at user: %w", err)
+	}
+	if len(code) == 0 {
+		return false, nil // EOA 且纯验签已失败：签名无效
+	}
+	parsed, err := abi.JSON(strings.NewReader(verifyOrderSigABIJSON))
+	if err != nil {
+		return false, err
+	}
+	data, err := parsed.Pack("verifyOrderSignature", signedOrderToABIOrder(so), common.FromHex(so.Signature))
+	if err != nil {
+		return false, err
+	}
+	to := common.HexToAddress(settlementAddr)
+	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, nil)
+	if err != nil {
+		return false, fmt.Errorf("call verifyOrderSignature: %w", err)
+	}
+	var valid bool
+	if err := parsed.UnpackIntoInterface(&valid, "verifyOrderSignature", out); err != nil {
+		return false, err
+	}
+	return valid, nil
+}
+
+// VerifyOrderSignatureOnChain 为订单簿订单的链上验签入口（API 层用）
+func VerifyOrderSignatureOnChain(ctx context.Context, rpcURL, settlementAddr string, order *storage.Order, pairTokens *PairTokens) (bool, error) {
+	if order.Signature == "" {
+		return false, fmt.Errorf("missing signature")
+	}
+	return VerifySignedOrderOnChain(ctx, rpcURL, settlementAddr, BuildSignedOrder(order, pairTokens))
+}
+
+// VerifyCancelSignatureOnChain 对撤单签名做链上验签：纯验签先行；失败且用户
+// 为合约时，调该合约的 isValidSignature（CancelOrder 摘要）兜底。
+func VerifyCancelSignatureOnChain(ctx context.Context, rpcURL, orderID, userAddress, signature string, timestamp int64) (bool, error) {
+	if ok, err := VerifyCancelSignature(orderID, userAddress, signature, timestamp); err == nil && ok {
+		return true, nil
+	}
+	if rpcURL == "" {
+		return false, nil
+	}
+	typedData := apitypes.TypedData{
+		Types:       cancelTypes,
+		PrimaryType: "CancelOrder",
+		Domain:      CurrentDomain(),
+		Message: apitypes.TypedDataMessage{
+			"orderId":     orderID,
+			"userAddress": userAddress,
+			"timestamp":   fmt.Sprintf("%d", timestamp),
+		},
+	}
+	digest, err := typedDataDigest(typedData, "CancelOrder")
+	if err != nil {
+		return false, err
+	}
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		return false, fmt.Errorf("dial rpc: %w", err)
+	}
+	defer client.Close()
+	user := common.HexToAddress(userAddress)
+	code, err := client.CodeAt(ctx, user, nil)
+	if err != nil {
+		return false, fmt.Errorf("code at user: %w", err)
+	}
+	if len(code) == 0 {
+		return false, nil
+	}
+	parsed, err := abi.JSON(strings.NewReader(isValidSignatureABIJSON))
+	if err != nil {
+		return false, err
+	}
+	data, err := parsed.Pack("isValidSignature", digest, common.FromHex(signature))
+	if err != nil {
+		return false, err
+	}
+	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &user, Data: data}, nil)
+	if err != nil {
+		return false, fmt.Errorf("call isValidSignature: %w", err)
+	}
+	if len(out) < 4 {
+		return false, nil
+	}
+	return [4]byte(out[:4]) == erc1271MagicValue, nil
 }
 
 // VerifyCancelSignature 验证取消订单签名（与订单共用同一签名域）

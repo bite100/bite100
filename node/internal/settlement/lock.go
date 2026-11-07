@@ -46,8 +46,8 @@ const settlementDigestABIJSON = `[
 ]`
 
 var (
-	vaultLockABI      abi.ABI
-	settlementDigABI  abi.ABI
+	vaultLockABI     abi.ABI
+	settlementDigABI abi.ABI
 )
 
 func init() {
@@ -175,10 +175,6 @@ func sendVaultTx(ctx context.Context, rpcURL, vaultAddr, privateKeyHex string, d
 	if err != nil {
 		return "", fmt.Errorf("nonce: %w", err)
 	}
-	gasPrice, err := client.SuggestGasPrice(ctx)
-	if err != nil {
-		return "", fmt.Errorf("gas price: %w", err)
-	}
 	to := common.HexToAddress(vaultAddr)
 	// gas 改为链上估算×1.3（下限 21000）：第二十一轮 Vault 落锁新增外部
 	// 验签/摘要调用与墓碑写入，Sepolia 实测约 725,799 gas，已超旧固定
@@ -191,15 +187,37 @@ func sendVaultTx(ctx context.Context, rpcURL, vaultAddr, privateKeyHex string, d
 			gasLimit = 21_000
 		}
 	}
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		To:       &to,
-		Value:    big.NewInt(0),
-		Gas:      gasLimit,
-		GasPrice: gasPrice,
-		Data:     data,
-	})
-	signed, err := types.SignTx(tx, types.NewEIP155Signer(chainID), priv)
+	// 动态 gas 价（第二十七轮）：EIP-1559（tip + 2×当前 baseFee 为上限），
+	// 替代此前单次 SuggestGasPrice 的 legacy 定价——后者在 Sepolia gas 波动
+	// 时曾让落锁交易在 mempool 滞留约 3 分钟（第二十六轮 §7.3）；RPC 不支持
+	// EIP-1559 时回退 legacy。
+	var tx *types.Transaction
+	if tipCap, feeCap, ferr := suggestDynamicFees(ctx, client); ferr == nil {
+		tx = types.NewTx(&types.DynamicFeeTx{
+			ChainID:   chainID,
+			Nonce:     nonce,
+			To:        &to,
+			Value:     big.NewInt(0),
+			Gas:       gasLimit,
+			GasTipCap: tipCap,
+			GasFeeCap: feeCap,
+			Data:      data,
+		})
+	} else {
+		gasPrice, err := client.SuggestGasPrice(ctx)
+		if err != nil {
+			return "", fmt.Errorf("gas price: %w", err)
+		}
+		tx = types.NewTx(&types.LegacyTx{
+			Nonce:    nonce,
+			To:       &to,
+			Value:    big.NewInt(0),
+			Gas:      gasLimit,
+			GasPrice: gasPrice,
+			Data:     data,
+		})
+	}
+	signed, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), priv)
 	if err != nil {
 		return "", fmt.Errorf("sign tx: %w", err)
 	}
@@ -217,11 +235,48 @@ func sendVaultTx(ctx context.Context, rpcURL, vaultAddr, privateKeyHex string, d
 		}
 		time.Sleep(3 * time.Second)
 	}
-	return signed.Hash().Hex(), fmt.Errorf("tx receipt timeout: %s", signed.Hash().Hex())
+	// 超时后按 hash 查回执再定论（第二十七轮）：超时≠失败——交易可能在时限
+	// 边缘刚上链（返回成功）、已 revert（返回失败）、仍在排队（ErrTxPending，
+	// 调用方不得按失败处理；重试前应先查既有锁定避免重复落锁）或已被丢弃
+	// （ErrTxDropped，可用新 nonce 安全重发）。原上下文可能已过期，用新上下文查。
+	lookupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	receipt, lerr := lookupReceipt(lookupCtx, client, signed.Hash())
+	if lerr == nil {
+		if receipt.Status != types.ReceiptStatusSuccessful {
+			return signed.Hash().Hex(), fmt.Errorf("tx reverted: %s", signed.Hash().Hex())
+		}
+		return signed.Hash().Hex(), nil
+	}
+	return signed.Hash().Hex(), lerr
+}
+
+// suggestDynamicFees 取 EIP-1559 动态 gas 价：tip 由节点建议，fee 上限为
+// 2×当前 baseFee + tip（留足波动空间）；任一步失败即返回错误，调用方回退 legacy。
+func suggestDynamicFees(ctx context.Context, client *ethclient.Client) (tipCap, feeCap *big.Int, err error) {
+	tipCap, err = client.SuggestGasTipCap(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tip cap: %w", err)
+	}
+	header, err := client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("latest header: %w", err)
+	}
+	if header.BaseFee == nil {
+		return nil, nil, fmt.Errorf("no base fee (pre-London chain)")
+	}
+	feeCap = new(big.Int).Add(new(big.Int).Mul(header.BaseFee, big.NewInt(2)), tipCap)
+	return tipCap, feeCap, nil
 }
 
 // LockOrder 以 locker 身份为签名订单落锁：落锁前先校验可用余额覆盖义务量
 // （不足直接报错、不发交易；Vault 落锁时还会再验一次）。返回订单摘要与交易哈希。
+//
+// 幂等（第二十七轮）：先按摘要查既有锁定——上一轮发送的落锁交易可能超时后才
+// 上链（第二十六轮 §7.3），此时锁已在链上；重复落锁会被 Vault 以
+// "order already locked" 拒绝，故既有锁定量覆盖义务时直接返回成功，不再发交易。
+// （注意顺序：先查锁、再查可用余额——已落锁的义务量已从可用余额中扣除，
+// 先查余额会把「已落锁」误判为余额不足。）
 func LockOrder(ctx context.Context, rpcURL, vaultAddr, settlementAddr, lockerKeyHex string, so *storage.SignedOrder, side string) (common.Hash, string, error) {
 	token, amount, payWithTokenIn, err := ObligationForOrder(so, side)
 	if err != nil {
@@ -235,6 +290,18 @@ func LockOrder(ctx context.Context, rpcURL, vaultAddr, settlementAddr, lockerKey
 		return common.Hash{}, "", fmt.Errorf("dial rpc: %w", err)
 	}
 	defer client.Close()
+	digest, err := OrderDigest(ctx, client, settlementAddr, so)
+	if err != nil {
+		return common.Hash{}, "", fmt.Errorf("order digest: %w", err)
+	}
+	if lockUser, remaining, lerr := OrderLockRemaining(ctx, client, vaultAddr, digest); lerr == nil {
+		if lockUser == common.HexToAddress(so.UserAddress) && remaining.Cmp(amount) >= 0 {
+			return digest, "", nil
+		}
+		if lockUser != (common.Address{}) {
+			return digest, "", fmt.Errorf("order %s already locked with remaining %s < obligation %s", so.OrderID, remaining, amount)
+		}
+	}
 	user := common.HexToAddress(so.UserAddress)
 	_, _, available, err := VaultBalances(ctx, client, vaultAddr, user, token)
 	if err != nil {
@@ -242,10 +309,6 @@ func LockOrder(ctx context.Context, rpcURL, vaultAddr, settlementAddr, lockerKey
 	}
 	if available.Cmp(amount) < 0 {
 		return common.Hash{}, "", fmt.Errorf("insufficient available balance: need %s, available %s (user %s token %s)", amount, available, so.UserAddress, token.Hex())
-	}
-	digest, err := OrderDigest(ctx, client, settlementAddr, so)
-	if err != nil {
-		return common.Hash{}, "", fmt.Errorf("order digest: %w", err)
 	}
 	sigBytes := common.FromHex(so.Signature)
 	data, err := vaultLockABI.Pack("lockForOrder", signedOrderToABI(so).Order, sigBytes, payWithTokenIn)

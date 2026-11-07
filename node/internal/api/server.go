@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net"
@@ -46,10 +47,10 @@ func newOrderRateLimiter(perMinute int, window time.Duration) *orderRateLimiter 
 		return nil
 	}
 	return &orderRateLimiter{
-		hits:    make(map[string][]time.Time),
-		limit:   perMinute,
-		window:  window,
-		tokens:  make(map[string]*tokenBucket),
+		hits:   make(map[string][]time.Time),
+		limit:  perMinute,
+		window: window,
+		tokens: make(map[string]*tokenBucket),
 	}
 }
 
@@ -60,7 +61,7 @@ func (l *orderRateLimiter) allowTokenBucket(key string) bool {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	
+
 	now := time.Now()
 	bucket, ok := l.tokens[key]
 	if !ok {
@@ -73,7 +74,7 @@ func (l *orderRateLimiter) allowTokenBucket(key string) bool {
 		}
 		l.tokens[key] = bucket
 	}
-	
+
 	// 补充令牌
 	elapsed := now.Sub(bucket.lastUpdate).Seconds()
 	bucket.tokens = bucket.tokens + elapsed*bucket.rate
@@ -81,7 +82,7 @@ func (l *orderRateLimiter) allowTokenBucket(key string) bool {
 		bucket.tokens = bucket.capacity
 	}
 	bucket.lastUpdate = now
-	
+
 	// 检查是否有足够的令牌
 	if bucket.tokens >= 1.0 {
 		bucket.tokens -= 1.0
@@ -152,21 +153,25 @@ func (l *orderRateLimiter) Allow(key string) bool {
 
 // Server HTTP API 服务
 type Server struct {
-	Store                   *storage.DB
+	Store                    *storage.DB
 	MatchEngine              *match.Engine
 	Publish                  func(topic string, data []byte) error
-	NodeType                 string // storage | relay | match，用于前端展示
-	RewardWallet             string // 领奖地址（VPS/Docker 下由 env REWARD_WALLET 配置，仅展示）
-	WSServer                 *WSServer // WebSocket 服务器
-	RateLimitOrdersPerMinute uint64    // 每 IP 每分钟下单上限，0=不限制（Spam 防护）
+	NodeType                 string              // storage | relay | match，用于前端展示
+	RewardWallet             string              // 领奖地址（VPS/Docker 下由 env REWARD_WALLET 配置，仅展示）
+	WSServer                 *WSServer           // WebSocket 服务器
+	RateLimitOrdersPerMinute uint64              // 每 IP 每分钟下单上限，0=不限制（Spam 防护）
 	BlockedTraders           map[string]struct{} // 黑名单：拒绝这些地址下单（Spam 防护；从 config api.blocked_traders 构建）
-	orderLimiter              *orderRateLimiter
+	// RPCURL 与 SettlementAddr 供合约用户（做市金库）的 ERC-1271 链上验签兜底；
+	// 未配置时只做纯 ecrecover 验签（EOA 不受影响）。
+	RPCURL         string
+	SettlementAddr string
+	orderLimiter   *orderRateLimiter
 	// 响应缓存优化
-	responseCache            map[string]*cachedResponse
-	cacheMu                  sync.RWMutex
-	cacheTTL                 time.Duration
+	responseCache map[string]*cachedResponse
+	cacheMu       sync.RWMutex
+	cacheTTL      time.Duration
 	// API响应时间监控
-	responseTimeHistogram    map[string][]time.Duration
+	responseTimeHistogram map[string][]time.Duration
 }
 
 // BuildTraderBlacklist 从配置构建 trader 黑名单 map（地址统一小写）；用于 Spam 防护
@@ -214,14 +219,14 @@ func (s *Server) Run(listen string) {
 		s.WSServer = NewWSServer()
 		go s.WSServer.Run()
 	}
-	
+
 	// 初始化响应缓存
 	if s.responseCache == nil {
 		s.responseCache = make(map[string]*cachedResponse)
 		s.cacheTTL = 5 * time.Second // 默认5秒缓存
 		s.responseTimeHistogram = make(map[string][]time.Duration)
 	}
-	
+
 	// 定期清理过期缓存
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -230,7 +235,7 @@ func (s *Server) Run(listen string) {
 			s.cleanExpiredCache()
 		}
 	}()
-	
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/orderbook", s.cors(s.handleOrderbook))
 	mux.HandleFunc("/api/trades", s.cors(s.handleTrades))
@@ -352,7 +357,7 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "pair required", http.StatusBadRequest)
 		return
 	}
-	
+
 	// 响应缓存优化：检查缓存
 	cacheKey := "orderbook:" + pair
 	if cached := s.getCachedResponse(cacheKey); cached != nil {
@@ -361,7 +366,7 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(cached)
 		return
 	}
-	
+
 	var bids, asks []*storage.Order
 	if s.MatchEngine != nil {
 		bids, asks = s.MatchEngine.GetOrderbook(pair)
@@ -375,11 +380,11 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	
+
 	response := OrderbookResponse{Pair: pair, Bids: bids, Asks: asks}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Cache", "MISS")
-	
+
 	// 编码并缓存响应
 	if data, err := json.Marshal(response); err == nil {
 		s.setCachedResponse(cacheKey, data)
@@ -466,7 +471,7 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	
+
 	// 错误处理优化：使用defer恢复panic
 	defer func() {
 		if r := recover(); r != nil {
@@ -511,6 +516,13 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 			pairTokens = s.MatchEngine.GetPairTokens(o.Pair)
 		}
 		valid, err := match.VerifyOrderSignature(&o, pairTokens)
+		if err == nil && !valid && s.RPCURL != "" && s.SettlementAddr != "" {
+			// 纯验签失败：可能是合约用户（做市金库）的 ERC-1271 签名，走链上验签兜底；
+			// RPC 不可用时 fail-closed（返回验证错误，不放行）。
+			vctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			valid, err = match.VerifyOrderSignatureOnChain(vctx, s.RPCURL, s.SettlementAddr, &o, pairTokens)
+			cancel()
+		}
 		if err != nil {
 			log.Printf("[api] 签名验证错误: %v", err)
 			http.Error(w, "signature verification error", http.StatusBadRequest)
@@ -538,12 +550,12 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "publish failed", http.StatusInternalServerError)
 		return
 	}
-	
+
 	// 广播订单状态到 WebSocket 客户端
 	if s.WSServer != nil {
 		s.WSServer.BroadcastOrderStatus(&o)
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true,"orderId":"` + o.OrderID + `"}`))
 }
@@ -566,7 +578,7 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "orderId required", http.StatusBadRequest)
 		return
 	}
-	
+
 	// 验证取消订单签名（如果提供了签名和用户地址）；同时检查黑名单
 	if s.Store != nil {
 		order, err := s.Store.GetOrder(req.OrderID)
@@ -590,6 +602,12 @@ func (s *Server) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 					timestamp = time.Now().Unix()
 				}
 				valid, err := match.VerifyCancelSignature(req.OrderID, order.Trader, req.Signature, timestamp)
+				if err == nil && !valid && s.RPCURL != "" {
+					// 纯验签失败：可能是合约用户（做市金库）的 ERC-1271 撤单签名，走链上兜底
+					vctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+					valid, err = match.VerifyCancelSignatureOnChain(vctx, s.RPCURL, req.OrderID, order.Trader, req.Signature, timestamp)
+					cancel()
+				}
 				if err != nil {
 					log.Printf("[api] 取消签名验证错误: %v", err)
 					http.Error(w, "signature verification error", http.StatusBadRequest)
@@ -622,15 +640,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ws] 升级失败: %v", err)
 		return
 	}
-	
+
 	client := &WSClient{
 		conn:   conn,
 		send:   make(chan []byte, 256),
 		server: s.WSServer,
 	}
-	
+
 	s.WSServer.register <- client
-	
+
 	// 启动读写协程
 	go client.writePump()
 	go client.readPump()

@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "./Vault.sol";
 import "./FeeDistributor.sol";
 import "./NodeRewards.sol";
@@ -615,21 +616,25 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator(), structHash));
     }
 
-    /// @notice 验证订单签名（统一规范）：恢复出的签名者必须等于 order.userAddress
+    /// @notice 验证订单签名（统一规范）：EOA 恢复路径与此前完全一致（恢复出的签名者
+    /// 必须等于 order.userAddress）；userAddress 为合约时追加 ERC-1271 路径
+    /// （第二十七轮：做市金库以合约身份下单，登记签名者代签——MakerVault.isValidSignature
+    /// 校验签名者是否登记）。合约路径由 SignatureChecker 经 staticcall 调
+    /// isValidSignature，失败返回 false 而非 revert；无代码地址直接返回 false。
     function verifyOrderSignature(Order calldata order, bytes calldata signature) public view returns (bool) {
         if (signature.length != 65) return false;
+        bytes32 digest = _orderDigest(order);
         (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signature);
-        address signer = ecrecover(_orderDigest(order), v, r, s);
-        return signer != address(0) && signer == order.userAddress;
+        address signer = ecrecover(digest, v, r, s);
+        if (signer != address(0) && signer == order.userAddress) return true;
+        if (order.userAddress.code.length == 0) return false;
+        return SignatureChecker.isValidSignatureNow(order.userAddress, digest, signature);
     }
 
     /// @notice 内部：验签并返回订单 digest（签名不符直接 revert，maker/taker 分开报错便于定位）
     function _verifySignedOrder(SignedOrder calldata signedOrder, string memory errMsg) internal view returns (bytes32 digest) {
         digest = _orderDigest(signedOrder.order);
-        require(signedOrder.signature.length == 65, "Settlement: invalid signature length");
-        (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signedOrder.signature);
-        address signer = ecrecover(digest, v, r, s);
-        require(signer != address(0) && signer == signedOrder.order.userAddress, errMsg);
+        require(verifyOrderSignature(signedOrder.order, signedOrder.signature), errMsg);
     }
 
     /// @notice 内部：订单时效校验（已生效且未过期）

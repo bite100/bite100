@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -344,4 +345,314 @@ func TestAnvilE2E(t *testing.T) {
 	} else {
 		t.Logf("replay correctly rejected: %v", err)
 	}
+}
+
+// ---- 金库 ERC-1271 全流程（第二十七轮） ----
+//
+// 部署新 Settlement（ERC-1271 验签）+ MakerVault（USDT 资产 / BTC 标的 / mock
+// BTC/USD 喂价），存款人存入 1000 USDT → 金库签名者代金库买 0.01 BTC →
+// taker 卖 0.01 BTC → 两次落锁（第二次验证幂等：不发交易直接成功）→
+// SubmitTrade 链上结算 → 断言金库余额/NAV/份额/nonce。纯 ecrecover 验签
+// 必须对金库订单返回 false（恢复地址为签名者 ≠ 金库），链上验签返回 true。
+func TestAnvilVaultERC1271Settles(t *testing.T) {
+	rpc := os.Getenv("BIT100_ANVIL_RPC")
+	if rpc == "" {
+		t.Skip("BIT100_ANVIL_RPC not set; skipping anvil e2e")
+	}
+	ctx := context.Background()
+	client, err := ethclient.Dial(rpc)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	chainID, err := client.ChainID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerKey, err := crypto.HexToECDSA(anvilOwnerKeyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := crypto.PubkeyToAddress(ownerKey.PublicKey)
+	signerKey, _ := crypto.GenerateKey()
+	signer := crypto.PubkeyToAddress(signerKey.PublicKey)
+	takerKey, _ := crypto.GenerateKey()
+	taker := crypto.PubkeyToAddress(takerKey.PublicKey)
+
+	// 给 taker 转 1 ETH 作 gas（taker 要发 approve/deposit 交易；不转则
+	// eth_estimateGas 因余额为 0 报 "Out of gas: gas required exceeds allowance: 0"）
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	{
+		nonce, err := client.PendingNonceAt(ctx, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx := types.NewTransaction(nonce, taker, new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil), 21000, gasPrice, nil)
+		signed, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), ownerKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.SendTransaction(ctx, signed); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := bind.WaitMined(ctx, client, signed); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	e18 := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	supply := new(big.Int).Mul(big.NewInt(1000000), e18)
+	btcAddr, btc := deploy(t, client, ownerKey, loadArtifact(t, "MockERC20"), "Bitcoin", "BTC", supply)
+	usdtAddr, usdt := deploy(t, client, ownerKey, loadArtifact(t, "MockERC20"), "Tether", "USDT", supply)
+	vaultAddr, vault := deploy(t, client, ownerKey, loadArtifact(t, "Vault"))
+	feeDistAddr, _ := deploy(t, client, ownerKey, loadArtifact(t, "FeeDistributor"))
+	settlementAddr, settlement := deploy(t, client, ownerKey, loadArtifact(t, "Settlement"), vaultAddr, feeDistAddr)
+	feedAddr, _ := deploy(t, client, ownerKey, loadArtifact(t, "MockAggregatorV3"), big.NewInt(7582234000000), uint8(8))
+	makerVaultAddr, makerVault := deploy(t, client, ownerKey, loadArtifact(t, "MakerVault"), usdtAddr, vaultAddr, btcAddr, feedAddr)
+	t.Logf("vault=%s settlement=%s makerVault=%s feed=%s", vaultAddr, settlementAddr, makerVaultAddr, feedAddr)
+
+	call := func(contract *bind.BoundContract, method string, args ...interface{}) []interface{} {
+		var out []interface{}
+		if err := contract.Call(&bind.CallOpts{Context: ctx}, &out, method, args...); err != nil {
+			t.Fatalf("call %s: %v", method, err)
+		}
+		return out
+	}
+	do := func(contract *bind.BoundContract, key *ecdsa.PrivateKey, method string, args ...interface{}) *types.Transaction {
+		opts := transactor(t, client, key)
+		tx, err := contract.Transact(opts, method, args...)
+		if err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		receipt, err := bind.WaitMined(ctx, client, tx)
+		if err != nil {
+			t.Fatalf("%s wait: %v", method, err)
+		}
+		if receipt.Status != types.ReceiptStatusSuccessful {
+			t.Fatalf("%s reverted, tx=%s", method, tx.Hash().Hex())
+		}
+		return tx
+	}
+
+	do(vault, ownerKey, "setSettlement", settlementAddr)
+	do(vault, ownerKey, "setLocker", owner, true)
+	// 登记金库签名者（ROLE_MARKET_MAKER，从合约读常量，避免硬编码）
+	roleMM := call(makerVault, "ROLE_MARKET_MAKER")[0].([32]byte)
+	do(makerVault, ownerKey, "setSigner", signer, roleMM, true)
+	// owner（存款人）存入 1000 USDT → 金库自动转入交易 Vault
+	amt1000 := new(big.Int).Mul(big.NewInt(1000), e18)
+	do(usdt, ownerKey, "transfer", taker, amt1000) // 一部分给 taker 备用（下面 taker 也需要 BTC）
+	do(usdt, ownerKey, "approve", makerVaultAddr, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)))
+	do(makerVault, ownerKey, "deposit", amt1000, owner)
+	if got := call(vault, "balanceOf", usdtAddr, makerVaultAddr)[0].(*big.Int); got.Cmp(amt1000) != 0 {
+		t.Fatalf("makerVault USDT in trading vault = %s, want 1000", got)
+	}
+	if got := call(makerVault, "balanceOf", owner)[0].(*big.Int); got.Cmp(amt1000) != 0 {
+		t.Fatalf("depositor shares = %s, want 1000e18", got)
+	}
+	// taker 充 1 BTC 到交易 Vault
+	do(btc, ownerKey, "transfer", taker, new(big.Int).Mul(big.NewInt(1), e18))
+	do(btc, takerKey, "approve", vaultAddr, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)))
+	do(vault, takerKey, "deposit", btcAddr, new(big.Int).Mul(big.NewInt(1), e18))
+
+	match.SetDomain(chainID, settlementAddr)
+	now := time.Now().Unix()
+	pair := "BTC/USDT"
+	pairTokens := match.PairTokens{Token0: btcAddr.Hex(), Token1: usdtAddr.Hex()}
+	price := "75822340000000000000000" // 75822.34e18
+	amount := "10000000000000000"      // 0.01e18 BTC
+
+	vaultBuyOrder := &storage.Order{
+		OrderID: "vault-buy-1", Trader: makerVaultAddr.Hex(), Pair: pair, Side: "buy",
+		Price: price, Amount: amount, Filled: "0", Status: "open", Nonce: 0, CreatedAt: now, ExpiresAt: now + 3600,
+	}
+	vBuy := match.BuildSignedOrder(vaultBuyOrder, &pairTokens)
+	sigV, err := match.SignOrder(signerKey, vBuy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vBuy.Signature = sigV
+	// 纯验签必须失败（恢复地址为签名者 EOA ≠ 金库），链上验签必须成功
+	if ok, _ := match.VerifySignedOrder(vBuy); ok {
+		t.Fatal("pure ecrecover verify of a vault order must be false (signer != vault)")
+	}
+	if ok, err := match.VerifySignedOrderOnChain(ctx, rpc, settlementAddr.Hex(), vBuy); err != nil || !ok {
+		t.Fatalf("on-chain ERC-1271 verify of vault order: ok=%v err=%v", ok, err)
+	}
+	t.Logf("vault order: pure verify=false, on-chain verify=true (ERC-1271)")
+
+	takerSellOrder := &storage.Order{
+		OrderID: "taker-sell-1", Trader: taker.Hex(), Pair: pair, Side: "sell",
+		Price: price, Amount: amount, Filled: "0", Status: "open", Nonce: 0, CreatedAt: now, ExpiresAt: now + 3600,
+	}
+	tSell := match.BuildSignedOrder(takerSellOrder, &pairTokens)
+	sigT, err := match.SignOrder(takerKey, tSell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tSell.Signature = sigT
+
+	// 落锁：金库买（锁 USDT）+ taker 卖（锁 BTC）
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, vBuy, "buy"); err != nil {
+		t.Fatalf("LockOrder(vault buy): %v", err)
+	} else {
+		t.Logf("vault buy locked tx=%s", tx)
+	}
+	// 幂等：同一订单再次落锁不得发交易，直接成功
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, vBuy, "buy"); err != nil {
+		t.Fatalf("LockOrder(vault buy) retry: %v", err)
+	} else if tx != "" {
+		t.Fatalf("idempotent LockOrder must not send a tx, got %s", tx)
+	} else {
+		t.Logf("LockOrder idempotency verified: retry returned success with no tx")
+	}
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, tSell, "sell"); err != nil {
+		t.Fatalf("LockOrder(taker sell): %v", err)
+	} else {
+		t.Logf("taker sell locked tx=%s", tx)
+	}
+
+	trade := &storage.Trade{
+		TradeID: "vault-trade-1", MakerOrder: tSell, TakerOrder: vBuy,
+		TokenIn: btcAddr.Hex(), TokenOut: usdtAddr.Hex(), Amount: amount, Price: price,
+	}
+	txHash, err := SubmitTrade(ctx, trade, rpc, settlementAddr.Hex(), anvilOwnerKeyHex)
+	if err != nil {
+		t.Fatalf("SubmitTrade(vault buy): %v", err)
+	}
+	t.Logf("vault buy settled tx=%s", txHash)
+
+	vaultBal := func(token, user common.Address) *big.Int {
+		return call(vault, "balanceOf", token, user)[0].(*big.Int)
+	}
+	expect := func(name string, got, want *big.Int) {
+		if got.Cmp(want) != 0 {
+			t.Errorf("%s = %s, want %s", name, got, want)
+		}
+		t.Logf("assert %s = %s OK", name, got)
+	}
+	// 手续费 1bp：金库得 0.01 - 0.000001 = 0.009999 BTC；付 758.2234 USDT
+	expect("makerVault BTC in trading vault", vaultBal(btcAddr, makerVaultAddr), wei("9999000000000000"))
+	expect("makerVault USDT in trading vault", vaultBal(usdtAddr, makerVaultAddr), wei("241776600000000000000"))
+	// NAV = 241.7766 + 0.009999×75822.34 = 999.92417766
+	expect("makerVault totalAssets (NAV)", call(makerVault, "totalAssets")[0].(*big.Int), wei("999924177660000000000"))
+	expect("depositor shares unchanged", call(makerVault, "balanceOf", owner)[0].(*big.Int), amt1000)
+	expect("vault nonce", call(settlement, "getCurrentNonce", makerVaultAddr)[0].(*big.Int), big.NewInt(1))
+	expect("taker nonce", call(settlement, "getCurrentNonce", taker)[0].(*big.Int), big.NewInt(1))
+}
+
+// ---- 回执定论（第二十七轮） ----
+//
+// lookupReceipt / waitMinedVerdict 对三种链上状态的定论：已上链成功（返回回执）、
+// 未知 hash（ErrTxDropped）、nonce 缺口导致滞留 mempool（ErrTxPending）。
+// 关键语义：超时后返回的错误必须区分「已 revert」与「未见回执」，提交器据此
+// 决定终态失败还是重试。
+func TestAnvilTxVerdict(t *testing.T) {
+	rpc := os.Getenv("BIT100_ANVIL_RPC")
+	if rpc == "" {
+		t.Skip("BIT100_ANVIL_RPC not set; skipping anvil e2e")
+	}
+	ctx := context.Background()
+	client, err := ethclient.Dial(rpc)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	chainID, err := client.ChainID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerKey, err := crypto.HexToECDSA(anvilOwnerKeyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := crypto.PubkeyToAddress(ownerKey.PublicKey)
+
+	// 已上链：普通转账 → 回执 status=1
+	nonce, err := client.PendingNonceAt(ctx, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient := common.HexToAddress("0x000000000000000000000000000000000000dead")
+	minedTx := types.NewTransaction(nonce, recipient, big.NewInt(1), 21000, gasPrice, nil)
+	signedMined, err := types.SignTx(minedTx, types.LatestSignerForChainID(chainID), ownerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SendTransaction(ctx, signedMined); err != nil {
+		t.Fatal(err)
+	}
+	// 先等上链：SendTransaction 只表示进 mempool，立即查回执会在出块前撞上
+	// NotFound（anvil 即时出块仍是异步的），被误判为 ErrTxPending。
+	if _, err := bind.WaitMined(ctx, client, signedMined); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := lookupReceipt(ctx, client, signedMined.Hash())
+	if err != nil {
+		t.Fatalf("lookupReceipt(mined): %v", err)
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("mined receipt status = %d, want 1", receipt.Status)
+	}
+	// waitMinedVerdict 对已上链成功的交易返回 hash、无错误
+	if hash, err := waitMinedVerdict(ctx, client, signedMined); err != nil || hash != signedMined.Hash().Hex() {
+		t.Fatalf("waitMinedVerdict(mined) = (%q, %v), want (%q, nil)", hash, err, signedMined.Hash().Hex())
+	}
+	t.Logf("mined tx verdict OK: %s", signedMined.Hash().Hex())
+
+	// 未知 hash：不在链上也不在 mempool → ErrTxDropped
+	unknown := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	if _, err := lookupReceipt(ctx, client, unknown); !errors.Is(err, ErrTxDropped) {
+		t.Fatalf("lookupReceipt(unknown) err = %v, want ErrTxDropped", err)
+	}
+	t.Logf("unknown hash verdict OK: ErrTxDropped")
+
+	// 滞留 mempool：nonce 缺口的交易（pending nonce + 1）进队列但永不上链
+	pendingKey, _ := crypto.GenerateKey()
+	pendingAddr := crypto.PubkeyToAddress(pendingKey.PublicKey)
+	fundNonce, err := client.PendingNonceAt(ctx, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fundTx := types.NewTransaction(fundNonce, pendingAddr, new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil), 21000, gasPrice, nil)
+	signedFund, err := types.SignTx(fundTx, types.LatestSignerForChainID(chainID), ownerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SendTransaction(ctx, signedFund); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bind.WaitMined(ctx, client, signedFund); err != nil {
+		t.Fatal(err)
+	}
+	pendingNonce, err := client.PendingNonceAt(ctx, pendingAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gapTx := types.NewTransaction(pendingNonce+1, recipient, big.NewInt(1), 21000, gasPrice, nil)
+	signedGap, err := types.SignTx(gapTx, types.LatestSignerForChainID(chainID), pendingKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SendTransaction(ctx, signedGap); err != nil {
+		t.Fatalf("send gap tx (expected to pool, not mine): %v", err)
+	}
+	if _, err := lookupReceipt(ctx, client, signedGap.Hash()); !errors.Is(err, ErrTxPending) {
+		t.Fatalf("lookupReceipt(gap tx) err = %v, want ErrTxPending", err)
+	}
+	t.Logf("queued tx verdict OK: ErrTxPending")
+	// waitMinedVerdict 在短超时内对滞留交易返回 hash + ErrTxPending（不是裸超时错误）
+	shortCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if hash, err := waitMinedVerdict(shortCtx, client, signedGap); !errors.Is(err, ErrTxPending) || hash != signedGap.Hash().Hex() {
+		t.Fatalf("waitMinedVerdict(pending) = (%q, %v), want (%q, ErrTxPending)", hash, err, signedGap.Hash().Hex())
+	}
+	t.Logf("waitMinedVerdict(pending) OK: hash + ErrTxPending")
 }

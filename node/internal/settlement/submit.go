@@ -9,7 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 
@@ -168,15 +167,15 @@ func SubmitTrade(ctx context.Context, t *storage.Trade, rpcURL, settlementAddr, 
 		return "", fmt.Errorf("settlement: submit settleTrade: %w", err)
 	}
 
-	receipt, err := bind.WaitMined(ctx, client, tx)
+	// 超时后按 hash 查回执定论（第二十七轮）：WaitMined 超时≠ revert——交易
+	// 可能刚上链成功（返回成功）、已 revert（返回 hash + 确定性错误），或
+	// 未上链（返回空 hash + 瞬时错误，提交器重试；下次尝试前先链上对账）。
+	hash, err := waitMinedVerdict(ctx, client, tx)
 	if err != nil {
-		return tx.Hash().Hex(), fmt.Errorf("settlement: wait mined: %w", err)
-	}
-	if receipt.Status != types.ReceiptStatusSuccessful {
-		return tx.Hash().Hex(), fmt.Errorf("settlement: settleTrade reverted on-chain, tx=%s", tx.Hash().Hex())
+		return hash, err
 	}
 
-	t.TxHash = tx.Hash().Hex()
+	t.TxHash = hash
 	return t.TxHash, nil
 }
 
@@ -198,8 +197,8 @@ func DecimalToWei(s string) *big.Int {
 // 合约只接受这两类「链上事实可验证」的归责：订单已过期、订单锁已被释放；其余失败
 // （参数错误、重复提交已成交订单、提交者自身问题、系统性故障）不在此列，gas 由提交者自担。
 const (
-	FailReasonOrderExpired  uint8 = 1 // 订单已过期（expiresAt < 当前时间，链上可验）
-	FailReasonLockReleased  uint8 = 2 // 订单锁已被释放/取消且未成交完（链上可验）
+	FailReasonOrderExpired uint8 = 1 // 订单已过期（expiresAt < 当前时间，链上可验）
+	FailReasonLockReleased uint8 = 2 // 订单锁已被释放/取消且未成交完（链上可验）
 )
 
 // failureChargeABIJSON 为 Settlement.chargeFailedSettlement 的 ABI（自 contracts/out 提取）
@@ -257,14 +256,9 @@ func ChargeFailedSettlement(ctx context.Context, so *storage.SignedOrder, reason
 		return "", fmt.Errorf("settlement: submit chargeFailedSettlement: %w", err)
 	}
 
-	receipt, err := bind.WaitMined(ctx, client, tx)
-	if err != nil {
-		return tx.Hash().Hex(), fmt.Errorf("settlement: wait mined: %w", err)
-	}
-	if receipt.Status != types.ReceiptStatusSuccessful {
-		return tx.Hash().Hex(), fmt.Errorf("settlement: chargeFailedSettlement reverted on-chain, tx=%s", tx.Hash().Hex())
-	}
-	return tx.Hash().Hex(), nil
+	// 与 SubmitTrade 同口径：超时后按 hash 查回执定论（第二十七轮），不把
+	// 「未见回执」误记为确定性失败。
+	return waitMinedVerdict(ctx, client, tx)
 }
 
 // packFailureCharge 构造 chargeFailedSettlement 的 calldata（供单测校验 ABI 与参数编码）

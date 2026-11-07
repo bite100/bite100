@@ -3,6 +3,7 @@ package settlement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"testing"
@@ -198,6 +199,53 @@ func TestSubmitterOnChainRevertIsTerminal(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if rec.count() != 1 {
 		t.Errorf("SubmitFn 调用 %d 次, want 1（终态不重试）", rec.count())
+	}
+}
+
+// WaitMined 超时但未见回执（第二十七轮回归）：SubmitFn 返回空 hash + 瞬时
+// 错误时，提交器必须重试到次数上限——绝不能像链上 revert 那样一次即终态，
+// 也不得把该 hash 记为确定性失败的 tx（超时时交易可能仍在排队/刚上链）。
+func TestSubmitterTimeoutWithoutHashRetries(t *testing.T) {
+	db := openTestStore(t)
+	rec := &submitRecorder{fn: func(int) (string, error) {
+		return "", errors.New("settlement: wait mined timeout (receipt lookup: transaction pending)")
+	}}
+	_ = newTestSubmitter(t, db, rec, &fakeChain{filled: map[string][2]int64{}}, 2)
+
+	if err := db.InsertTrade(submitterTestTrade("timeout")); err != nil {
+		t.Fatal(err)
+	}
+	got := waitTradeStatus(t, db, "timeout", storage.SettleFailed)
+	if rec.count() != 2 {
+		t.Errorf("SubmitFn 调用 %d 次, want 2（超时未见回执应重试至上限，而非一次终态）", rec.count())
+	}
+	if got.TxHash != "" {
+		t.Errorf("超时未见回执不得记录失败 tx, got %q", got.TxHash)
+	}
+	if got.SettleAttempts != 2 {
+		t.Errorf("attempts = %d, want 2", got.SettleAttempts)
+	}
+}
+
+// 交易已广播但仍在 mempool（第二十七轮回归）：SubmitFn 返回 (hash,
+// ErrTxPending) 时，提交器必须重试到次数上限——带 hash 也不得记终态，
+// 失败记录里也不得留下该 hash（它只是「未定论」，不是失败 tx）。
+func TestSubmitterPendingHashRetries(t *testing.T) {
+	db := openTestStore(t)
+	rec := &submitRecorder{fn: func(int) (string, error) {
+		return "0xpending", fmt.Errorf("%w: 0xpending", ErrTxPending)
+	}}
+	_ = newTestSubmitter(t, db, rec, &fakeChain{filled: map[string][2]int64{}}, 2)
+
+	if err := db.InsertTrade(submitterTestTrade("pending")); err != nil {
+		t.Fatal(err)
+	}
+	got := waitTradeStatus(t, db, "pending", storage.SettleFailed)
+	if rec.count() != 2 {
+		t.Errorf("SubmitFn 调用 %d 次, want 2（pending 应重试至上限，而非一次终态）", rec.count())
+	}
+	if got.TxHash != "" {
+		t.Errorf("pending 交易不得记入失败 tx, got %q", got.TxHash)
 	}
 }
 

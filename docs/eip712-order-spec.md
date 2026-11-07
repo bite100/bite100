@@ -19,7 +19,7 @@
 | name | `比特100`（UTF-8 字节，与三方源码中的字符串字面量一致） |
 | version | `1` |
 | chainId | 部署所在链（Sepolia = 11155111；本地 anvil = 31337） |
-| verifyingContract | Settlement 合约地址（Sepolia = `0x493Da680973F6c222c89eeC02922E91F1D9404a0`） |
+| verifyingContract | Settlement 合约地址（Sepolia = `0x9f0636839b6699d530F954F87B939DA6f56c9890`；Base Sepolia = `0x230887F48960E29066d9D3F593cB68F73Adccc85`；第 27 轮起，旧地址 Sepolia `0x549690D6…` / Base `0x6291E0F2…` 已取代） |
 
 合约侧在运行时以 `block.chainid` 与 `address(this)` 计算，天然绑定部署实例；
 前端/节点侧由链配置提供（节点可用 `match.SetDomain` 覆盖，用于本地链）。
@@ -144,3 +144,30 @@ reason, gasUsedClaimed)`，由结算调用方（owner/治理/白名单 relayer�
 - 不可归责的失败不扣用户：撮合参数错误、重复提交已成交订单、提交者自身问题、
   参考价未配置、链/节点系统性故障——gas 由提交者自担。
 - 存入/提取 Vault 的 gas 由用户自付，不在本规则内。
+
+## 8. 合约用户与 ERC-1271（第二十七轮，2026-11-08）
+
+订单的 `userAddress` 可以是合约（金库等），由注册签名者 EOA 代签。
+三方校验规则（与 `contracts/src/Settlement.sol`、
+`node/internal/match/signature.go`、`frontend/src/services/orderSigningTypes.ts`
+逐字一致）：
+
+- **签名域不变**：仍用 §1 的域（name `比特100`、version `1`、chainId、
+  verifyingContract = 当前 Settlement 地址）。合约用户不改变域参数；
+  Settlement 换地址时域随之切换（第 27 轮：Sepolia
+  `0x9f063683…`、Base Sepolia `0x230887F4…`）。
+- **链上校验（Settlement.verifyOrderSignature）**：先走 EOA `ecrecover`
+  快速路径；失败且 `userAddress` 有代码时，走 ERC-1271 回退——
+  `SignatureChecker.isValidSignatureNow(userAddress, digest, signature)`
+ （staticcall，失败 → false）。`_verifySignedOrder` 委托同一函数。
+- **合约侧（MakerVault.isValidSignature）**：仅当签名者已注册且未暂停时
+  返回 magic `0x1626ba7e`，否则 `0xffffffff`；永不 revert。撤单 digest
+  同样走 `isValidSignature`（CancelOrder 结构见 §5）。
+- **节点 API 校验**：`POST /api/order` 与撤单先做纯 ecrecover 校验；
+  失败且配置了 RPC 与 settlement 地址时，改走链上校验（10 秒超时；
+  RPC 错误 → fail-closed 400）。纯校验通过的 EOA 订单不受影响。
+- **nonce**：合约用户的 nonce 仍由 `Settlement.getCurrentNonce(userAddress)`
+  读取，与 EOA 订单同一规则（§2）。
+- **安全边界**：ERC-1271 回退只认 `isValidSignature` 的返回值；金库合约
+  的签名者注册表由 owner 控制，签名者只能交易、不能提款（见
+  `docs/round27-maker-vault-2026-11-08.md` §1.1、§8）。
