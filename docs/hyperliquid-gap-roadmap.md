@@ -180,6 +180,7 @@ Bit100 的叙事是 P2P 无服务器，但现实检查：GitHub Pages 托管前�
 - ✅ CrossChainBridge 缺陷全修：删除 5 分钟时间戳过期校验（改 guid/nonce + `(srcEid, transferId)` 双层防重放）、统一 transferId/guid 双侧落账（目标侧记 Completed）、`retryBridge` 真实实现、原生代币路径明确 revert、空 options 自动构造。期间发现仓库内 oapp-evm 原为本地桩，已换 vendored 官方包（oapp-evm 0.4.1 + protocol/messagelib 3.0.168）。forge 84/84。
 - ✅ 双链部署桥 + setPeer 双向互信读回 + TKA 映射/桥费（0.1 TKA）/Base 侧 1000 TKA 流动性就绪。
 - ✅ 真实跨链一笔达标：10 TKA Sepolia → Base Sepolia，源 tx `0x87bf8577…`、guid `0x002635f7…`、目标 tx `0x1292b9f1…`，到账 9.9 TKA（扣桥费 0.1），双侧余额/落账对齐，重放被 Endpoint 以 `LZ_PayloadHashNotFound` 拒绝。全量记录见 `docs/bridge-deployment-2026-11-07.md`。
+- ✅ 桥迁移（2026-11-07 第十六轮）：第十五轮换代币后桥重部署并绑定新 TKA——Sepolia 桥 `0x7a0eCbc2…`、Base Sepolia 桥 `0xA7722A0b…`，setPeer/映射/桥费/Base 侧 1000 新 TKA 流动性读回全过；前端 chains 新增 `crossChainBridge` 配置、桥页默认取配置地址并对齐组件 ABI。新一笔真实跨链达标：源 tx `0x054b2264…`、guid `0x1d11a42e…`、到账 9.9 TKA、双边 Completed、重放被拒。**DVN 仍为 1-of-1（LayerZero Labs），主网多 DVN 门禁不变**。全量记录见 `docs/round16-bridge-migration-2026-11-07.md`。
 - ⚠️ **DVN 未达标（如实）**：两路径生效配置经 `getConfig` 读回均为默认 **1-of-1（仅 LayerZero Labs）**，不满足「required DVN ≥2」硬前提；测试网第二家 DVN 无可用部署（Google 测试网证明不可靠，见部署记录 §4），未假装配置。主网前必须跑 `contracts/script/ConfigureDvns.s.sol` 并读回存档。
 - ⏳ M2b/M2c：CCIP、Wormhole 按 `docs/bridge-abstraction.md` 的统一接口接入（报价/发起/状态 + fee/时延/安全标签），交易者自选桥。
 - 验收（原）：一笔 TKA 从 Sepolia 跨到第二条链，源链 `BridgeInitiated` 与目标链 `BridgeCompleted` 两侧事件可查、金额一致（扣桥费后）、目标链桥/用户余额到账；同一条消息重放被拒。—— LZ 实现已达成。

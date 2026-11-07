@@ -1,5 +1,10 @@
 # LayerZero 桥部署记录（第九轮 / M2a，2026-11-07）
 
+> ⚠️ 后续迁移（2026-11-07 第十六轮）：第十五轮重部署新 TKA 后，本记录中的桥
+> 地址已过时（仍绑定上一代 TKA）。现行桥地址与迁移 E2E 见
+> `docs/round16-bridge-migration-2026-11-07.md`。本文 §4 的 DVN 1-of-1 现状与
+> 主网门禁结论继续有效。
+
 > 范围：修复 CrossChainBridge 缺陷集 → 换官方 OApp 底座 → Sepolia ↔ Base Sepolia
 > 双链部署 + setPeer 互信 → 代币映射/桥费/流动性 → 一笔真实跨链到账。
 > 桥抽象层与多桥路线见 `docs/bridge-abstraction.md`；DVN 安全现状见本文 §4（如实记录）。

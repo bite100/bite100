@@ -103,6 +103,8 @@ Base Sepolia 证据（同一测试，BIT100_E2E_CHAIN_ID=84532）：
   Base Sepolia 0xB4eaE3903B6734EA06f8fdD4Bd20a048D3F914EC）仍绑定上一代 TKA；
   前端桥页面现指向新代币，与旧桥的绑定不一致——桥接功能需单独一轮重新部署
   桥并重新配对后才可用（多 DVN 主网门禁不变）。
+  → **已由第十六轮完成迁移**：新桥双链部署并绑定本轮新 TKA，前端接线与真实
+  跨链 E2E 均已通过，见 `docs/round16-bridge-migration-2026-11-07.md`。
 - 旧部署（第五/八轮地址）合约仍在链上，未做迁移；TokenRegistry/ChainConfig
   仍为空表（填充需治理提案，与此前状态一致）。
 - 节点启用落锁需配置 `chain.vault` 并设置环境变量 `VAULT_LOCKER_PRIVATE_KEY`
