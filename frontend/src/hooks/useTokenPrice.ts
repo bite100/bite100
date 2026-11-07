@@ -69,11 +69,17 @@ export function useTokenPrice(
   return { price, loading, error, refetch: fetchPrice }
 }
 
-/** 交易对对应的 CoinGecko ID（用于显示市场参考价；测试网代币可用主网等价物代替） */
-export const PAIR_COINGECKO_IDS: Record<string, { base: string; quote: string }> = {
-  'TKA/TKB': { base: 'ethereum', quote: 'tether' },
-  'TKB/TKA': { base: 'tether', quote: 'ethereum' },
-}
+/**
+ * 交易对对应的 CoinGecko ID（用于显示市场参考价）。
+ *
+ * 第二十三轮口径修正：此前这里把 TKA/TKB 映射到 ethereum/tether，等于拿 ETH 的美元价
+ * 冒充 TKA 的「市场参考价」展示——TKA/TKB 是本所测试代币，世界上不存在它们的外部报价，
+ * 任何外部价格挂上去都是伪造。故映射清空：只有当交易对的代币本身就是 CoinGecko 收录的
+ * 同一资产时，才允许在此显式登记；未登记的交易对不显示任何外部参考价。
+ * 下单面板的参考价统一走第二十三轮参考价层（services/referencePrice.ts）：
+ * Chainlink 预言机喂价优先，无喂价的对用本所成交/盘口数据兜底。
+ */
+export const PAIR_COINGECKO_IDS: Record<string, { base: string; quote: string }> = {}
 
 export function usePairMarketPrice(
   pair: string,
@@ -84,9 +90,10 @@ export function usePairMarketPrice(
   loading: boolean
   error: Error | null
 } {
-  const ids = PAIR_COINGECKO_IDS[pair] ?? { base: 'ethereum', quote: 'tether' }
-  const base = useTokenPrice(ids.base, refreshIntervalMs)
-  const quote = useTokenPrice(ids.quote, refreshIntervalMs)
+  // 未登记映射的交易对不取任何外部价格（空 ID 时 useTokenPrice 直接返回空结果、不发请求）
+  const ids = PAIR_COINGECKO_IDS[pair]
+  const base = useTokenPrice(ids?.base ?? '', refreshIntervalMs)
+  const quote = useTokenPrice(ids?.quote ?? '', refreshIntervalMs)
   return {
     basePrice: base.price,
     quotePrice: quote.price,

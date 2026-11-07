@@ -244,6 +244,24 @@ button.book-row:hover {
   font-weight: 500;
 }
 
+/* 第二十三轮：参考价数值（可点击预填价格框） */
+.ref-price-value {
+  font-family: var(--b100-font-num);
+  font-weight: 600;
+  color: var(--b100-accent, #ff007a);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline dashed;
+  text-underline-offset: 3px;
+  font-size: inherit;
+}
+
+.ref-price-value:hover {
+  text-decoration-style: solid;
+}
+
 /* ---------- 页签表格 ---------- */
 .trade-table-wrap {
   overflow-x: auto;

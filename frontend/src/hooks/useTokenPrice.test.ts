@@ -6,9 +6,9 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { useTokenPrice, usePairMarketPrice, PAIR_COINGECKO_IDS } from './useTokenPrice'
 
 describe('PAIR_COINGECKO_IDS', () => {
-  it('has TKA/TKB and TKB/TKA', () => {
-    expect(PAIR_COINGECKO_IDS['TKA/TKB']).toEqual({ base: 'ethereum', quote: 'tether' })
-    expect(PAIR_COINGECKO_IDS['TKB/TKA']).toEqual({ base: 'tether', quote: 'ethereum' })
+  it('does not map TKA/TKB to any external asset (第二十三轮：测试代币无外部报价，禁止冒充)', () => {
+    expect(PAIR_COINGECKO_IDS['TKA/TKB']).toBeUndefined()
+    expect(PAIR_COINGECKO_IDS['TKB/TKA']).toBeUndefined()
   })
 })
 
@@ -82,26 +82,43 @@ describe('usePairMarketPrice', () => {
     vi.restoreAllMocks()
   })
 
-  it('returns base and quote prices for known pair', async () => {
-    ;(globalThis.fetch as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({
-        json: () =>
-          Promise.resolve({
-            ethereum: { usd: 2000, usd_24h_change: 0 },
-          }),
-      })
-      .mockResolvedValueOnce({
-        json: () =>
-          Promise.resolve({
-            tether: { usd: 1, usd_24h_change: 0 },
-          }),
-      })
+  it('returns null prices and never fetches for an unmapped pair (TKA/TKB)', async () => {
     const { result } = renderHook(() => usePairMarketPrice('TKA/TKB', 0))
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false)
     })
-    expect(result.current.basePrice?.usd).toBe(2000)
-    expect(result.current.quotePrice?.usd).toBe(1)
+    expect(result.current.basePrice).toBeNull()
+    expect(result.current.quotePrice).toBeNull()
+    expect(result.current.error).toBeNull()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('returns base and quote prices for an explicitly mapped pair', async () => {
+    PAIR_COINGECKO_IDS['ETH/USDT'] = { base: 'ethereum', quote: 'tether' }
+    try {
+      ;(globalThis.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          json: () =>
+            Promise.resolve({
+              ethereum: { usd: 2000, usd_24h_change: 0 },
+            }),
+        })
+        .mockResolvedValueOnce({
+          json: () =>
+            Promise.resolve({
+              tether: { usd: 1, usd_24h_change: 0 },
+            }),
+        })
+      const { result } = renderHook(() => usePairMarketPrice('ETH/USDT', 0))
+
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false)
+      })
+      expect(result.current.basePrice?.usd).toBe(2000)
+      expect(result.current.quotePrice?.usd).toBe(1)
+    } finally {
+      delete PAIR_COINGECKO_IDS['ETH/USDT']
+    }
   })
 })

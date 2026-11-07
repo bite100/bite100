@@ -99,6 +99,8 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
             recommendedPrice={recommendedPrice || undefined}
             externalPrice={pricePick}
             book={book}
+            lastTradePrice={stats.lastPrice}
+            lastTradeAtSec={stats.lastTradeAt}
             onSuccess={() => setOrdersRefresh((n) => n + 1)}
           />
         </Paper>

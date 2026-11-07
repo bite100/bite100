@@ -21,6 +21,13 @@ import {
   VaultTopUpError,
   type VaultTopUpStep,
 } from './vaultTopUp'
+import { useReferencePrice } from '../../hooks/useReferencePrice'
+import {
+  REFERENCE_SOURCE_LABELS,
+  DEVIATION_WARN_PCT,
+  deviationPct,
+  isDeviationWarning,
+} from '../../services/referencePrice'
 import type { Signer } from 'ethers'
 
 const DEFAULT_PAIR = 'TKA/TKB'
@@ -41,6 +48,9 @@ interface LimitOrderFormWidgetProps {
   externalPrice?: { price: string; seq: number }
   /** 当前盘口快照（市价单保护价与预估成交用；人类单位） */
   book?: { bids: MarketBookLevel[]; asks: MarketBookLevel[] }
+  /** 本所最近成交价与时间（第二十三轮参考价兜底来源；无成交为 null） */
+  lastTradePrice?: number | null
+  lastTradeAtSec?: number | null
   onSuccess?: () => void
 }
 
@@ -49,7 +59,19 @@ function trimNum(n: number, digits = 6): string {
   return String(parseFloat(n.toFixed(digits)))
 }
 
-export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, externalPrice, book, onSuccess }: LimitOrderFormWidgetProps) {
+/** 参考价数据时间展示（本地时区，精确到秒） */
+function fmtDataTime(sec: number): string {
+  return new Date(sec * 1000).toLocaleString('zh-CN', {
+    hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, externalPrice, book, lastTradePrice, lastTradeAtSec, onSuccess }: LimitOrderFormWidgetProps) {
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
   const [orderType, setOrderType] = useState<'limit' | 'market'>('limit')
   const [price, setPrice] = useState(recommendedPrice ?? '')
@@ -132,6 +154,25 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
       : null
   /** 本单实际签名价格：限价单为填写价，市价单为自动推导的保护价 */
   const effectivePrice = orderType === 'market' ? protectionStr : price
+
+  // ---- 第二十三轮：参考价（预言机优先；无喂价的对走本所成交/盘口兜底，口径见 services/referencePrice.ts） ----
+  const refState = useReferencePrice(DEFAULT_PAIR, {
+    lastTradePrice: lastTradePrice ?? null,
+    lastTradeAtSec: lastTradeAtSec ?? null,
+    book,
+  })
+  const refOk = refState.status === 'ok' ? refState.ref : null
+  /** 点击参考价预填：语义是「按参考价挂限价单」，与盘口点击带入一致地切回限价单 */
+  const handleRefPriceClick = () => {
+    if (!refOk) return
+    setOrderType('limit')
+    setPrice(trimNum(refOk.price, 6))
+  }
+  // 偏离警告只针对限价单手填价格（市价单价格由盘口推导，不在此列）；只警告、不拦截提交
+  const limitPriceNum = parseFloat(price)
+  const devPct = refOk && orderType === 'limit' ? deviationPct(limitPriceNum, refOk.price) : null
+  const deviationWarning =
+    refOk != null && orderType === 'limit' && isDeviationWarning(limitPriceNum, refOk.price)
 
   // ---- Part D：差额预估（用已加载的可用额做面板展示；提交前会重新读链上值复核） ----
   const displayShortfall = (() => {
@@ -331,6 +372,44 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
           onChange={(v) => setOrderType(v === 'market' ? 'market' : 'limit')}
           description={orderType === 'limit' ? '按指定价格或更优价格成交，未成交部分挂在盘口' : '立即按盘口最优价逐档成交，未成交部分自动取消'}
         />
+        {/* 第二十三轮：参考价行（来源/时效口径见 services/referencePrice.ts）+ 产品内说明 */}
+        <div>
+          {refState.status === 'loading' && (
+            <Text size="xs" c="dimmed">
+              参考价加载中…
+            </Text>
+          )}
+          {refState.status === 'ok' && (
+            <Text size="xs" c="dimmed">
+              参考价{' '}
+              <button type="button" className="ref-price-value" onClick={handleRefPriceClick} title="点击填入价格框">
+                {trimNum(refState.ref.price, 6)} {QUOTE_SYMBOL}
+              </button>{' '}
+              · {REFERENCE_SOURCE_LABELS[refState.ref.source]} · 数据时间 {fmtDataTime(refState.ref.updatedAtSec)}
+              （点击价格可填入）
+            </Text>
+          )}
+          {refState.status === 'stale' && (
+            <Text size="xs" c="orange">
+              参考价暂时不可用（数据过期）：预言机最近更新于 {fmtDataTime(refState.updatedAtSec)}
+              ，太旧的价格不再展示以免误导报价；没有参考价也可以照常下单。
+            </Text>
+          )}
+          {refState.status === 'error' && (
+            <Text size="xs" c="orange">
+              参考价暂时不可用（读取失败），可稍后刷新重试；没有参考价也可以照常下单。
+            </Text>
+          )}
+          {refState.status === 'none' && (
+            <Text size="xs" c="dimmed">
+              新市场，暂无参考价：这个交易对还没有成交记录、盘口也未形成双边报价，价格由挂单双方自行约定。
+            </Text>
+          )}
+          <Text size="xs" c="dimmed" mt={2}>
+            参考价是什么：报价时的对照值，不是成交价。有 Chainlink
+            预言机喂价的交易对读预言机聚合价；没有的用本所最近成交价或盘口中间价（来源已在上方标注）。实际成交价以盘口挂单为准，可能与参考价不同。
+          </Text>
+        </div>
         {orderType === 'limit' ? (
           <NumberInput
             label={`价格 (${QUOTE_SYMBOL})`}
@@ -436,6 +515,13 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
             </Text>
             <StandardConnect />
           </div>
+        )}
+        {deviationWarning && refOk && devPct != null && (
+          <Text size="sm" c="red" fw={600} role="alert">
+            ⚠ 你填的价格 {trimNum(limitPriceNum, 6)} {QUOTE_SYMBOL} 比参考价 {trimNum(refOk.price, 6)}{' '}
+            {QUOTE_SYMBOL} {devPct >= 0 ? '高' : '低'} {Math.abs(devPct).toFixed(1)}%——偏离超过{' '}
+            {DEVIATION_WARN_PCT}% 时请先确认不是手误。P2P 挂单允许任意报价，若是故意报价可直接继续下单，这里只提醒、不拦截。
+          </Text>
         )}
         <Button
           className="btn-primary-action"
