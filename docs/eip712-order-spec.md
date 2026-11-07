@@ -159,7 +159,9 @@ reason, gasUsedClaimed)`，由结算调用方（owner/治理/白名单 relayer�
 - **链上校验（Settlement.verifyOrderSignature）**：先走 EOA `ecrecover`
   快速路径；失败且 `userAddress` 有代码时，走 ERC-1271 回退——
   `SignatureChecker.isValidSignatureNow(userAddress, digest, signature)`
- （staticcall，失败 → false）。`_verifySignedOrder` 委托同一函数。
+ （staticcall，失败 → false）。`_verifySignedOrder` 委托同一函数。注意：
+  签名 `v` 值非法（如非 27/28）时 `_splitSignature` 会 revert 而非返回
+  false（真实签名恒为 27/28；节点 eth_call 路径对此 fail-closed）。
 - **合约侧（MakerVault.isValidSignature）**：仅当签名者已注册且未暂停时
   返回 magic `0x1626ba7e`，否则 `0xffffffff`；永不 revert。撤单 digest
   同样走 `isValidSignature`（CancelOrder 结构见 §5）。
@@ -167,7 +169,9 @@ reason, gasUsedClaimed)`，由结算调用方（owner/治理/白名单 relayer�
   失败且配置了 RPC 与 settlement 地址时，改走链上校验（10 秒超时；
   RPC 错误 → fail-closed 400）。纯校验通过的 EOA 订单不受影响。
 - **nonce**：合约用户的 nonce 仍由 `Settlement.getCurrentNonce(userAddress)`
-  读取，与 EOA 订单同一规则（§2）。
+  读取，与 EOA 订单同一规则（§2）。注意：Settlement 换地址重部署后，
+  `orderFilled`/`usedNonces` 从 0 起算（域绑定地址，digest 随之改变），
+  旧订单/旧锁在新域下全部失效，须释放旧锁 → 按新域重签 → 重落锁。
 - **安全边界**：ERC-1271 回退只认 `isValidSignature` 的返回值；金库合约
   的签名者注册表由 owner 控制，签名者只能交易、不能提款（见
   `docs/round27-maker-vault-2026-11-08.md` §1.1、§8）。

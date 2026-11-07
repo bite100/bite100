@@ -30,10 +30,16 @@ npm 169/169 + 构建通过。
 
 迁移前已确认安全：节点数据库无 pending / retrying / submitting 状态的交易
 （Sepolia 仅 2 笔 failed，均为第 26 轮 E2E 的 terminal 失败；Base 全部
-settled），因此新 Settlement 的空 `orderFilled` 状态不会重复结算任何已
-成交订单。部分成交的开放订单：未来按剩余量成交是安全的；但旧的全量
-fill 若被过期重提交，新 Settlement 无法从链上识别已成交部分——切入时
-零待结算交易是本次迁移的前提，见 §9。
+settled），且**切入时点的开放订单盘点为零**（切入前全部订单均为 filled 或
+cancelled，验收时复核节点 orders 表确认；链上亦核实 maker 锁已全额消费、
+无残留锁定余额）。**订正（验收修复）**：域绑定 Settlement 地址，换地址即换
+digest，旧订单/旧锁在新域下**全部失效**——部分成交的开放订单也不能在新
+Settlement 下按剩余量续结（原 §0/§9"可安全续结"的说法错误）；旧订单如需
+继续，须先释放旧锁、再由用户按新域重签、再重落锁。另须留档：新实例的
+`orderFilled`/`usedNonces` 从 0 起算，防重复结算的真正屏障是 Vault 锁
+（已结算订单的锁已被消费），而非空 `orderFilled`——已结算订单若在新域下
+重签重锁，仍可再结算一次（须签名者本人配合，可利用性低）。未来如再有类
+似迁移， operative 前提是"排空待结算队列 **与** 开放订单"，见 §9。
 
 ## 1. 合约改动
 
@@ -228,7 +234,8 @@ Sepolia 回执 33,336,612–33,430,804 gas；MockERC20 BTC 部署：Sepolia
 块与无用 `types` 导入）。`node/internal/settlement/submitter.go`：
 settleOnce 分支——带 hash 的错误仅当**不是** `ErrTxPending` /
 `ErrTxDropped`（`errors.Is` 判断）时才记 terminal 失败；pending /
-dropped 带 hash 时记录 hash 并重试（重试前先对账，已上链的 fill 不会
+dropped 带 hash 时只记入日志（**不**写入 trade 记录的 TxHash 字段，单测
+亦断言 TxHash 为空）并重试（重试前先对账，已上链的 fill 不会
 重复提交）。
 
 ### 5.2 sendVaultTx 超时定论 + 动态 gas
@@ -342,7 +349,9 @@ NAV（从而反映在你的份额价值）里。
 **存款（deposit / mint）**
 - 调用 `MakerVault.deposit(USDT 数量, 你的地址)`：USDT 自动转入交易
   Vault 参与做市，你按当时 NAV 得到份额。首次存款 1000 USDT 得 1000
-  份额（1:1）；之后按 `份额 = 金额 × 总份额 / 总资产` 计算。
+  份额（1:1）；之后按 `份额 = 金额 × 总份额 / 总资产` 计算。**先 approve**：
+  存款前须先调 USDT 的 `approve(MakerVault 地址, 金额)` 授权金库划款，
+  否则 deposit 会 revert。
 - 存款没有锁定期，但存入后资金即进入交易 Vault，取款受 §锁仓 约束。
 
 **取款（redeem / withdraw）**
@@ -354,21 +363,28 @@ NAV（从而反映在你的份额价值）里。
 
 **暂停（pause）**
 - 仅 owner 可执行。暂停后：不能再存款、签名者不能再下单；**取款与签名者
-  轮换不受影响**。暂停是紧急制动，不是冻结资金。
+  轮换不受影响**。暂停是紧急制动，不是冻结资金。但注意：**已落锁的订单在
+  暂停期间仍可结算**（`settleTrade` 不检查金库暂停）——暂停挡的是新下单，
+  不是已承诺成交的履行。
 
 **签名者（signer）**
 - 金库的交易由注册签名者代签：签名者只能下单交易，**不能提款、不能动
   你的份额**。签名者由 owner 通过 `setSigner(地址, 角色, 是否授权)`
-  注册/轮换/撤销；角色分 `MARKET_MAKER`（做市）、
+  注册/轮换/撤销；角色参数须传 `keccak256("MARKET_MAKER")` 这类 bytes32
+  值，不是名字字符串。角色分 `MARKET_MAKER`（做市）、
   `SETTLEMENT_SUBMITTER`（结算提交）、`RELAYER`（中继），同一注册表
-  未来承载结算与 nodeless 中继角色。
+  未来承载结算与 nodeless 中继角色。**注意：角色本身不限制签单**——
+  `isValidSignature` 只认签名者是否已注册，任一角色的签名者都能签做市单；
+  角色是未来的准入标记，不是签单权限。
 - 当前签名者：`0x05040D9e…`（双链同地址），仅 `MARKET_MAKER` 角色。
 
 **策略与价格**
-- 金库围绕 Chainlink 参考价报价（BTC/USDT 用 BTC/USD feed，ETH/USDT 用
-  ETH/USD feed）；没有已核实 feed 的交易对不报假价、不交易。
+- Chainlink feed 只用于 NAV 定价（BTC/USDT 用 BTC/USD feed，ETH/USDT 用
+  ETH/USD feed）；金库合约内**没有任何报价/策略逻辑**，报价是签名者的链下
+  自主行为。没有已核实 feed 的交易对不报假价、不交易。
 - 若 Chainlink feed 过期（超过心跳 3 倍），NAV 计算会失败而非用过期价
-  ——这是 fail-closed 设计，存款与取款都会暂停直到价格恢复。
+  ——这是 fail-closed 设计，存款与取款都会暂停直到价格恢复。**例外**：金
+  库 base 余额为 0 时跳过价格查询，feed 过期不影响 NAV。
 
 **费用**
 - 交易费 0.01%（每笔成交扣），99% 进 FeeDistributor、1% 归开发者。
@@ -391,10 +407,13 @@ NAV（从而反映在你的份额价值）里。
    因此部署了新 Settlement 并切换了 Vault 指针、节点配置与前端域。
    请主聊天复核：此迁移是否接受为本轮的正式方案（旧 Settlement 在测试
    网已取代；主网部署时直接按新版部署即可，不存在主网迁移问题）。
-2. **迁移前提已满足但须留档**：切入时节点库零待结算交易；部分成交的
-   开放订单在新 Settlement 下按剩余量成交安全，但旧全量 fill 若被过期
-   重提交，新 Settlement 的空 `orderFilled` 无法链上识别——测试网切入
-   前已排空，未来如再有类似迁移须同样先排空待结算队列。
+2. **迁移前提已满足但须留档（验收已订正）**：切入时节点库零待结算交易
+   **且**开放订单盘点为零（验收复核 orders 表：切入前订单全部 filled 或
+   cancelled；链上 maker 锁已全额消费，无残留锁定）。域绑定地址决定了旧订
+   单/旧锁在新域下全部失效，部分成交订单也不能按剩余量续结——旧订单如需
+   继续，须释放旧锁 → 用户按新域重签 → 重落锁。防重复结算的真正屏障是
+   Vault 锁而非空 `orderFilled`。未来如再有类似迁移，须同样先排空待结算
+   队列与开放订单。
 3. **金库前端页面**未在本轮做（存款/取款/NAV 展示需另起一轮或并入下
    一轮前端工作）。
 4. **Sepolia 部署者余额偏紧**（0.01163 ETH）：下一轮再做 Sepolia 重部署
@@ -413,3 +432,18 @@ NAV（从而反映在你的份额价值）里。
   （meterKeepBps 7600 等）；主网前仍需按第 21 轮记录在主网分叉重新校准，
   失败扣费功能上线时保持 OFF。
 - DVN 1-of-1 主网门禁不变；主网零操作；Ren 的钱包未动。
+- Sepolia 订单簿遗留一笔 stale open 订单（验收发现）：第 27 轮 E2E 的
+  maker 卖单 `order_r27e2e-sepolia-1794073769_countersell`（0.01 BTC @
+  $75,696.05）成交已链上结算，但节点库 maker 腿 filled 未更新，订单仍以
+  open 状态展示在订单簿，2026-11-08 03:49 JST 过期。无资金风险：链上锁
+  已全额消费（maker Vault BTC 可用余额 = 余额 = 0.03e18），且 maker 的新
+  Settlement nonce 已推进，重结算会因 nonce 不匹配而 revert。
+- 提交器 `MaxAttempts` 默认 12 次耗尽后，长期 pending 的交易记终态失败且
+  `process()` 永久跳过、不再对账（第 26 轮既有结构，本轮修复效力以 12 次
+  为界）。
+- `ErrTxPending` 时 `lockForBookOrder`/`processOrderLocally` 仍把 pending
+  当失败拒单（与 `lock.go` 注释"不得按失败处理"不符；用户须多次重发，
+  幂等检查兜底，无资金风险）——待下一轮修调用方。
+- `NodeRewards.setSettlement` 在新旧实例上皆为死路径（nodeRewards/founder/
+  usdtToken 全为 0）；将来若配置奖励，须同步调 `setSettlement`，否则
+  `settleTradesBatchWithGasSavings` 整批 revert。

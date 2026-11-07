@@ -16,9 +16,13 @@ import "../src/Vault.sol";
 ///         usdtToken/feeCap 均为 0，与旧实例一致），然后把交易 Vault 的 settlement
 ///         指针切到新实例，再部署 MakerVault 并登记签名者。
 ///         仅测试网；一次广播完成双链各自部署（按链分别跑）。
-///         迁移窗口：切换前须确认无 pending/retry/submitting 中的成交（否则新
-///         Settlement 的空 orderFilled 状态可能对已结算成交重复结算）；部分成交
-///         的未结订单可安全续结（新实例累计从 0 起算）。
+///         迁移窗口：切换前须同时确认两件事——（1）无 pending/retry/submitting
+///         中的成交；（2）无带锁的开放订单。域绑定 Settlement 地址，换地址即换
+///         digest，旧订单/旧锁在新域下全部失效（部分成交订单也不能按剩余量续
+///         结）；旧订单如需继续，须先释放旧锁、再由用户按新域重签、再重落锁。
+///         另注意新实例的 orderFilled/usedNonces 从 0 起算：防重复结算的真正
+///         屏障是 Vault 锁（已结算订单的锁已被消费），已结算订单若在新域下重签
+///         重锁仍可再结算一次——切入前须排空待结算队列与开放订单。
 ///         必需环境变量：PRIVATE_KEY（Vault/Settlement/MakerVault owner = 部署者）、
 ///         VAULT_ADDRESS、FEE_DISTRIBUTOR_ADDRESS、OLD_SETTLEMENT_ADDRESS、
 ///         ASSET（金库资产，如 USDT）、BASE_TOKEN（金库标的，如 BTC/ETH）、
