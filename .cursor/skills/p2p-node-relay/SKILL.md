@@ -11,7 +11,7 @@ description: P2P 节点、libp2p + 公共 bootstrap + DHT 发现（去中心化�
 
 ## 不可变约束（优化时勿破坏）
 
-1. **relay 模式**：`--mode=relay` 轻量运行，仅 GossipSub + WebSocket API，无撮合/存储。
+1. **relay 模式**：`--mode-relay` 轻量运行，仅 GossipSub + WebSocket API，无撮合/存储。
 2. **领奖地址必填**：-reward-wallet 或 REWARD_WALLET 或 config.reward_wallet，未设置拒绝启动。
 3. **Gossip 主题**：与 orderbook-match、Phase3 设计一致，勿随意增删。
 4. **节点发现**：采用 libp2p + 公共 bootstrap + DHT 发现（去中心化发现）；network.bootstrap 多 addr，-connect 直连。

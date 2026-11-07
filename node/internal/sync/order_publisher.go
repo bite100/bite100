@@ -34,7 +34,7 @@ func NewOrderPublisher(h host.Host, ps *pubsub.PubSub) (*OrderPublisher, error) 
 	}
 	
 	for _, name := range topicNames {
-		topic, err := ps.Join(name)
+		topic, err := joinTopicOnce(ps, name)
 		if err != nil {
 			return nil, err
 		}

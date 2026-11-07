@@ -89,7 +89,7 @@ func (os *OrderSubscriber) Start(ctx context.Context) error {
 }
 
 func (os *OrderSubscriber) subscribeNewOrders(ctx context.Context) error {
-	topic, err := os.pubsub.Join(TopicOrderNew)
+	topic, err := joinTopicOnce(os.pubsub, TopicOrderNew)
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func (os *OrderSubscriber) subscribeNewOrders(ctx context.Context) error {
 }
 
 func (os *OrderSubscriber) subscribeCancelOrders(ctx context.Context) error {
-	topic, err := os.pubsub.Join(TopicOrderCancel)
+	topic, err := joinTopicOnce(os.pubsub, TopicOrderCancel)
 	if err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func (os *OrderSubscriber) subscribeCancelOrders(ctx context.Context) error {
 }
 
 func (os *OrderSubscriber) subscribeTradeExecuted(ctx context.Context) error {
-	topic, err := os.pubsub.Join(TopicTradeExecuted)
+	topic, err := joinTopicOnce(os.pubsub, TopicTradeExecuted)
 	if err != nil {
 		return err
 	}

@@ -54,7 +54,7 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "配置文件路径")
 	connectAddr := flag.String("connect", "", "连接到的节点 multiaddr")
 	rewardWallet := flag.String("reward-wallet", "", "领奖钱包地址（必填；可通过本参数、环境变量 REWARD_WALLET 或配置文件 reward_wallet 设置）")
-	modeRelay := flag.Bool("mode=relay", false, "轻量 relay 模式：仅 GossipSub + WebSocket，不启撮合引擎与存储，适合公共 relay 节点")
+	modeRelay := flag.Bool("mode-relay", false, "轻量 relay 模式：仅 GossipSub + WebSocket，不启撮合引擎与存储，适合公共 relay 节点")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -97,11 +97,11 @@ func main() {
 	}
 	cfg.Node.RewardWallet = w
 
-	// --mode=relay：强制轻量 relay（只广播 + WS，不撮合、不落库）
+	// --mode-relay：强制轻量 relay（只广播 + WS，不撮合、不落库）
 	if *modeRelay {
 		cfg.Node.Type = "relay"
 		cfg.Match.Pairs = nil
-		log.Print("已启用 --mode=relay：仅 GossipSub + WebSocket，不启撮合与存储")
+		log.Print("已启用 --mode-relay：仅 GossipSub + WebSocket，不启撮合与存储")
 	}
 
 	// 监听地址（-port 覆盖配置）
@@ -173,7 +173,7 @@ func main() {
 		exitFatalf("OrderPublisher: %v", err)
 	}
 
-	// 5. 撮合引擎（match 启用；relay 仅在配置了 pairs 时启用，--mode=relay 时 Pairs 已清空故不启）
+	// 5. 撮合引擎（match 启用；relay 仅在配置了 pairs 时启用，--mode-relay 时 Pairs 已清空故不启）
 	var matchEngine *match.Engine
 	var router *match.Router
 	var registry *match.Registry
@@ -215,7 +215,7 @@ func main() {
 		}()
 	}
 
-	// 6. 存储（storage 或 带撮合的 relay/match 落库；--mode=relay 不落库）
+	// 6. 存储（storage 或 带撮合的 relay/match 落库；--mode-relay 不落库）
 	needStore := cfg.Node.Type == "storage" || (cfg.Node.Type == "relay" && enableMatch) || (enableMatch && cfg.Node.Type == "match")
 	var store *storage.DB
 	if needStore {
