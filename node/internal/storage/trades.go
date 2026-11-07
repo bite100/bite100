@@ -7,6 +7,22 @@ import (
 	"time"
 )
 
+// SignedOrder 与合约 Settlement.SignedOrder 对齐的签名订单（EIP-712 统一规范，见 docs/eip712-order-spec.md）。
+// AmountIn/AmountOut/Price 为最小单位整数的十进制字符串（Price 为 1e18 定点缩放）。
+type SignedOrder struct {
+	OrderID     string `json:"orderId"`
+	UserAddress string `json:"userAddress"`
+	TokenIn     string `json:"tokenIn"`
+	TokenOut    string `json:"tokenOut"`
+	AmountIn    string `json:"amountIn"`
+	AmountOut   string `json:"amountOut"`
+	Price       string `json:"price"`
+	Timestamp   int64  `json:"timestamp"`
+	ExpiresAt   int64  `json:"expiresAt"`
+	Nonce       int64  `json:"nonce"`
+	Signature   string `json:"signature"`
+}
+
 // Trade 成交记录（与 Phase2/Phase3 设计一致；含结算用 maker/taker/tokenIn/Out/amountIn/Out）
 type Trade struct {
 	TradeID      string `json:"tradeId"`
@@ -24,6 +40,9 @@ type Trade struct {
 	Fee          string `json:"fee,omitempty"`
 	Timestamp    int64  `json:"timestamp"`
 	TxHash       string `json:"txHash,omitempty"`
+	// MakerOrder/TakerOrder 为双方的完整签名订单（撮合时由引擎填充），链上验签结算必需；不落库
+	MakerOrder *SignedOrder `json:"-"`
+	TakerOrder *SignedOrder `json:"-"`
 }
 
 // InsertTrade 插入成交记录
