@@ -62,6 +62,7 @@ type ChainConfig struct {
 	RPCURL           string   `yaml:"rpc_url"`
 	ChainID          int64    `yaml:"chain_id"`
 	Settlement       string   `yaml:"settlement"`        // Settlement 合约地址（EIP-712 域 verifyingContract）；空则用签名域默认值
+	Vault            string   `yaml:"vault"`             // Vault 合约地址（挂单锁定，第十五轮）；空则不启用落锁，locker 私钥走环境变量 VAULT_LOCKER_PRIVATE_KEY
 	AMMPool          string   `yaml:"amm_pool"`          // AMMPool 合约地址
 	Token0           string   `yaml:"token0"`            // token0 地址（用于 pair 标识）
 	Token1           string   `yaml:"token1"`            // token1 地址

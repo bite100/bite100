@@ -21,6 +21,9 @@ package settlement
 //   BIT100_SEPOLIA_VAULT / BIT100_SEPOLIA_FEEDIST / BIT100_SEPOLIA_SETTLEMENT
 //   BIT100_SEPOLIA_TOKENA / BIT100_SEPOLIA_TOKENB
 // 可选：BIT100_E2E_CHAIN_ID 期望链 ID（默认 11155111；多链同构验证时传目标链，如 84532）
+// 第十五轮起：结算前必须先落锁（部署脚本已把 locker 设为部署者）；本测试在结算前
+// 以 owner 身份为双方订单落锁并断言锁定量，结算后断言锁定清零。目标 Vault 必须是
+// 第十五轮新部署（旧 Vault 无锁定接口）。
 
 import (
 	"context"
@@ -277,8 +280,39 @@ func TestSepoliaE2E(t *testing.T) {
 	t.Logf("feeDistributor developer: %s", developer)
 	preDevA, preDevB := wallet(tokenAContract, developer), wallet(tokenBContract, developer)
 
-	// ---- 真实上链结算（部署者作为 owner 提交；合约侧验签） ----
+	// ---- 挂单锁定（第十五轮）：部署者即 locker，maker 卖锁 100 TKA、taker 买锁 200 TKB ----
 	ownerPrivHex := os.Getenv("BIT100_SEPOLIA_OWNER_KEY")
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, trade.MakerOrder, "sell"); err != nil {
+		t.Fatalf("LockOrder(maker): %v", err)
+	} else {
+		t.Logf("maker locked tx=%s", tx)
+	}
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, trade.TakerOrder, "buy"); err != nil {
+		t.Fatalf("LockOrder(taker): %v", err)
+	} else {
+		t.Logf("taker locked tx=%s", tx)
+	}
+	{
+		client2, err := ethclient.Dial(rpc)
+		if err != nil {
+			t.Fatalf("dial for lock check: %v", err)
+		}
+		defer client2.Close()
+		_, lockedM, _, err := VaultBalances(ctx, client2, vaultAddr.Hex(), maker, tokenAAddr)
+		if err != nil {
+			t.Fatalf("VaultBalances(maker): %v", err)
+		}
+		_, lockedT, _, err := VaultBalances(ctx, client2, vaultAddr.Hex(), taker, tokenBAddr)
+		if err != nil {
+			t.Fatalf("VaultBalances(taker): %v", err)
+		}
+		if lockedM.Cmp(wei("100000000000000000000")) != 0 || lockedT.Cmp(wei("200000000000000000000")) != 0 {
+			t.Fatalf("locks: maker=%s (want 100 TKA) taker=%s (want 200 TKB)", lockedM, lockedT)
+		}
+		t.Logf("locks verified: maker 100 TKA / taker 200 TKB")
+	}
+
+	// ---- 真实上链结算（部署者作为 owner 提交；合约侧验签、消费锁定） ----
 	txHash, err := SubmitTrade(ctx, trade, rpc, settlementAddr.Hex(), ownerPrivHex)
 	if err != nil {
 		t.Fatalf("SubmitTrade: %v", err)
@@ -326,6 +360,21 @@ func TestSepoliaE2E(t *testing.T) {
 	}
 	for _, b := range bad {
 		t.Error(b)
+	}
+
+	// ---- 结算后锁定应清零 ----
+	{
+		client3, err := ethclient.Dial(rpc)
+		if err == nil {
+			_, lockedM, _, _ := VaultBalances(ctx, client3, vaultAddr.Hex(), maker, tokenAAddr)
+			_, lockedT, _, _ := VaultBalances(ctx, client3, vaultAddr.Hex(), taker, tokenBAddr)
+			if lockedM.Sign() != 0 || lockedT.Sign() != 0 {
+				t.Errorf("locks after settle: maker=%s taker=%s, want 0/0", lockedM, lockedT)
+			} else {
+				t.Logf("locks cleared after settle")
+			}
+			client3.Close()
+		}
 	}
 
 	// ---- 重放：同一成交再次提交必须失败 ----

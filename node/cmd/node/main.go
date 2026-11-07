@@ -24,6 +24,7 @@ import (
 	"github.com/P2P-P2P/p2p/node/internal/match"
 	"github.com/P2P-P2P/p2p/node/internal/p2p"
 	"github.com/P2P-P2P/p2p/node/internal/relay"
+	"github.com/P2P-P2P/p2p/node/internal/settlement"
 	"github.com/P2P-P2P/p2p/node/internal/storage"
 	"github.com/P2P-P2P/p2p/node/internal/sync"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -176,11 +177,12 @@ func main() {
 	var matchEngine *match.Engine
 	var router *match.Router
 	var registry *match.Registry
+	var pairTokens map[string]match.PairTokens
 	localPairs := make([]string, 0)
 
 	enableMatch := cfg.Node.Type == "match" || (cfg.Node.Type == "relay" && len(cfg.Match.Pairs) > 0)
 	if enableMatch {
-		pairTokens := make(map[string]match.PairTokens)
+		pairTokens = make(map[string]match.PairTokens)
 		for pair, pt := range cfg.Match.Pairs {
 			pairTokens[pair] = match.PairTokens{Token0: pt.Token0, Token1: pt.Token1}
 			localPairs = append(localPairs, pair)
@@ -228,6 +230,22 @@ func main() {
 	wsServer := api.NewWSServer()
 	go wsServer.Run()
 
+	// 挂单锁定（第十五轮）：配置 chain.vault 且环境变量 VAULT_LOCKER_PRIVATE_KEY
+	// 存在时启用；未启用时节点行为与此前一致（订单直接入簿、不落锁）。
+	var locker *vaultLocker
+	if cfg.Chain.Vault != "" {
+		if key := os.Getenv("VAULT_LOCKER_PRIVATE_KEY"); key != "" {
+			settlementAddr := cfg.Chain.Settlement
+			if settlementAddr == "" {
+				settlementAddr = match.CurrentDomain().VerifyingContract
+			}
+			locker = &vaultLocker{rpcURL: cfg.Chain.RPCURL, vault: cfg.Chain.Vault, settlement: settlementAddr, keyHex: key, pairs: pairTokens}
+			log.Printf("[lock] 挂单锁定已启用（vault=%s）", cfg.Chain.Vault)
+		} else {
+			log.Printf("[lock] 已配置 chain.vault 但缺少 VAULT_LOCKER_PRIVATE_KEY，锁定未启用")
+		}
+	}
+
 	// 8. 订单处理 Handler：新订单入簿并撮合，成交广播
 	handler := &orderMatchHandler{
 		engine:    matchEngine,
@@ -236,6 +254,7 @@ func main() {
 		ws:        wsServer,
 		router:    router,
 		registry:  registry,
+		locker:    locker,
 	}
 	subscriber := sync.NewOrderSubscriberWithSecurity(ps, handler, perPeerLimiter, reputation)
 	if err := subscriber.Start(ctx); err != nil {
@@ -392,6 +411,61 @@ type orderMatchHandler struct {
 	ws        *api.WSServer
 	router    *match.Router
 	registry  *match.Registry
+	locker    *vaultLocker
+}
+
+// vaultLocker 节点侧挂单锁定驱动（第十五轮）：订单接受时落锁、撤单时释放。
+// locker 私钥来自环境变量，不落配置文件；启用条件见 main 中的构造处。
+type vaultLocker struct {
+	rpcURL     string
+	vault      string
+	settlement string
+	keyHex     string
+	pairs      map[string]match.PairTokens
+}
+
+func (l *vaultLocker) signedOrder(order *storage.Order) (*storage.SignedOrder, error) {
+	pt, ok := l.pairs[order.Pair]
+	if !ok {
+		return nil, fmt.Errorf("未知交易对 %s", order.Pair)
+	}
+	return match.BuildSignedOrder(order, &pt), nil
+}
+
+// lockForBookOrder 订单入簿前落锁：可用余额校验与验签在 Vault/LockOrder 内完成。
+func (l *vaultLocker) lockForBookOrder(order *storage.Order) error {
+	so, err := l.signedOrder(order)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	_, tx, err := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so, order.Side)
+	if err != nil {
+		return err
+	}
+	log.Printf("[lock] 订单 %s 已落锁 tx=%s", order.OrderID, tx)
+	return nil
+}
+
+// releaseForOrder 撤单时按订单摘要释放剩余锁定。
+func (l *vaultLocker) releaseForOrder(order *storage.Order) error {
+	so, err := l.signedOrder(order)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	digest, err := settlement.OrderDigestByRPC(ctx, l.rpcURL, l.settlement, so)
+	if err != nil {
+		return err
+	}
+	tx, err := settlement.ReleaseOrderLock(ctx, l.rpcURL, l.vault, l.keyHex, digest)
+	if err != nil {
+		return err
+	}
+	log.Printf("[lock] 订单 %s 锁定已释放 tx=%s", order.OrderID, tx)
+	return nil
 }
 
 func (h *orderMatchHandler) OnNewOrder(order *storage.Order) error {
@@ -429,6 +503,15 @@ func (h *orderMatchHandler) OnNewOrder(order *storage.Order) error {
 
 // processOrderLocally 本地处理订单（撮合或仅转发到 WS）
 func (h *orderMatchHandler) processOrderLocally(order *storage.Order) error {
+	// 挂单锁定（第十五轮）：启用锁定时先落锁再入簿；落锁失败（可用余额不足、
+	// 验签不过等）拒绝该订单，不入簿、不落库。重启恢复路径直接 AddOrder 不经
+	// 此处——锁定在首次接受时已上链、跨重启保留，无需重复落锁。
+	if h.locker != nil {
+		if err := h.locker.lockForBookOrder(order); err != nil {
+			log.Printf("[lock] 订单 %s 落锁失败，拒绝入簿: %v", order.OrderID, err)
+			return nil
+		}
+	}
 	if h.engine != nil {
 		h.engine.EnsurePair(order.Pair)
 		if h.engine.AddOrder(order) {
@@ -478,6 +561,15 @@ func (h *orderMatchHandler) OnCancelOrder(cancel *sync.CancelRequest) error {
 		existing, _ := h.store.GetOrder(cancel.OrderID)
 		if existing != nil {
 			_ = h.store.UpdateOrderStatus(cancel.OrderID, "cancelled", existing.Filled)
+		}
+	}
+	// 挂单锁定：撤单释放剩余锁定（失败仅记日志——锁定可能已被结算全部消费，
+	// 此时 Vault 释放会 revert，不应阻断撤单本身）。
+	if h.locker != nil && h.store != nil {
+		if existing, _ := h.store.GetOrder(cancel.OrderID); existing != nil {
+			if err := h.locker.releaseForOrder(existing); err != nil {
+				log.Printf("[lock] 撤单 %s 释放锁定未成（可能已被结算消费）: %v", cancel.OrderID, err)
+			}
 		}
 	}
 	return nil

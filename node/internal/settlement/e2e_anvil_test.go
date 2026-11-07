@@ -191,6 +191,7 @@ func TestAnvilE2E(t *testing.T) {
 	}
 
 	do(vault, ownerKey, "setSettlement", settlementAddr)
+	do(vault, ownerKey, "setLocker", owner, true) // 第十五轮：owner 为测试 locker
 
 	// ---- 充值到 Vault ----
 	amt100 := new(big.Int).Mul(big.NewInt(100), e18)
@@ -255,7 +256,47 @@ func TestAnvilE2E(t *testing.T) {
 	}
 	t.Logf("matched trade id=%s amount=%s tokenIn=%s tokenOut=%s", trade.TradeID, trade.Amount, trade.TokenIn, trade.TokenOut)
 
-	// ---- 真实上链结算（owner 作为结算方提交；合约侧验签） ----
+	// ---- 挂单锁定（第十五轮）：未落锁先结算应被拒 ----
+	if _, err := SubmitTrade(ctx, trade, rpc, settlementAddr.Hex(), anvilOwnerKeyHex); err == nil {
+		t.Fatal("settle without lock should fail (Vault: order not locked)")
+	} else {
+		t.Logf("settle without lock correctly failed: %v", err)
+	}
+	// 部署脚本已把 locker 设为部署者（owner）；节点驱动落锁：maker 卖、taker 买
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, trade.MakerOrder, "sell"); err != nil {
+		t.Fatalf("LockOrder(maker): %v", err)
+	} else {
+		t.Logf("maker locked tx=%s", tx)
+	}
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, trade.TakerOrder, "buy"); err != nil {
+		t.Fatalf("LockOrder(taker): %v", err)
+	} else {
+		t.Logf("taker locked tx=%s", tx)
+	}
+	{
+		client, err := ethclient.Dial(rpc)
+		if err != nil {
+			t.Fatalf("dial for lock check: %v", err)
+		}
+		defer client.Close()
+		_, lockedM, _, err := VaultBalances(ctx, client, vaultAddr.Hex(), maker, tokenAAddr)
+		if err != nil {
+			t.Fatalf("VaultBalances(maker): %v", err)
+		}
+		if lockedM.Cmp(wei("100000000000000000000")) != 0 {
+			t.Fatalf("maker locked = %s, want 100 TKA", lockedM)
+		}
+		_, lockedT, _, err := VaultBalances(ctx, client, vaultAddr.Hex(), taker, tokenBAddr)
+		if err != nil {
+			t.Fatalf("VaultBalances(taker): %v", err)
+		}
+		if lockedT.Cmp(wei("200000000000000000000")) != 0 {
+			t.Fatalf("taker locked = %s, want 200 TKB (100 TKA × price 2)", lockedT)
+		}
+		t.Logf("locks verified: maker 100 TKA / taker 200 TKB")
+	}
+
+	// ---- 真实上链结算（owner 作为结算方提交；合约侧验签、消费锁定） ----
 	txHash, err := SubmitTrade(ctx, trade, rpc, settlementAddr.Hex(), anvilOwnerKeyHex)
 	if err != nil {
 		t.Fatalf("SubmitTrade: %v", err)
@@ -281,6 +322,21 @@ func TestAnvilE2E(t *testing.T) {
 	expect("feeDistributor TKB", call(tokenB, "balanceOf", feeDistAddr)[0].(*big.Int), wei("20000000000000000"))
 	expect("maker nonce", call(settlement, "getCurrentNonce", maker)[0].(*big.Int), big.NewInt(1))
 	expect("taker nonce", call(settlement, "getCurrentNonce", taker)[0].(*big.Int), big.NewInt(1))
+
+	// ---- 结算后锁定应清零 ----
+	{
+		client, err := ethclient.Dial(rpc)
+		if err != nil {
+			t.Fatalf("dial for post-settle lock check: %v", err)
+		}
+		defer client.Close()
+		_, lockedM, _, _ := VaultBalances(ctx, client, vaultAddr.Hex(), maker, tokenAAddr)
+		_, lockedT, _, _ := VaultBalances(ctx, client, vaultAddr.Hex(), taker, tokenBAddr)
+		if lockedM.Sign() != 0 || lockedT.Sign() != 0 {
+			t.Fatalf("locks after settle: maker=%s taker=%s, want 0/0", lockedM, lockedT)
+		}
+		t.Logf("locks cleared after settle")
+	}
 
 	// ---- 重放：同一成交再次提交必须失败 ----
 	if _, err := SubmitTrade(ctx, trade, rpc, settlementAddr.Hex(), anvilOwnerKeyHex); err == nil {
