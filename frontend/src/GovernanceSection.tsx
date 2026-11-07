@@ -220,7 +220,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     return (
       <div className="card vault-section">
         <h2>治理</h2>
-        <p className="hint">治理合约尚未在当前链部署，治理功能暂不可用。</p>
+        <p className="hint">治理合约尚未在当前链部署，治理功能暂不可用。部署后可在此查看提案、投票并执行已通过的提案。</p>
       </div>
     )
   }
@@ -228,7 +228,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
   return (
     <div className="card vault-section governance-section">
       <h2>治理</h2>
-      <p className="hint">查看治理提案，参与投票并执行已通过的提案。投票资格限活跃集成员，投票时需提交 merkletool 生成的活跃集证明（proof）。</p>
+      <p className="hint">治理用于调整交易手续费等协议参数。流程：创建提案 → 投票期 7 天 → 支持票超过活跃集人数一半即通过 → 经过 2 天时间锁 → 执行生效。活跃集是由节点按贡献选出的投票成员名单，以 Merkle 根的形式记录在链上；只有名单内成员可以投票，投票时需提交一份证明（proof）向合约证明自己在名单内——链上只保存名单的 Merkle 根、不保存完整名单，所以需要这份证明。</p>
 
       <h3 className="gov-sub">
         提案列表
@@ -397,7 +397,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
       </button>
 
       <h3 className="gov-sub">投票</h3>
-      <p className="hint">投票资格限活跃集成员。「投票中」的提案可直接在提案卡片上点「支持」或「反对」；若提示需要活跃集证明，请运行 <code>go run ./cmd/merkletool -proof-for 您的地址</code> 生成 proof 后，在下方手动提交。</p>
+      <p className="hint">怎么投票：连接钱包，在「投票中」的提案卡片上点「支持」或「反对」即可，前提是当前账户在活跃集内。若投票时提示需要 proof（活跃集证明），在项目 node 目录运行 <code>go run ./cmd/merkletool -proof-for 你的钱包地址</code> 生成，再展开下方「高级：手动填写 proof」粘贴并提交。不在活跃集内的地址无法投票。</p>
       <details className="vote-advanced">
         <summary>高级：手动填写 proof</summary>
         <textarea
@@ -426,6 +426,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
       </details>
 
       <h3 className="gov-sub">执行</h3>
+      <p className="hint">执行已通过的提案：填写提案 ID 后点「执行」。前提：投票期已结束、支持票过半，且 2 天时间锁已到期（提案卡片状态显示「可执行」）。任何连接钱包的账户都可以执行，不限于提案创建者。</p>
       <div className="input-row">
         <input
           type="text"
@@ -440,7 +441,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
       </div>
 
       <h3 className="gov-sub">创建提案</h3>
-      <p className="hint">当前模板：调整交易手续费。填写新的手续费比例，并在下方高级选项中附上 merkletool 生成的活跃集证明后提交。</p>
+      <p className="hint">当前模板：调整交易手续费。步骤：填写新的手续费比例，展开下方高级选项，填入当前活跃集的人数与 Merkle 根（由 merkletool 按当前活跃集生成），再点「提交提案」。注意：提案提交后进入 7 天投票期，内容不可修改；同一参数在提案执行后一周内不可重复创建。</p>
       <div className="proposal-create-form">
         <div className="form-group">
           <label>新手续费比例（%）</label>
