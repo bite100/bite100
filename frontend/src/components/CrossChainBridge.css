@@ -132,3 +132,106 @@
     font-size: 16px; /* 避免 iOS 自动放大 */
   }
 }
+
+/* 第十九轮：三桥选择器与确认弹窗 */
+.bridge-selector {
+  margin: 1rem 0;
+}
+
+.bridge-selector-title {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.bridge-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.bridge-card {
+  border: 1px solid var(--b100-border, #e2e2e2);
+  border-radius: 12px;
+  padding: 0.875rem;
+  cursor: pointer;
+  background: var(--b100-surface, #fff);
+}
+
+.bridge-card.selected {
+  border-color: var(--b100-accent, #ff007a);
+  box-shadow: 0 0 0 1px var(--b100-accent, #ff007a);
+}
+
+.bridge-card.unavailable {
+  opacity: 0.65;
+}
+
+.bridge-card p {
+  margin: 0.375rem 0;
+  font-size: 0.875rem;
+}
+
+.bridge-card details {
+  font-size: 0.8125rem;
+  margin-top: 0.5rem;
+}
+
+.bridge-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+
+.bridge-card-badge {
+  font-size: 0.75rem;
+  color: var(--b100-accent, #ff007a);
+  font-weight: 600;
+}
+
+.bridge-card-badge.muted {
+  color: #888;
+}
+
+.bridge-risk-flag {
+  color: #b3261e;
+  font-weight: 600;
+}
+
+.bridge-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.bridge-confirm {
+  background: var(--b100-surface, #fff);
+  border-radius: 16px;
+  max-width: 560px;
+  width: 100%;
+  padding: 1.25rem;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.bridge-confirm ul {
+  padding-left: 1.25rem;
+}
+
+.bridge-confirm li {
+  margin: 0.375rem 0;
+  font-size: 0.9rem;
+}
+
+.bridge-confirm-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}

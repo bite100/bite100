@@ -24,6 +24,24 @@ export interface ChainConfig {
     tokenRegistry: string
     chainConfig: string
     crossChainBridge: string
+    // 第十九轮：WrappedTKA（TKA 的 1:1 包装代币，CCIP / Wormhole 桥的载体代币）
+    wrappedToken?: string
+  }
+  // 第十九轮：Chainlink CCIP 通道配置（官方 BurnMintTokenPool + 官方 Router）
+  ccip?: {
+    router: string
+    tokenPool: string
+    // CCIP 链选择器是 uint64 大整数，必须以字符串保存，避免 JS 精度丢失
+    chainSelector: string
+    tokenAdminRegistry: string
+  }
+  // 第十九轮：Wormhole 通道配置（官方 NTT：NttManager + WormholeTransceiver）
+  wormhole?: {
+    coreBridge: string
+    nttManager: string
+    nttTransceiver: string
+    // Wormhole 自己的链 ID（与 EVM chainId 不同）
+    wormholeChainId: number
   }
 }
 
@@ -50,6 +68,21 @@ const SEPOLIA: ChainConfig = {
     tokenRegistry: '0x9d50B1088E483f3A192A018c6a59cb9a5bddeDDd',
     chainConfig: '0x0f419cA52A47d2cA7Ae5f803cf010263012D2cA1',
     crossChainBridge: '0x7a0eCbc2Ffca2F8f7A1505Fa65e7E4759bE33d50',
+    wrappedToken: '0x03ED8203236Bb5409caA6330fDCd16559C914b9a',
+  },
+  // 第十九轮 CCIP（见 docs/round19-three-bridges-2026-11-07.md）
+  ccip: {
+    router: '0x0BF3dE8c5D3e8A2B34D2BEeB17ABfCeBaf363A59',
+    tokenPool: '0x68Bf313360021DcF4E359aD18c4506f622A3666d',
+    chainSelector: '16015286601757825753',
+    tokenAdminRegistry: '0x95F29FEE11c5C55d26cCcf1DB6772DE953B37B82',
+  },
+  // 第十九轮 Wormhole NTT（burning 模式，一致性等级 15 = finalized）
+  wormhole: {
+    coreBridge: '0x4a8bc80Ed5a4067f1CCf107057b8270E0cC11A78',
+    nttManager: '0x5a6Da05af0d9eF61BA85f610556357bEb1DC57D1',
+    nttTransceiver: '0x1bFb42E93F5860C76ef0E100E063083357b93C8A',
+    wormholeChainId: 10002,
   },
 }
 
@@ -76,6 +109,23 @@ const BASE_SEPOLIA: ChainConfig = {
     tokenRegistry: '0x8dC560038D392012C8562185E4C6Bf2Ce636E74D',
     chainConfig: '0x439423AB16A1A3dadf5415243501ee9e6984b813',
     crossChainBridge: '0xA7722A0ba7F2DA1d4D67D5191222C5e4c3835dBB',
+    // 注意：Base Sepolia 的 wTKA 地址字符串与 Sepolia 的 FeeDistributor 相同，是不同链上的不同合约；
+    // Base Sepolia 的 CCIP 池地址字符串又与 Sepolia 的 TKA 相同（CREATE nonce 巧合），引用时务必连链一起看。
+    wrappedToken: '0x346DE29B7fEe95F44A5b5385e87182F031E8E1B5',
+  },
+  // 第十九轮 CCIP（见 docs/round19-three-bridges-2026-11-07.md）
+  ccip: {
+    router: '0xD3b06cEbF099CE7DA4AcCf578aaebFDBd6e88a93',
+    tokenPool: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
+    chainSelector: '10344971235874465080',
+    tokenAdminRegistry: '0x736D0bBb318c1B27Ff686cd19804094E66250e17',
+  },
+  // 第十九轮 Wormhole NTT（burning 模式，一致性等级 15 = finalized）
+  wormhole: {
+    coreBridge: '0x79A1027a6A159502049F10906D333EC57E95F083',
+    nttManager: '0x9E45CCB3A5fef0E72bB8e97450b7FcF97EFC4d72',
+    nttTransceiver: '0x74da43aF57134AFa610ADB8fdA1031594b9a494f',
+    wormholeChainId: 10004,
   },
 }
 
