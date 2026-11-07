@@ -4,13 +4,13 @@ pragma solidity ^0.8.13;
 import {VmSafe} from "./Vm.sol";
 import {Variable, Type, TypeKind, LibVariable} from "./LibVariable.sol";
 
-/// @notice  A contract that parses a toml configuration file and load its
+/// @notice  A contract that parses a toml configuration file and loads its
 ///          variables into storage, automatically casting them, on deployment.
 ///
 /// @dev     This contract assumes a toml structure where top-level keys
 ///          represent chain ids or aliases. Under each chain key, variables are
 ///          organized by type in separate sub-tables like `[<chain>.<type>]`, where
-///          type must be: `bool`, `address`, `bytes32`, `uint`, `ìnt`, `string`, or `bytes`.
+///          type must be: `bool`, `address`, `bytes32`, `uint`, `int`, `string`, or `bytes`.
 ///
 ///          Supported format:
 ///          ```
@@ -37,8 +37,8 @@ contract StdConfig {
 
     VmSafe private constant vm = VmSafe(address(uint160(uint256(keccak256("hevm cheat code")))));
 
-    /// @dev Types: `bool`, `address`, `bytes32`, `uint`, `ìnt`, `string`, `bytes`.
-    uint8 private constant NUM_TYPES = 7;
+    /// @dev Types: `bool`, `address`, `bytes32`, `uint`, `int`, `string`, `bytes`.
+    uint8 private constant _NUM_TYPES = 7;
 
     // -- ERRORS ---------------------------------------------------------------
 
@@ -47,6 +47,7 @@ contract StdConfig {
     error ChainNotInitialized(uint256 chainId);
     error UnableToParseVariable(string key);
     error WriteToFileInForbiddenCtxt();
+    error MissingRpcEndpoint(uint256 chainId);
 
     // -- STORAGE (CACHE FROM CONFIG FILE) ------------------------------------
 
@@ -75,7 +76,7 @@ contract StdConfig {
     /// @notice Reads the TOML file and iterates through each top-level key, which is
     ///         assumed to be a chain name or ID. For each chain, it caches its RPC
     ///         endpoint and all variables defined in typed sub-tables like `[<chain>.<type>]`,
-    ///         where type must be: `bool`, `address`, `uint`, `bytes32`, `string`, or `bytes`.
+    ///         where type must be: `bool`, `address`, `bytes32`, `uint`, `int`, `string`, or `bytes`.
     ///
     ///         The constructor attempts to parse each variable first as a single value,
     ///         and if that fails, as an array of that type. If a variable cannot be
@@ -103,18 +104,22 @@ contract StdConfig {
             uint256 chainId = resolveChainId(chain_key);
             _chainKeys.push(chain_key);
 
-            // Cache the configure rpc endpoint for that chain.
-            // Falls back to `[rpc_endpoints]`. Panics if no rpc endpoint is configured.
+            // Cache the configured RPC endpoint for that chain.
+            // Falls back to `[rpc_endpoints]`. A chain section may exist only to carry
+            // config values, in which case no endpoint is needed, so a missing one is
+            // deferred to `getRpcUrl` instead of failing the whole load here.
             try vm.parseTomlString(content, string.concat("$.", chain_key, ".endpoint_url")) returns (
                 string memory url
             ) {
                 _rpcOf[chainId] = vm.resolveEnv(url);
             } catch {
-                _rpcOf[chainId] = vm.resolveEnv(vm.rpcUrl(chain_key));
+                try vm.rpcUrl(chain_key) returns (string memory url) {
+                    _rpcOf[chainId] = vm.resolveEnv(url);
+                } catch {}
             }
 
             // Iterate through all the available `TypeKind`s (except `None`) to create the sub-section paths
-            for (uint8 t = 1; t <= NUM_TYPES; t++) {
+            for (uint8 t = 1; t <= _NUM_TYPES; t++) {
                 TypeKind ty = TypeKind(t);
                 string memory typePath = string.concat("$.", chain_key, ".", ty.toTomlKey());
 
@@ -353,13 +358,18 @@ contract StdConfig {
     }
 
     /// @notice Reads the RPC URL for a specific chain id.
+    /// @dev    Reverts with `MissingRpcEndpoint` if the chain was configured without an
+    ///         endpoint. Loading such a chain is allowed, since its config values are
+    ///         still usable; only asking for the endpoint is an error.
     function getRpcUrl(uint256 chainId) public view returns (string memory) {
-        return _rpcOf[chainId];
+        string memory url = _rpcOf[chainId];
+        if (bytes(url).length == 0) revert MissingRpcEndpoint(chainId);
+        return url;
     }
 
     /// @notice Reads the RPC URL for the current chain.
     function getRpcUrl() public view returns (string memory) {
-        return _rpcOf[vm.getChainId()];
+        return getRpcUrl(vm.getChainId());
     }
 
     // -- SETTER FUNCTIONS (SINGLE VALUES) -------------------------------------
