@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { MantineProvider } from '@mantine/core'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WagmiProvider } from 'wagmi'
-import { RainbowKitProvider } from '@rainbow-me/rainbowkit'
+import { RainbowKitProvider, lightTheme } from '@rainbow-me/rainbowkit'
 import '@rainbow-me/rainbowkit/styles.css'
 import '@mantine/core/styles.css'
 import App from './App'
@@ -16,10 +16,17 @@ const queryClient = new QueryClient()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="dark">
+    <MantineProvider theme={theme} defaultColorScheme="light">
       <WagmiProvider config={wagmiConfig}>
         <QueryClientProvider client={queryClient}>
-          <RainbowKitProvider appInfo={{ appName: '比特100' }}>
+          <RainbowKitProvider
+            appInfo={{ appName: '比特100' }}
+            theme={lightTheme({
+              accentColor: '#FF007A',
+              accentColorForeground: 'white',
+              borderRadius: 'large',
+            })}
+          >
             <ServiceWorkerUpdate />
             <App />
           </RainbowKitProvider>

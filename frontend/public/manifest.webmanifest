@@ -5,12 +5,20 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone", "minimal-ui", "browser"],
-  "background_color": "#1A1B1E",
-  "theme_color": "#1A1B1E",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui",
+    "browser"
+  ],
+  "background_color": "#F7F7F8",
+  "theme_color": "#F7F7F8",
   "orientation": "portrait-primary",
   "lang": "zh-CN",
-  "categories": ["finance", "utilities"],
+  "categories": [
+    "finance",
+    "utilities"
+  ],
   "prefer_related_applications": false,
   "icons": [
     {
@@ -32,21 +40,39 @@
       "short_name": "存提",
       "description": "存取代币",
       "url": "/?tab=vault",
-      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [
+        {
+          "src": "/icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
     },
     {
       "name": "Swap",
       "short_name": "Swap",
       "description": "AMM 兑换",
       "url": "/?tab=swap",
-      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [
+        {
+          "src": "/icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
     },
     {
       "name": "订单簿",
       "short_name": "订单簿",
       "description": "限价单撮合",
       "url": "/?tab=orderbook",
-      "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+      "icons": [
+        {
+          "src": "/icon.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
     }
   ]
 }
