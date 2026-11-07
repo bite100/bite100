@@ -52,6 +52,31 @@ const SEPOLIA: ChainConfig = {
   },
 }
 
+// Base Sepolia 测试网（2026-11-07 同构部署：十合约全套，与 Sepolia 同构；见 docs/base-sepolia-deployment-2026-11-07.md）
+const BASE_SEPOLIA: ChainConfig = {
+  chainId: 84532,
+  name: 'Base Sepolia',
+  rpcUrl: 'https://sepolia.base.org',
+  blockExplorer: 'https://sepolia.basescan.org',
+  nativeCurrency: {
+    name: 'ETH',
+    symbol: 'ETH',
+    decimals: 18,
+  },
+  contracts: {
+    vault: '0xfb458224973c91ddBa3Fb5B55DAD337038768b21',
+    settlement: '0x1f81caafa089cfbeb953fc88d272d0a6181e2985',
+    token0: '0x1ee28c1c490727e49939c95032c749ea5b58b45f',
+    token1: '0x20a78bcb39ff510adba3d3aec9229a9583c5bdb3',
+    ammPool: '0x46ac37629a76b6cadce8bc21e5463c6f433bf29b',
+    contributorReward: '0x7f9371C8a519014eC1ec2Ade4388B627Ec82F8F5',
+    feeDistributor: '0xa4eaa449360239e1f719608236d087c23379d5a6',
+    governance: '0x59e4416C5ca7CB977d8225E5E38088B7c801eaeF',
+    tokenRegistry: '0x924A2ac5B56709a9284fB6f99e611F669006F8A7',
+    chainConfig: '0xFD170979c08Ab8f06cc01ea9D34CbD2478B6e93c',
+  },
+}
+
 // Ethereum 主网（待部署）
 const MAINNET: ChainConfig = {
   chainId: 1,
@@ -205,6 +230,7 @@ const OPTIMISM: ChainConfig = {
 // 所有链配置
 export const CHAIN_CONFIGS: Record<number, ChainConfig> = {
   [SEPOLIA.chainId]: SEPOLIA,
+  [BASE_SEPOLIA.chainId]: BASE_SEPOLIA,
   [MAINNET.chainId]: MAINNET,
   [BASE.chainId]: BASE,
   [ARBITRUM.chainId]: ARBITRUM,

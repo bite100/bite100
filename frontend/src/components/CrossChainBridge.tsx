@@ -24,7 +24,7 @@ const CROSS_CHAIN_BRIDGE_ABI = [
 
 // LayerZero EID（Endpoint ID）映射
 const LAYERZERO_EIDS: Record<number, number> = {
-  1: 30110,        // Ethereum Mainnet
+  1: 30101,        // Ethereum Mainnet
   8453: 30184,     // Base Mainnet
   42161: 30110,    // Arbitrum One
   137: 30109,      // Polygon
