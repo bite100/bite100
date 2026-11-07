@@ -36,7 +36,7 @@ export function LiquidityPoolInfo() {
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : '获取失败')
+          setError(err instanceof Error ? err.message : '数据加载失败')
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -60,7 +60,7 @@ export function LiquidityPoolInfo() {
   if (loading && !reserves) {
     return (
       <div className="card">
-        <h3 className="card-title">流动性池余额</h3>
+        <h3 className="card-title">AMM 流动性池</h3>
         <p className="public-data-hint">加载中…</p>
       </div>
     )
@@ -69,7 +69,7 @@ export function LiquidityPoolInfo() {
   if (error && !reserves) {
     return (
       <div className="card">
-        <h3 className="card-title">流动性池余额</h3>
+        <h3 className="card-title">AMM 流动性池</h3>
         <p className="public-data-hint muted">无法加载：{error}</p>
       </div>
     )
@@ -79,10 +79,10 @@ export function LiquidityPoolInfo() {
 
   return (
     <div className="card">
-      <h3 className="card-title">流动性池余额</h3>
+      <h3 className="card-title">AMM 流动性池</h3>
       <div className="fee-display-rows">
         <div className="fee-display-row">
-          <span className="label">TKA (Token A)</span>
+          <span className="label">TKA</span>
           <span className="value">
             {(Number(reserves.reserve0) / 1e18).toLocaleString(undefined, {
               maximumFractionDigits: 2,
@@ -91,7 +91,7 @@ export function LiquidityPoolInfo() {
           </span>
         </div>
         <div className="fee-display-row">
-          <span className="label">TKB (Token B)</span>
+          <span className="label">TKB</span>
           <span className="value">
             {(Number(reserves.reserve1) / 1e18).toLocaleString(undefined, {
               maximumFractionDigits: 2,
@@ -101,12 +101,12 @@ export function LiquidityPoolInfo() {
         </div>
         {tvl > 0 && (
           <div className="fee-display-row highlight">
-            <span className="label">总价值锁定 (TVL)</span>
+            <span className="label">总锁仓价值（TVL）</span>
             <span className="value">${tvl.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
           </div>
         )}
       </div>
-      <p className="public-data-hint">📊 公开数据，任何人可见 · 每 10 秒自动刷新</p>
+      <p className="public-data-hint">公开数据，无需连接钱包 · 每 10 秒自动刷新</p>
     </div>
   )
 }

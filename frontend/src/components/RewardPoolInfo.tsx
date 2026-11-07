@@ -47,7 +47,7 @@ export function RewardPoolInfo() {
         }
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : '获取失败')
+          setError(err instanceof Error ? err.message : '数据加载失败')
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -65,7 +65,7 @@ export function RewardPoolInfo() {
   if (loading && !balance) {
     return (
       <div className="card">
-        <h3 className="card-title">奖励池余额</h3>
+        <h3 className="card-title">贡献奖励池</h3>
         <p className="public-data-hint">加载中…</p>
       </div>
     )
@@ -74,7 +74,7 @@ export function RewardPoolInfo() {
   if (error && !balance) {
     return (
       <div className="card">
-        <h3 className="card-title">奖励池余额</h3>
+        <h3 className="card-title">贡献奖励池</h3>
         <p className="public-data-hint muted">无法加载：{error}</p>
       </div>
     )
@@ -84,7 +84,7 @@ export function RewardPoolInfo() {
 
   return (
     <div className="card">
-      <h3 className="card-title">奖励池余额</h3>
+      <h3 className="card-title">贡献奖励池</h3>
       <div className="fee-display-rows">
         <div className="fee-display-row">
           <span className="label">ETH</span>
@@ -93,7 +93,7 @@ export function RewardPoolInfo() {
           </span>
         </div>
         <div className="fee-display-row">
-          <span className="label">TKA (Token A)</span>
+          <span className="label">TKA</span>
           <span className="value">
             {(Number(balance.token0) / 1e18).toLocaleString(undefined, {
               maximumFractionDigits: 2,
@@ -102,7 +102,7 @@ export function RewardPoolInfo() {
           </span>
         </div>
         <div className="fee-display-row">
-          <span className="label">TKB (Token B)</span>
+          <span className="label">TKB</span>
           <span className="value">
             {(Number(balance.token1) / 1e18).toLocaleString(undefined, {
               maximumFractionDigits: 2,
@@ -111,7 +111,7 @@ export function RewardPoolInfo() {
           </span>
         </div>
       </div>
-      <p className="public-data-hint">💰 待分发奖励 · 公开数据，任何人可见</p>
+      <p className="public-data-hint">待分发的贡献奖励 · 公开数据，无需连接钱包</p>
     </div>
   )
 }

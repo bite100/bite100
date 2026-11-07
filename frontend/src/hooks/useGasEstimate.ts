@@ -41,7 +41,7 @@ export function useGasEstimate(enabled: boolean = true) {
         const totalCost = SETTLE_TRADE_GAS_LIMIT * gasPrice
         let suggestion: string | undefined
         if (totalCost > HIGH_GAS_THRESHOLD_WEI) {
-          suggestion = 'Gas 较高，建议稍后重试或等待网络空闲时交易'
+          suggestion = '当前 Gas 较高，可稍后再试或等待网络空闲时段'
         }
         if (cancelled) return
         setEstimate({

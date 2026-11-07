@@ -94,17 +94,17 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       // 获取 LayerZero EID
       const dstEid = LAYERZERO_EIDS[targetChainId]
       if (!dstEid) {
-        setEstimatedFee('无法估算费用')
+        setEstimatedFee('目标链暂不支持跨链，无法估算费用')
         return null
       }
 
       const [nativeFee] = await bridge.quoteBridgeFee(dstEid, payload, options)
       const feeFormatted = formatTokenAmount(nativeFee)
-      setEstimatedFee(`预计费用: ${feeFormatted} ETH`)
+      setEstimatedFee(`预计跨链费用：${feeFormatted} ETH`)
       return nativeFee
     } catch (e: any) {
       console.error('估算费用失败:', e)
-      setEstimatedFee('费用估算失败')
+      setEstimatedFee('费用估算失败，请重试')
       return null
     }
   }, [targetChainId, tokenAddress, amount, sourceChainId, bridgeAddress, account])
@@ -127,7 +127,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
         3: '失败'
       }
       
-      setBridgeStatus(`状态: ${statusMap[Number(status)] || '未知'} | 尝试次数: ${attempts}`)
+      setBridgeStatus(`状态：${statusMap[Number(status)] || '未知'} · 已尝试 ${attempts} 次`)
       
       // 如果失败且未达到最大重试次数，提供重试选项
       if (Number(status) === 3 && Number(attempts) < 3) {
@@ -157,7 +157,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   // 执行跨链转移
   const handleBridge = useCallback(async () => {
     if (!account || !sourceChainId || !targetChainId || !tokenAddress || !amount) {
-      setError('请填写完整信息')
+      setError('请填写完整的跨链信息')
       return
     }
 
@@ -172,7 +172,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
 
     try {
       await withSigner(async (signer) => {
-        if (!bridgeAddress) throw new Error('桥接合约地址未配置')
+        if (!bridgeAddress) throw new Error('跨链桥合约地址未配置')
 
         // 1. 检查并授权代币
         const token = new Contract(tokenAddress, ERC20_ABI, signer)
@@ -194,7 +194,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
         // 获取 LayerZero EID
         const dstEid = LAYERZERO_EIDS[targetChainId]
         if (!dstEid) {
-          throw new Error(`未找到链 ${targetChainId} 的 LayerZero EID`)
+          throw new Error(`目标链 ${targetChainId} 暂不支持跨链（无 LayerZero EID 配置）`)
         }
 
         const tx = await bridge.bridgeToken(
@@ -209,7 +209,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
         
         // 错误处理优化：检查交易是否成功
         if (receipt.status !== 1) {
-          throw new Error('交易失败')
+          throw new Error('跨链交易未成功')
         }
         
         // 从事件中获取requestId（状态监控）
@@ -227,7 +227,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           const requestId = parsed?.args[0]
           if (requestId) {
             setLastRequestId(requestId)
-            setBridgeStatus('跨链转移已发起，正在处理...')
+            setBridgeStatus('跨链转移已发起，等待目标链确认…')
           }
         }
 
@@ -237,7 +237,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
         
         // 错误处理优化：更友好的提示
         if (!lastRequestId) {
-          alert('跨链转移已发起，请等待确认')
+          alert('跨链转移已发起，请等待目标链确认')
         }
       })
     } catch (e: any) {
@@ -252,8 +252,8 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
 
   return (
     <div className="cross-chain-bridge">
-      <h2>跨链桥接</h2>
-      <p className="hint">在不同链之间转移资产</p>
+      <h2>跨链桥</h2>
+      <p className="hint">通过 LayerZero 在链之间转移代币：选择源链与目标链，填写代币与数量后发起。跨链费用在发起时实时估算，以源链原生代币支付。</p>
 
       <ErrorDisplay error={error} onDismiss={() => setError(null)} className="bridge-error" />
 
@@ -323,12 +323,12 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
               </button>
             )}
           </div>
-          {balance !== '0' && <p className="hint">余额: {balance}</p>}
+          {balance !== '0' && <p className="hint">可用余额：{balance}</p>}
           {estimatedFee && <p className="hint">{estimatedFee}</p>}
         </div>
 
         <div className="bridge-field">
-          <label>桥接合约地址（可选）</label>
+          <label>跨链桥合约地址（可选）</label>
           <input
             type="text"
             value={bridgeAddress}
@@ -343,7 +343,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           onClick={handleBridge}
           disabled={loading || !account || !sourceChainId || !targetChainId || !tokenAddress || !amount}
         >
-          {loading ? '处理中...' : '发起跨链转移'}
+          {loading ? '处理中…' : '发起跨链转移'}
         </button>
       </div>
 
@@ -355,17 +355,17 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       
       {sourceChain && targetChain && (
         <div className="bridge-info">
-          <h3>转移信息</h3>
+          <h3>本次转移</h3>
           <div className="info-row">
-            <span>源链:</span>
+            <span>源链：</span>
             <span>{sourceChain.name}</span>
           </div>
           <div className="info-row">
-            <span>目标链:</span>
+            <span>目标链：</span>
             <span>{targetChain.name}</span>
           </div>
           <div className="info-row">
-            <span>代币:</span>
+            <span>代币：</span>
             <span className="mono">{tokenAddress || '未设置'}</span>
           </div>
         </div>
