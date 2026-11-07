@@ -206,7 +206,9 @@ func (db *DB) ListTrades(since, until int64, limit int, pair string) ([]*Trade, 
 		return nil, err
 	}
 	defer rows.Close()
-	var out []*Trade
+	// 空结果必须返回空切片而非 nil（第二十九轮）：nil 经 JSON 编码成 null，
+	// /api/trades 的消费方（前端统计/K 线）要为 null 额外兜底；同步协议同理。
+	out := []*Trade{}
 	for rows.Next() {
 		t, err := scanTrade(rows)
 		if err != nil {
@@ -369,12 +371,53 @@ func (db *DB) MarkTradeSettleFailed(tradeID, errStr, txHash string) error {
 	return err
 }
 
+// ListFailedTradesWithTxHash 返回终态失败但留有 tx_hash 的成交（第二十九轮
+// 终态对账的输入集）：这类记录的广播交易命运未定——可能已上链（提交器当年
+// 没等到回执）、可能已丢弃——须按回执逐笔定论。按时间升序。
+func (db *DB) ListFailedTradesWithTxHash(limit int) ([]*Trade, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := db.sql.Query(
+		`SELECT `+tradeColumns+` FROM trades
+		 WHERE settle_status = ? AND tx_hash IS NOT NULL AND tx_hash <> ''
+		 ORDER BY timestamp ASC LIMIT ?`,
+		SettleFailed, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Trade{}
+	for rows.Next() {
+		t, err := scanTrade(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// ResetFailedTradeForResubmit 把一笔终态失败成交重置为待提交（第二十九轮
+// 终态对账专用）：仅当回执确认原广播交易已不在链上（dropped）时调用——
+// 清空 tx_hash 与尝试计数、状态回 pending，note 记入 settle_error 备查。
+// 重提时提交器照常先做链上 filled 对账与模拟，不会重复结算已落账的成交。
+func (db *DB) ResetFailedTradeForResubmit(tradeID, note string) error {
+	_, err := db.sql.Exec(
+		`UPDATE trades SET settle_status = ?, tx_hash = '', settle_attempts = 0, settle_error = ?
+		 WHERE trade_id = ? AND settle_status = ?`,
+		SettlePending, note, tradeID, SettleFailed,
+	)
+	return err
+}
+
 // DeleteTradesBefore 删除指定时间之前的记录，用于保留期清理（默认两周）
 // 优化：批量删除，避免长时间锁定
 func (db *DB) DeleteTradesBefore(beforeUnix int64) (int64, error) {
 	var totalDeleted int64
 	batchSize := 1000 // 每批删除1000条
-	
+
 	for {
 		res, err := db.sql.Exec(
 			"DELETE FROM trades WHERE timestamp < ? AND rowid IN (SELECT rowid FROM trades WHERE timestamp < ? LIMIT ?)",

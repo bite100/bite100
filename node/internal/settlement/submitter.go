@@ -30,6 +30,14 @@ package settlement
 //     提交错误。达 MaxAttempts 后转 failed。
 //   失败结算的归责扣费（第二十一轮 ChargeFailedSettlement）不在此自动调用，
 //   与第二十一轮纪律一致：是否申报由运营策略决定，不由提交器擅自发起。
+//
+// 终态对账（第二十九轮补）：瞬时失败耗尽时若最后一笔广播交易带 hash，该
+// hash 随失败记录一并保存（settle_error 保留 "attempts exhausted" 出处），
+// 清扫（启动 + 周期）对「failed 且带 hash」的成交按回执定论：已上链成功
+// → 改判 settled；回执确认 revert → 维持失败并打已核标记、不再重复查；
+// 查无此交易（dropped）且出处为 attempts exhausted → 重置为 pending 重提
+// （重提前照常走链上 filled 对账，绝不重复结算）。此前 hash 在耗尽时被
+// 丢弃，这类成交永远停在 failed 且无人能判定它到底结算了没有。
 
 import (
 	"context"
@@ -57,6 +65,33 @@ type ChainChecker interface {
 	OrderFilled(ctx context.Context, so *storage.SignedOrder) (filledIn, filledOut *big.Int, err error)
 	// SimulateSettle 以 eth_call 模拟 settleTrade，revert 时返回非 nil 错误
 	SimulateSettle(ctx context.Context, from common.Address, fill Fill) error
+}
+
+// TxReceiptChecker 按 tx hash 查一笔已广播交易的回执命运（终态对账用）；
+// found=false 表示链上查无此交易（已 dropped 或从未被打包且已出 mempool）。
+// 生产实现走 RPC，单测注入假实现。
+type TxReceiptChecker interface {
+	TxReceipt(ctx context.Context, txHash string) (found bool, success bool, err error)
+}
+
+type rpcReceiptChecker struct {
+	rpcURL string
+}
+
+func (c *rpcReceiptChecker) TxReceipt(ctx context.Context, txHash string) (bool, bool, error) {
+	client, err := ethclient.DialContext(ctx, c.rpcURL)
+	if err != nil {
+		return false, false, fmt.Errorf("dial rpc: %w", err)
+	}
+	defer client.Close()
+	rcpt, err := client.TransactionReceipt(ctx, common.HexToHash(txHash))
+	if err != nil {
+		if errors.Is(err, ethereum.NotFound) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	return true, rcpt.Status == 1, nil
 }
 
 const settlementFilledABIJSON = `[
@@ -154,6 +189,8 @@ type SubmitterConfig struct {
 	SubmitFn func(ctx context.Context, t *storage.Trade, rpcURL, settlementAddr, privateKeyHex string) (string, error)
 	// Chain 链上对账/模拟，默认 RPC 实现；RPCURL 为空时为 nil（跳过前置检查）。
 	Chain ChainChecker
+	// Receipts 终态对账的回执查询，默认 RPC 实现；RPCURL 为空时为 nil（跳过终态对账）。
+	Receipts TxReceiptChecker
 	// Now 时钟，默认 time.Now；单测注入。
 	Now func() time.Time
 }
@@ -201,6 +238,9 @@ func NewSubmitter(cfg SubmitterConfig) (*Submitter, error) {
 	}
 	if cfg.Chain == nil && cfg.RPCURL != "" {
 		cfg.Chain = &rpcChainChecker{rpcURL: cfg.RPCURL, settlementAddr: cfg.SettlementAddr}
+	}
+	if cfg.Receipts == nil && cfg.RPCURL != "" {
+		cfg.Receipts = &rpcReceiptChecker{rpcURL: cfg.RPCURL}
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -298,7 +338,12 @@ func (s *Submitter) sweepLoop() {
 
 // sweep 扫描本地待结算成交并入队。首次清扫打日志（运维可见历史积压），周期
 // 清扫只对新发现的 pending 打日志，retry 的重入队保持安静（有自己的退避计时）。
+// 每轮清扫先做终态对账（第二十九轮）：被对账重置为 pending 的成交会被本轮
+// 后半段的待结算扫描一并接管重提。
 func (s *Submitter) sweep(first bool) {
+	rctx, cancel := context.WithTimeout(s.ctx, time.Minute)
+	s.reconcileFailed(rctx)
+	cancel()
 	trades, err := s.cfg.Store.ListTradesForSettlement(500)
 	if err != nil {
 		log.Printf("[settle] 清扫查询失败: %v", err)
@@ -315,6 +360,58 @@ func (s *Submitter) sweep(first bool) {
 		log.Printf("[settle] 启动清扫：发现 %d 笔待结算成交，逐笔提交", len(trades))
 	} else if fresh > 0 {
 		log.Printf("[settle] 清扫：发现 %d 笔新的待结算成交", fresh)
+	}
+}
+
+// receiptVerifiedMark 已按回执核实过 revert 的失败记录标记：对账时跳过，
+// 避免每轮清扫重复查同一笔已定论的交易。
+const receiptVerifiedMark = "[receipt-verified]"
+
+// reconcileFailed 终态对账（第二十九轮）：对「failed 且带 tx_hash」的成交
+// 按回执逐笔定论。随清扫运行（启动首轮 + 周期），无 Receipts 时跳过。
+//
+//   - 回执存在且成功 → 改判 settled（广播其实落账、当年没等到回执）。
+//   - 回执存在且 revert → 维持 failed，追加已核标记，后续清扫跳过。
+//   - 查无此交易（dropped）→ 仅当出处为 "attempts exhausted"（从未被回执
+//     定论过的耗尽记录）时重置为 pending 重提；重提先走 settleOnce 的链上
+//     filled 对账——若另有更早的广播其实已落账，会在对账处直接判 settled，
+//     绝不重复提交。其余出处的失败记录（确定性 revert 等）回执必然存在，
+//     查无此交易属异常情形，保持原样待人工处理。
+func (s *Submitter) reconcileFailed(ctx context.Context) {
+	if s.cfg.Receipts == nil {
+		return
+	}
+	trades, err := s.cfg.Store.ListFailedTradesWithTxHash(200)
+	if err != nil {
+		log.Printf("[settle] 终态对账查询失败: %v", err)
+		return
+	}
+	for _, t := range trades {
+		if strings.Contains(t.SettleError, receiptVerifiedMark) {
+			continue
+		}
+		found, success, err := s.cfg.Receipts.TxReceipt(ctx, t.TxHash)
+		if err != nil {
+			log.Printf("[settle] trade=%s 终态对账查回执失败（下轮再试）: %v", t.TradeID, err)
+			continue
+		}
+		switch {
+		case found && success:
+			_ = s.cfg.Store.MarkTradeSettled(t.TradeID, t.TxHash, "terminal reconciliation (round 29): broadcast tx found mined successfully on-chain")
+			log.Printf("[settle] trade=%s 终态对账：失败记录的广播 tx=%s 链上已成功，改判 settled", t.TradeID, t.TxHash)
+		case found:
+			_ = s.cfg.Store.MarkTradeSettleFailed(t.TradeID, t.SettleError+" "+receiptVerifiedMark, "")
+			log.Printf("[settle] trade=%s 终态对账：tx=%s 回执确认 revert，维持终态失败", t.TradeID, t.TxHash)
+		default:
+			if strings.HasPrefix(t.SettleError, "attempts exhausted") {
+				note := fmt.Sprintf("terminal reconciliation (round 29): broadcast tx %s not found on-chain (dropped), resubmitted; previous: %s", t.TxHash, t.SettleError)
+				if err := s.cfg.Store.ResetFailedTradeForResubmit(t.TradeID, note); err != nil {
+					log.Printf("[settle] trade=%s 终态对账重置重提失败: %v", t.TradeID, err)
+				} else {
+					log.Printf("[settle] trade=%s 终态对账：广播 tx=%s 已 dropped，重置为待提交重提", t.TradeID, t.TxHash)
+				}
+			}
+		}
 	}
 }
 
@@ -347,7 +444,7 @@ func (s *Submitter) settleOnce(ctx context.Context, t *storage.Trade) {
 		}
 	}
 	if t.MakerOrder == nil || t.TakerOrder == nil {
-		s.retryOrFail(t, "signed orders unavailable for settlement")
+		s.retryOrFail(t, "", "signed orders unavailable for settlement")
 		return
 	}
 
@@ -400,17 +497,22 @@ func (s *Submitter) settleOnce(ctx context.Context, t *storage.Trade) {
 		return
 	}
 	if hash != "" {
-		// 瞬时失败但交易已广播：hash 仅记日志（不记入失败 tx），重试前链上对账
-		// 会先排除已落账的重复提交。
+		// 瞬时失败但交易已广播：重试前链上对账会先排除已落账的重复提交；
+		// hash 透传给 retryOrFail——耗尽时随失败记录保存，供终态对账按回执
+		// 定论（第二十九轮；此前 hash 在此被丢弃，失败即永无定论）。
 		log.Printf("[settle] trade=%s 结算未定论（tx=%s 已广播，%v），重试前先链上对账", t.TradeID, hash, err)
 	}
-	s.retryOrFail(t, err.Error())
+	s.retryOrFail(t, hash, err.Error())
 }
 
-// retryOrFail 瞬时失败处理：未达上限置 retry 并按指数退避重新入队，达上限转终态
-func (s *Submitter) retryOrFail(t *storage.Trade, msg string) {
+// retryOrFail 瞬时失败处理：未达上限置 retry 并按指数退避重新入队，达上限
+// 转终态。lastHash 为最后一笔已广播交易的 hash（无广播时为空）：耗尽时随
+// 失败记录保存（第二十九轮），终态对账据此按回执定论——它标记的是「命运
+// 未定的广播」，不是一笔已确认失败的交易（出处见 settle_error 的
+// "attempts exhausted" 前缀，对账据此区分）。
+func (s *Submitter) retryOrFail(t *storage.Trade, lastHash, msg string) {
 	if t.SettleAttempts >= s.cfg.MaxAttempts {
-		s.markFailed(t, "", fmt.Sprintf("attempts exhausted (%d): %s", t.SettleAttempts, msg))
+		s.markFailed(t, lastHash, fmt.Sprintf("attempts exhausted (%d): %s", t.SettleAttempts, msg))
 		return
 	}
 	_ = s.cfg.Store.MarkTradeSettleRetry(t.TradeID, msg)

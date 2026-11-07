@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -555,7 +556,41 @@ func (l *vaultLocker) signedOrder(order *storage.Order) (*storage.SignedOrder, e
 	return match.BuildSignedOrder(order, &pt), nil
 }
 
+// lockVerdict 落锁结果的处置分类（第二十九轮）：与 lock.go 注释的契约对齐
+// ——已广播未定论（ErrTxPending）不得按失败处理。
+type lockVerdict int
+
+const (
+	lockOK      lockVerdict = iota // 落锁成功，入簿
+	lockTrack                      // 交易已广播仍在途：入簿 + 后台追踪定论
+	lockRedrive                    // 交易已丢弃：幂等重驱一次
+	lockReject                     // 确定性失败：拒单
+)
+
+func classifyLockErr(err error) lockVerdict {
+	switch {
+	case err == nil:
+		return lockOK
+	case errors.Is(err, settlement.ErrTxPending):
+		return lockTrack
+	case errors.Is(err, settlement.ErrTxDropped):
+		return lockRedrive
+	default:
+		return lockReject
+	}
+}
+
 // lockForBookOrder 订单入簿前落锁：可用余额校验与验签在 Vault/LockOrder 内完成。
+//
+// 在途政策（第二十九轮，修 ErrTxPending 拒单摩擦）：LockOrder 内部等待上链
+// 超时但交易已广播（ErrTxPending）时，锁将在链上生效——此前调用方把任何
+// 错误都当失败拒单，与 lock.go「不得按失败处理」的注释自相矛盾，用户被迫
+// 在锁其实已上链的情况下反复重发同一订单。现改为：pending 视为在途成功、
+// 接受入簿，后台以 LockOrder 幂等重驱追踪定论（锁已上链时凭既有锁直接返回
+// 成功；原交易后被丢弃时重驱即重新落锁）；dropped 立即幂等重驱一次；只有
+// 确定性失败（余额不足、验签不过等）才拒单。结算时 Vault 强制消费锁定，
+// 未落锁的订单无法结算，故「先入簿」不存在无锁成交的风险；残余竞态（成交
+// 在落锁确认前被提交结算）由提交器的链上对账与模拟兜底，见轮文档。
 func (l *vaultLocker) lockForBookOrder(order *storage.Order) error {
 	so, err := l.signedOrder(order)
 	if err != nil {
@@ -564,11 +599,58 @@ func (l *vaultLocker) lockForBookOrder(order *storage.Order) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	_, tx, err := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so, order.Side)
-	if err != nil {
+	switch classifyLockErr(err) {
+	case lockOK:
+		log.Printf("[lock] 订单 %s 已落锁 tx=%s", order.OrderID, tx)
+		return nil
+	case lockTrack:
+		log.Printf("[lock] 订单 %s 落锁交易已广播仍在途，按在途接受入簿并后台追踪: %v", order.OrderID, err)
+		go l.trackPendingLock(order)
+		return nil
+	case lockRedrive:
+		log.Printf("[lock] 订单 %s 落锁交易已被丢弃，幂等重驱一次: %v", order.OrderID, err)
+		_, tx2, err2 := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so, order.Side)
+		switch classifyLockErr(err2) {
+		case lockOK:
+			log.Printf("[lock] 订单 %s 重驱落锁成功 tx=%s", order.OrderID, tx2)
+			return nil
+		case lockTrack:
+			log.Printf("[lock] 订单 %s 重驱落锁交易在途，接受入簿并后台追踪: %v", order.OrderID, err2)
+			go l.trackPendingLock(order)
+			return nil
+		default:
+			return err2
+		}
+	default:
 		return err
 	}
-	log.Printf("[lock] 订单 %s 已落锁 tx=%s", order.OrderID, tx)
-	return nil
+}
+
+// trackPendingLock 追踪一笔在途落锁直至定论（第二十九轮）：周期性以
+// LockOrder 幂等重驱——LockOrder 先查既有锁，锁已上链即直接返回成功，
+// 未上链（原交易后被丢弃）则重新广播落锁。超时仍未确认只记日志：订单
+// 的锁定最终由结算端 Vault 消费校验与订单到期/撤单释放路径兜底。
+func (l *vaultLocker) trackPendingLock(order *storage.Order) {
+	deadline := time.Now().Add(6 * time.Minute)
+	for attempt := 1; ; attempt++ {
+		time.Sleep(20 * time.Second)
+		so, err := l.signedOrder(order)
+		if err != nil {
+			log.Printf("[lock] 订单 %s 在途落锁追踪中止（签名订单构造失败）: %v", order.OrderID, err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		_, tx, err := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so, order.Side)
+		cancel()
+		if err == nil {
+			log.Printf("[lock] 订单 %s 在途落锁已确认 tx=%s（第 %d 次追踪）", order.OrderID, tx, attempt)
+			return
+		}
+		if time.Now().After(deadline) {
+			log.Printf("[lock] 订单 %s 在途落锁追踪超时仍未确认（结算/到期路径兜底）: %v", order.OrderID, err)
+			return
+		}
+	}
 }
 
 // releaseForOrder 撤单时按订单摘要释放剩余锁定。
@@ -747,14 +829,25 @@ func (h *orderMatchHandler) processOrderLocally(order *storage.Order) error {
 	if order.IsMarketOrder() {
 		return h.processMarketOrderLocally(order)
 	}
-	// 挂单锁定（第十五轮）：启用锁定时先落锁再入簿；落锁失败（可用余额不足、
-	// 验签不过等）拒绝该订单，不入簿、不落库。重启恢复路径直接 AddOrder 不经
-	// 此处——锁定在首次接受时已上链、跨重启保留，无需重复落锁。
+	// 挂单锁定（第十五轮）：启用锁定时先落锁再入簿；落锁确定性失败（可用
+	// 余额不足、验签不过等）拒绝该订单，不入簿、不落库；落锁交易在途
+	// （ErrTxPending）按在途接受，见 lockForBookOrder 的在途政策（第二十九
+	// 轮）。重启恢复路径直接 AddOrder 不经此处——锁定在首次接受时已上链、
+	// 跨重启保留，无需重复落锁。
 	if h.locker != nil {
 		if err := h.locker.lockForBookOrder(order); err != nil {
 			log.Printf("[lock] 订单 %s 落锁失败，拒绝入簿: %v", order.OrderID, err)
 			return nil
 		}
+	}
+	// 先落库再撮合（第二十九轮修复）：recordTrade 内的 RecomputeOrderFill
+	// 以成交表为事实源回写双方订单的 Filled/Status，是成交状态的唯一回写
+	// 点。旧顺序（撮合后才 InsertOrder 本单）下，INSERT OR REPLACE 会把
+	// 刚回写的成交量覆盖回本单的初始值（filled=0/status=open）——第 27 轮
+	// E2E 的 countersell 即如此：链上已结算、库里却恒为 open。先建行再
+	// 撮合，回写自然成为最终状态；落锁失败已在上方拒单、不经此处。
+	if h.store != nil {
+		_ = h.store.InsertOrder(order)
 	}
 	if h.engine != nil {
 		h.engine.EnsurePair(order.Pair)
@@ -774,9 +867,6 @@ func (h *orderMatchHandler) processOrderLocally(order *storage.Order) error {
 	} else if h.ws != nil {
 		// 轻量 relay 模式：无撮合引擎时仍将新订单推给 WS 客户端
 		h.ws.BroadcastOrderStatus(order)
-	}
-	if h.store != nil {
-		_ = h.store.InsertOrder(order)
 	}
 	return nil
 }

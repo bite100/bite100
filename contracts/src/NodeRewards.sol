@@ -35,6 +35,10 @@ contract NodeRewards {
     }
 
     /// @notice 设置 Settlement 地址（仅 owner）；Settlement 可调用 depositFounderReward
+    /// @dev 配对铁律（第二十九轮）：必须与 Settlement.setNodeRewards 成对设置，
+    ///      统一走 script/ConfigureNodeRewards.s.sol（一次设齐 + 回读断言）。
+    ///      只配 Settlement 侧而漏此步时，settleTradesBatchWithGasSavings 会在
+    ///      gas 节省分配环节整批 revert（证据见 test/NodeRewards.t.sol）。
     function setSettlement(address _settlement) external onlyOwner {
         settlement = _settlement;
         emit SettlementSet(_settlement);
