@@ -176,9 +176,13 @@ Bit100 的叙事是 P2P 无服务器，但现实检查：GitHub Pages 托管前�
 - ✅ 第二条测试网已定 **Base Sepolia**（§6-5 已决），十合约同构部署并全接线，前端 `chains.ts` 已填真实地址（另顺修 `LAYERZERO_EIDS` 以太坊主网错值 30110→30101）；第二条链上真实结算冒烟 PASS（10/10 断言 + 重放被拒）。全量记录见 `docs/base-sepolia-deployment-2026-11-07.md`。
 - 验收：第二条链上一键同构部署成功，10 个地址链上读回均有代码；前端切到该链可连钱包、读 Vault 余额；Sepolia 现有部署零影响；forge/前端测试保持全绿。
 
-**M2 桥接资产**
-- 修复 CrossChainBridge 已知缺陷（时间戳校验、requestId 口径、状态落账为最低集），双链部署桥并完成 setPeer 互信、代币映射与支持清单接线。
-- 验收：一笔 TKA 从 Sepolia 跨到第二条链，源链 `BridgeInitiated` 与目标链 `BridgeCompleted` 两侧事件可查、金额一致（扣桥费后）、目标链桥/用户余额到账；同一条消息重放被拒。
+**M2 桥接资产**（🔶 LZ 部分完成，2026-11-07 第九轮 M2a；CCIP/Wormhole 待续）
+- ✅ CrossChainBridge 缺陷全修：删除 5 分钟时间戳过期校验（改 guid/nonce + `(srcEid, transferId)` 双层防重放）、统一 transferId/guid 双侧落账（目标侧记 Completed）、`retryBridge` 真实实现、原生代币路径明确 revert、空 options 自动构造。期间发现仓库内 oapp-evm 原为本地桩，已换 vendored 官方包（oapp-evm 0.4.1 + protocol/messagelib 3.0.168）。forge 84/84。
+- ✅ 双链部署桥 + setPeer 双向互信读回 + TKA 映射/桥费（0.1 TKA）/Base 侧 1000 TKA 流动性就绪。
+- ✅ 真实跨链一笔达标：10 TKA Sepolia → Base Sepolia，源 tx `0x87bf8577…`、guid `0x002635f7…`、目标 tx `0x1292b9f1…`，到账 9.9 TKA（扣桥费 0.1），双侧余额/落账对齐，重放被 Endpoint 以 `LZ_PayloadHashNotFound` 拒绝。全量记录见 `docs/bridge-deployment-2026-11-07.md`。
+- ⚠️ **DVN 未达标（如实）**：两路径生效配置经 `getConfig` 读回均为默认 **1-of-1（仅 LayerZero Labs）**，不满足「required DVN ≥2」硬前提；测试网第二家 DVN 无可用部署（Google 测试网证明不可靠，见部署记录 §4），未假装配置。主网前必须跑 `contracts/script/ConfigureDvns.s.sol` 并读回存档。
+- ⏳ M2b/M2c：CCIP、Wormhole 按 `docs/bridge-abstraction.md` 的统一接口接入（报价/发起/状态 + fee/时延/安全标签），交易者自选桥。
+- 验收（原）：一笔 TKA 从 Sepolia 跨到第二条链，源链 `BridgeInitiated` 与目标链 `BridgeCompleted` 两侧事件可查、金额一致（扣桥费后）、目标链桥/用户余额到账；同一条消息重放被拒。—— LZ 实现已达成。
 
 **M3 跨链订单（最小闭环）**
 - 订单模型带链维度（资产链/结算链），节点按链感知撮合；跨链成交由「桥 + 结算」组合完成（可先行简化形态：资产经桥进入结算链 Vault 即视为充值，再参与撮合）。
