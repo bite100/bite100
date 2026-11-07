@@ -1,0 +1,319 @@
+/* 资产页（第 31 轮 v2） */
+.assets-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.assets-tabs {
+  display: flex;
+  gap: 22px;
+  padding: 0 2px;
+}
+.assets-tabs button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--b100-text-3);
+  padding: 2px 0;
+}
+.assets-tabs button.on {
+  color: var(--b100-text);
+}
+
+.assets-hero-label {
+  font-size: 12px;
+  color: var(--b100-text-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.assets-eye {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+}
+.assets-hero-value {
+  font-size: 27px;
+  font-weight: 800;
+  margin-top: 5px;
+  line-height: 1.2;
+}
+.assets-hero-usd {
+  font-size: 12.5px;
+  color: var(--b100-text-3);
+  margin-top: 2px;
+}
+.assets-hero-change {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--b100-text-2);
+  margin-top: 10px;
+}
+.assets-change-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.assets-up {
+  color: var(--b100-up);
+}
+.assets-down {
+  color: var(--b100-down);
+}
+.assets-dim {
+  color: var(--b100-text-3);
+  font-size: 12px;
+}
+.assets-fineprint {
+  font-size: 11px;
+  color: var(--b100-text-3);
+  line-height: 1.65;
+  margin: 10px 0 0;
+}
+.assets-account-toggle {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--b100-text-2);
+  padding: 10px 0 0;
+}
+.assets-account-rows {
+  margin-top: 4px;
+}
+
+.assets-actions {
+  display: flex;
+  gap: 8px;
+}
+.assets-actions button {
+  flex: 1;
+  border: 1px solid var(--b100-border);
+  background: #fff;
+  border-radius: 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b100-text);
+  padding: 11px 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.assets-act-ico {
+  font-size: 16px;
+  line-height: 1;
+  color: var(--b100-accent);
+}
+
+.assets-vault-card {
+  border: 1.5px solid var(--b100-accent);
+}
+.assets-vault-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+.assets-vault-desc {
+  font-size: 12.5px;
+  color: var(--b100-text-2);
+  line-height: 1.65;
+  margin: 8px 0 0;
+}
+.assets-vault-nums {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.assets-vault-nums > div {
+  flex: 1;
+  min-width: 0;
+}
+.assets-vault-nums span {
+  display: block;
+  font-size: 10.5px;
+  color: var(--b100-text-3);
+}
+.assets-vault-nums b {
+  font-size: 14.5px;
+  font-weight: 700;
+  word-break: break-all;
+}
+.assets-vault-btn {
+  width: 100%;
+  margin-top: 14px;
+  background: var(--b100-text);
+  color: #fff;
+}
+
+.assets-distbar {
+  display: flex;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  gap: 2px;
+  margin: 4px 0 8px;
+}
+.assets-distbar span {
+  display: block;
+  height: 100%;
+}
+
+.assets-balances {
+  padding-bottom: 8px;
+}
+.assets-brow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--b100-hairline);
+}
+.assets-bmain {
+  flex: 1;
+  min-width: 0;
+}
+.assets-bmain b {
+  font-size: 14px;
+}
+.assets-bmain b small {
+  font-size: 11px;
+  color: var(--b100-text-3);
+  font-weight: 500;
+  margin-left: 4px;
+}
+.assets-bsub {
+  display: block;
+  font-size: 11px;
+  color: var(--b100-text-3);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+.assets-bright {
+  text-align: right;
+  flex: none;
+}
+.assets-bright .num {
+  font-size: 14px;
+  font-weight: 600;
+}
+.assets-bright small {
+  display: block;
+  font-size: 11px;
+  color: var(--b100-text-3);
+  margin-top: 1px;
+}
+.assets-bbtns {
+  display: block;
+  margin-top: 5px;
+}
+.assets-bbtns button {
+  border: 1px solid var(--b100-border);
+  background: #fff;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  margin-left: 5px;
+  color: var(--b100-text);
+}
+.assets-queryrow {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--b100-text);
+  padding: 13px 0 5px;
+}
+
+/* 子视图（存入/提取/查询）共用件 */
+.assets-field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--b100-text-2);
+  margin: 12px 0 6px;
+}
+.assets-tokenrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.assets-tokenrow select {
+  flex: 1;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 9px 10px;
+  border: 1px solid var(--b100-border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--b100-text);
+}
+.assets-amountrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--b100-border);
+  border-radius: 12px;
+  padding: 4px 12px;
+}
+.assets-amountrow input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  font-family: var(--b100-font-num);
+  min-width: 0;
+  padding: 8px 0;
+  background: none;
+  color: var(--b100-text);
+}
+.assets-amount-unit {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--b100-text-2);
+}
+.assets-submit {
+  width: 100%;
+  margin-top: 14px;
+}
+.assets-submit-dark {
+  background: var(--b100-text);
+  color: #fff;
+}
+.assets-error {
+  font-size: 13px;
+  color: var(--b100-down);
+  margin: 10px 0 0;
+}
+.assets-done {
+  font-size: 13px;
+  color: var(--b100-up);
+  margin: 10px 0 0;
+}

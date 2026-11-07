@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback, Component, type ReactNode } from 'react'
-import { Contract } from 'ethers'
 import { useConnection, useDisconnect } from 'wagmi'
-import { StandardConnect } from './components/StandardConnect'
-import { CHAIN_ID, VAULT_ABI, ERC20_ABI, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
+import { CHAIN_ID, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
 import { Dashboard } from './components/dashboard/Dashboard'
@@ -10,19 +8,17 @@ import { OrderBookSection } from './OrderBookSection'
 import { CrossChainBridge } from './components/CrossChainBridge'
 import { UnifiedRewardClaim } from './components/UnifiedRewardClaim'
 import { MerkleAirdropClaim } from './components/MerkleAirdropClaim'
-import { AddNetworkButton } from './components/AddNetworkButton'
-import { MobileConnectHint } from './components/MobileConnectHint'
 import { Navigation, type Tab } from './components/Navigation'
 import { TopBar } from './components/TopBar'
 import { OtherPage } from './components/OtherPage'
 import { DataPage } from './components/DataPage'
 import { MarketsList } from './components/markets/MarketsList'
+import { AssetsPage } from './components/AssetsPage'
 import { FlywheelRewardPlaceholder } from './components/FlywheelRewardPlaceholder'
 import { isTradePair } from './config/pairs'
-import { ErrorDisplay } from './components/ErrorDisplay'
 import { useChain } from './hooks/useChain'
 import { useOnlineStatus } from './hooks/useOnlineStatus'
-import { getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL } from './utils'
+import { getProvider, formatTokenAmount } from './utils'
 import './App.css'
 import './components/Shell.css'
 
@@ -39,51 +35,6 @@ class GovernanceErrorBoundary extends Component<{ account: string | null; childr
       </div>
     )
     return this.props.children
-  }
-}
-
-const parseAmount = (s: string) => {
-  const n = parseFloat(s)
-  if (Number.isNaN(n) || n < 0) return 0n
-  return BigInt(Math.floor(n * 1e18))
-}
-
-const STORAGE_KEY = 'p2p'
-
-function setStored(key: string, value: string) {
-  try {
-    if (typeof window !== 'undefined') localStorage.setItem(`${STORAGE_KEY}_${key}`, value)
-  } catch {}
-}
-
-/** 确保 allowance 足够：不足时按「先清零再授权 amount」的模式处理，避免某些 ERC20 的非标准行为 */
-async function ensureAllowance(
-  token: Contract,
-  owner: string,
-  spender: string,
-  amount: bigint,
-) {
-  const current = await token.allowance(owner, spender)
-  if (current >= amount) return
-  if (current > 0n) {
-    await (await token.approve(spender, 0n)).wait()
-  }
-  await (await token.approve(spender, amount)).wait()
-}
-
-async function runWithLoading(
-  setLoading: (value: boolean) => void,
-  setError: (msg: string | null) => void,
-  fn: () => Promise<void>,
-) {
-  setError(null)
-  setLoading(true)
-  try {
-    await fn()
-  } catch (e) {
-    setError(formatError(e))
-  } finally {
-    setLoading(false)
   }
 }
 
@@ -109,21 +60,6 @@ function SubBar({ title, onBack }: { title: string; onBack: () => void }) {
   )
 }
 
-/** 需要钱包的分区在未连接时的页面级空态：说明 + 连接入口，不报错、不白屏 */
-function ConnectGate({ title, desc, chainId }: { title: string; desc: string; chainId?: number }) {
-  return (
-    <div className="card connect-gate">
-      <h2>{title}</h2>
-      <p className="hint">{desc}</p>
-      <div className="connect-gate-actions">
-        <StandardConnect />
-        <MobileConnectHint />
-        {chainId !== undefined && <AddNetworkButton chainId={chainId} className="add-network-below-connect" />}
-      </div>
-    </div>
-  )
-}
-
 function App() {
   const connection = useConnection()
   const account = connection.address ?? null
@@ -135,22 +71,6 @@ function App() {
       : connection.connector?.name || '浏览器钱包'
 
   const [ethBalance, setEthBalance] = useState<string>('')
-  const [vaultBalance, setVaultBalance] = useState<string>('')
-  const [vaultLocked, setVaultLocked] = useState<string>('')
-  const [vaultAvailable, setVaultAvailable] = useState<string>('')
-  const [walletTokenBalance, setWalletTokenBalance] = useState<string>('')
-  const [tokenAddress, setTokenAddress] = useState<string>(() => {
-    try {
-      if (typeof window === 'undefined') return ''
-      return localStorage.getItem(`${STORAGE_KEY}_tokenAddress`) ?? ''
-    } catch { return '' }
-  })
-  const [depositAmount, setDepositAmount] = useState<string>('')
-  const [withdrawAmount, setWithdrawAmount] = useState<string>('')
-  const [loading, setLoading] = useState(false)
-  const [loadingDeposit, setLoadingDeposit] = useState(false)
-  const [loadingWithdraw, setLoadingWithdraw] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const isOnline = useOnlineStatus()
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     if (typeof window === 'undefined') return 'trade'
@@ -204,129 +124,10 @@ function App() {
       const config = getChainConfig(currentChainId)
       if (config) {
         setCurrentChainConfig(config)
-        // 刷新余额
-        if (account) {
-          fetchBalances()
-        }
       }
     }
   }, [currentChainId, account])
 
-  useEffect(() => { setStored('tokenAddress', tokenAddress) }, [tokenAddress])
-
-  const tokenAddr = tokenAddress.trim()
-
-  /** background: 为 true 时不设置全局 loading，避免链/账户变化或刷新时误显示「连接中」 */
-  const fetchBalances = useCallback(async (background = true) => {
-    if (!account || !isValidAddress(tokenAddr) || !currentChainConfig) return
-    const cacheKey = CACHE_KEYS.BALANCE + account + tokenAddr + currentChainConfig.chainId + ':lock1'
-    const cached = cacheGet<[string, string, string, string]>(cacheKey)
-    if (cached) {
-      setVaultBalance(cached[0])
-      setWalletTokenBalance(cached[1])
-      setVaultLocked(cached[2])
-      setVaultAvailable(cached[3])
-      return
-    }
-    if (!background) {
-      setError(null)
-      setLoading(true)
-    }
-    try {
-      const provider = getProvider()
-      if (!provider) throw new Error('未检测到钱包')
-      const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, provider)
-      const token = new Contract(tokenAddr, ERC20_ABI, provider)
-      const [vBal, wBal] = await Promise.all([
-        vault.balanceOf(tokenAddr, account),
-        token.balanceOf(account),
-      ])
-      const [lockedBal, availBal] = await Promise.all([
-        vault.locked(account, tokenAddr).catch(() => 0n) as Promise<bigint>,
-        vault.availableBalance(account, tokenAddr).catch(() => vBal) as Promise<bigint>,
-      ])
-      const vStr = formatTokenAmount(vBal)
-      const wStr = formatTokenAmount(wBal)
-      const lStr = formatTokenAmount(lockedBal)
-      const aStr = formatTokenAmount(availBal)
-      setVaultBalance(vStr)
-      setWalletTokenBalance(wStr)
-      setVaultLocked(lStr)
-      setVaultAvailable(aStr)
-      cacheSet(cacheKey, [vStr, wStr, lStr, aStr], CACHE_TTL.BALANCE)
-    } catch (e) {
-      setVaultBalance('')
-      setWalletTokenBalance('')
-      setVaultLocked('')
-      setVaultAvailable('')
-      if (!background) setError(formatError(e))
-    } finally {
-      if (!background) setLoading(false)
-    }
-  }, [account, tokenAddr, currentChainConfig])
-
-  const handleDeposit = useCallback(async () => {
-    if (!account || !isValidAddress(tokenAddr)) {
-      setError('请先输入有效的代币地址')
-      return
-    }
-    const amount = parseAmount(depositAmount)
-    if (amount === 0n) {
-      setError('请输入存入数量')
-      return
-    }
-    await runWithLoading(setLoadingDeposit, setError, async () => {
-      await withSigner(async (signer) => {
-        if (!currentChainConfig) throw new Error('链配置未加载')
-        const token = new Contract(tokenAddr, ERC20_ABI, signer)
-        const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, signer)
-        await ensureAllowance(token, account!, currentChainConfig.contracts.vault, amount)
-        const txDeposit = await vault.deposit(tokenAddr, amount)
-        await txDeposit.wait()
-      })
-      setDepositAmount('')
-      cacheInvalidate(CACHE_KEYS.BALANCE)
-      await fetchBalances()
-    })
-  }, [account, tokenAddr, depositAmount, fetchBalances, currentChainConfig])
-
-  const handleWithdraw = useCallback(async () => {
-    if (!account || !isValidAddress(tokenAddr)) {
-      setError('请先输入有效的代币地址')
-      return
-    }
-    const amount = parseAmount(withdrawAmount)
-    if (amount === 0n) {
-      setError('请输入提取数量')
-      return
-    }
-    await runWithLoading(setLoadingWithdraw, setError, async () => {
-      await withSigner(async (signer) => {
-        if (!currentChainConfig) throw new Error('链配置未加载')
-        const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, signer)
-        const avail = (await vault.availableBalance(account, tokenAddr).catch(() => null)) as bigint | null
-        if (avail !== null && amount > avail) {
-          throw new Error(`提取数量超过可用余额：可用 ${formatTokenAmount(avail)}。挂单锁定的部分不能提取，先撤单释放后再提取。`)
-        }
-        const tx = await vault.withdraw(tokenAddr, amount)
-        await tx.wait()
-      })
-      setWithdrawAmount('')
-      cacheInvalidate(CACHE_KEYS.BALANCE)
-      await fetchBalances()
-    })
-  }, [account, tokenAddr, withdrawAmount, fetchBalances, currentChainConfig])
-
-  const handleMaxDeposit = useCallback(() => {
-    if (walletTokenBalance) setDepositAmount(walletTokenBalance)
-    else setError('请先查询该代币余额')
-  }, [walletTokenBalance])
-
-  const handleMaxWithdraw = useCallback(() => {
-    if (vaultAvailable) setWithdrawAmount(vaultAvailable)
-    else if (vaultBalance) setWithdrawAmount(vaultBalance)
-    else setError('请先查询该代币余额')
-  }, [vaultAvailable, vaultBalance])
 
   useEffect(() => {
     if (!account) return
@@ -376,135 +177,17 @@ function App() {
       />
 
       <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
-      <ErrorDisplay
-        error={error}
-        onRetry={() => {
-          setError(null)
-          if (account && isValidAddress(tokenAddr)) fetchBalances()
-        }}
-        onDismiss={() => setError(null)}
-        className="error-below-nav"
-      />
 
           {activeTab === 'assets' && (
-            <>
-              <PageHead title="资产" desc="资金路径：钱包 → 存入 Vault → 用 Vault 余额下单结算 → 提取回钱包。下单只能使用 Vault 余额，钱包里的代币需先存入才能用于交易；本页可查询两处余额并完成存入与提取。" />
-              {account && (
-                <div className="card account-details-card">
-                  <div className="row">
-                    <span className="label">当前账户</span>
-                    <span className="value mono">{shortAddress(account)}</span>
-                  </div>
-                  <div className="row">
-                    <span className="label">连接方式</span>
-                    <span className="value">{connectionLabel}</span>
-                  </div>
-                  <div className="row">
-                    <span className="label">钱包余额（ETH）</span>
-                    <span className="value">{ethBalance} ETH</span>
-                  </div>
-                  <button type="button" className="btn secondary" onClick={() => disconnect()} style={{ marginTop: '0.5rem' }}>
-                    断开连接
-                  </button>
-                </div>
-              )}
-              {account ? (
-            <div className="vault-layout">
-              <div className="card vault-section">
-                <h2>代币与 Vault 余额</h2>
-                <p className="hint">输入 ERC20 代币合约地址查询余额，也可使用下方快捷按钮填入当前链的代币。所填地址保存在本机浏览器，刷新后仍会保留。</p>
-                <div className="input-row">
-                  <input
-                    type="text"
-                    placeholder="0x..."
-                    value={tokenAddress}
-                    onChange={(e) => { setTokenAddress(e.target.value); setVaultBalance(''); setWalletTokenBalance('') }}
-                    className="input"
-                  />
-                </div>
-                <div className="quick-tokens">
-                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token0); setVaultBalance(''); setWalletTokenBalance(''); setVaultLocked(''); setVaultAvailable('') } }}>TKA</button>
-                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token1); setVaultBalance(''); setWalletTokenBalance(''); setVaultLocked(''); setVaultAvailable('') } }}>TKB</button>
-                </div>
-                <button
-                  className="btn secondary"
-                  onClick={() => fetchBalances(false)}
-                  disabled={loading || !isValidAddress(tokenAddr)}
-                >
-                  {loading ? '查询中…' : '查询余额'}
-                </button>
-                {(vaultBalance !== '' || walletTokenBalance !== '') && !error && (
-                  <div className="balances">
-                    <div className="row result">
-                      <span className="label">钱包余额</span>
-                      <span className="value">{walletTokenBalance}</span>
-                    </div>
-                    <div className="row result">
-                      <span className="label">Vault 总额</span>
-                      <span className="value">{vaultBalance}</span>
-                    </div>
-                    <div className="row result">
-                      <span className="label">可用（可下单 / 可提取）</span>
-                      <span className="value">{vaultAvailable}</span>
-                    </div>
-                    <div className="row result">
-                      <span className="label">锁定中（挂单占用）</span>
-                      <span className="value">{vaultLocked}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="vault-actions-grid">
-                <div className="card vault-section">
-                  <h2>存入</h2>
-                  <p className="hint">步骤：填入数量后点「存入」，在钱包中确认即可。首次存入需确认两次：代币授权与存入，之后可直接存入。注意：存入是链上交易，由你自己在钱包中确认（与下单、撤单只需签名不同）；存入完成后，Vault 余额即可用于下单。</p>
-                  <div className="input-row">
-                    <input
-                      type="text"
-                      placeholder="数量"
-                      value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
-                      className="input"
-                    />
-                    <button type="button" className="btn-max" onClick={handleMaxDeposit}>最大</button>
-                  </div>
-                  <button
-                    className="btn primary"
-                    onClick={handleDeposit}
-                    disabled={loadingDeposit || !isValidAddress(tokenAddr) || !depositAmount.trim()}
-                  >
-                    {loadingDeposit ? '处理中…' : '存入'}
-                  </button>
-                </div>
-
-                <div className="card vault-section">
-                  <h2>提取</h2>
-                  <p className="hint">将 Vault 余额提取回钱包：填入数量后点「提取」并在钱包中确认。只能提取「可用」部分：挂单会锁定对应余额（下单时锁定，成交时按成交量消耗，撤单或到期后释放未成交部分），锁定中的部分提不出来；想提取被锁定的部分，先到「交易」页撤掉对应挂单，释放后再提取。</p>
-                  <div className="input-row">
-                    <input
-                      type="text"
-                      placeholder="数量"
-                      value={withdrawAmount}
-                      onChange={(e) => setWithdrawAmount(e.target.value)}
-                      className="input"
-                    />
-                    <button type="button" className="btn-max" onClick={handleMaxWithdraw}>最大</button>
-                  </div>
-                  <button
-                    className="btn secondary"
-                    onClick={handleWithdraw}
-                    disabled={loadingWithdraw || !isValidAddress(tokenAddr) || !withdrawAmount.trim()}
-                  >
-                    {loadingWithdraw ? '处理中…' : '提取'}
-                  </button>
-                </div>
-              </div>
-            </div>
-              ) : (
-                <ConnectGate title="连接钱包后管理资产" desc="存入、提取与余额查询需要连接钱包；行情与公开数据可在「交易」「数据」分区直接浏览。" chainId={currentChainId ?? undefined} />
-              )}
-            </>
+            <AssetsPage
+              account={account}
+              chainConfig={currentChainConfig}
+              chainId={currentChainId}
+              connectionLabel={connectionLabel}
+              ethBalance={ethBalance}
+              onDisconnect={() => disconnect()}
+              goTrade={goTradeWithPair}
+            />
           )}
 
           {activeTab === 'markets' && (
