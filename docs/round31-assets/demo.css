@@ -568,3 +568,26 @@ body {
 .chg-block.up { background: var(--b100-chart-up); }
 .chg-block.down { background: var(--b100-chart-down); }
 .chg-block.flat { background: #e4e4e9; color: var(--b100-text-3); }
+
+/* ================================================================
+ * 第 31 轮第四批（IA 定版）：「其他」页——底部四栏的第四栏。
+ * 跨链桥/治理与贡献退出底部栏、原数据页解散，全部收进本页的
+ * 分组入口列表（抽屉式细线分行：图标 + 名称 + 一行说明 + ›）。
+ * ================================================================ */
+.menu-card { padding-top: 6px; padding-bottom: 6px; }
+.menu-card h3 { padding-top: 10px; }
+.menu-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 12px 0; border-bottom: 1px solid var(--b100-border);
+  text-decoration: none; color: inherit;
+}
+.menu-row:last-child { border-bottom: none; }
+.menu-ic {
+  width: 38px; height: 38px; border-radius: 12px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+}
+.menu-ic svg { width: 21px; height: 21px; }
+.menu-main { flex: 1; min-width: 0; }
+.menu-name { display: block; font-size: 14px; font-weight: 700; line-height: 1.3; }
+.menu-desc { display: block; font-size: 11.5px; color: var(--b100-text-2); line-height: 1.5; margin-top: 2px; }
+.menu-chev { flex: none; color: var(--b100-text-3); font-size: 17px; }
