@@ -29,6 +29,6 @@ done
 
 echo "[3/4] go test (anvil e2e)"
 cd "$ROOT/node"
-BIT100_ANVIL_RPC="$RPC" go test ./internal/settlement/ -run TestAnvilE2E -v -count=1
+BIT100_ANVIL_RPC="$RPC" go test ./internal/settlement/ -run 'TestAnvil' -v -count=1
 
 echo "[4/4] done"
