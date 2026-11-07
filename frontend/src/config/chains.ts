@@ -27,7 +27,7 @@ export interface ChainConfig {
   }
 }
 
-// Sepolia 测试网（2026-11-07 新部署：核心六合约；治理/贡献者奖励/代币注册表/链配置未部署，置零）
+// Sepolia 测试网（2026-11-07 新部署：十合约全部署——核心六 + 治理/贡献者奖励/代币注册表/链配置）
 const SEPOLIA: ChainConfig = {
   chainId: 11155111,
   name: 'Sepolia',
@@ -44,11 +44,11 @@ const SEPOLIA: ChainConfig = {
     token0: '0x903cdDF52963D9DEA0BDF8be9159E08706683654',
     token1: '0x1Ee28c1c490727e49939C95032C749ea5b58b45f',
     ammPool: '0x20a78bCb39Ff510AdBa3D3AEC9229a9583C5BDB3',
-    contributorReward: '0x0000000000000000000000000000000000000000',
+    contributorReward: '0xfe066c25a25fddd6433fac7f7769d5806392663e',
     feeDistributor: '0xB63a3D858E5230233e4D1B76052387C2274d6e3A',
-    governance: '0x0000000000000000000000000000000000000000',
-    tokenRegistry: '0x0000000000000000000000000000000000000000',
-    chainConfig: '0x0000000000000000000000000000000000000000',
+    governance: '0x26b608468bf5dd88b91eae3d16827a2b4a25bcce',
+    tokenRegistry: '0x8dc560038d392012c8562185e4c6bf2ce636e74d',
+    chainConfig: '0x439423ab16a1a3dadf5415243501ee9e6984b813',
   },
 }
 

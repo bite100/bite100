@@ -182,3 +182,61 @@ feeBps = 1；Vault.settlement = 新 Settlement。
 
 仓库内引用核查：旧 Settlement 地址在源码/配置中无其他默认引用（仅本文件历史记录），
 无需连带更新；前端仍指向更早的旧线上地址，未在本轮范围内切换（待 Ren 决定）。
+
+## 第六轮：四合约全补（Ren 拍板"全补"方案）
+
+第五轮后前端 Sepolia 配置里 governance / contributorReward / tokenRegistry /
+chainConfig 四位仍为零地址。本轮按 Ren 拍板的"全补"方案，用
+`contracts/script/Deploy.s.sol` 的现成入口把四个合约全部署并接线，至此
+2026-11-07 新部署共十个合约全部就位。部署钱包仍为
+`0x4B3fbb64ed7F3CD892484154EC684C1eFC8fa93e`。
+
+### 新部署的四个合约
+
+| 合约 | 地址 | 部署 tx |
+|---|---|---|
+| ContributorReward | `0xfe066c25a25fddd6433fac7f7769d5806392663e` | [0x6cc87fb4…0e51](https://sepolia.etherscan.io/tx/0x6cc87fb4bf630893b7951ff099c74cdb7d8d43efb1382b7c91867b270d9a0e51) |
+| Governance | `0x26b608468bf5dd88b91eae3d16827a2b4a25bcce` | [0x34c4cca7…9f13](https://sepolia.etherscan.io/tx/0x34c4cca71988fabe9895c1c6c5dab4c966d812e665cb8bc55299a30eaa9f9f13) |
+| TokenRegistry | `0x8dc560038d392012c8562185e4c6bf2ce636e74d` | [0xfd36b13d…03da](https://sepolia.etherscan.io/tx/0xfd36b13de87161779f61647a0e073147d3a69563c8f2675d2da8340f35b003da) |
+| ChainConfig | `0x439423ab16a1a3dadf5415243501ee9e6984b813` | [0x3b4d8964…0f74](https://sepolia.etherscan.io/tx/0x3b4d8964dbe4136e2537a1c15be1df29ad18a268dc9a8756bdbb510d68600f74) |
+
+### 接线清单（共 11 笔交易：4 部署 + 7 setter）
+
+执行顺序：`runContributorReward()` → `runGovernance()`（脚本一次回填四处
+setGovernance，无需补笔）→ `runTokenRegistryAndChainConfig()` → 手工补
+`AMMPool.setContributorReward` 一笔。
+
+| 接线 | tx |
+|---|---|
+| Settlement.setGovernance → 新 Governance | [0x10ae39fc…f01d](https://sepolia.etherscan.io/tx/0x10ae39fc2ad68d2ef1eb9672ae13991c25c9f378ffa1ae6d848cd4403404f01d) |
+| AMMPool.setGovernance → 新 Governance | [0xffddb7d2…7485](https://sepolia.etherscan.io/tx/0xffddb7d2bc77e13b934281d1d9570700b3b4e45c575f68e146a7589bf6b97485) |
+| ContributorReward.setGovernance → 新 Governance | [0x9a0e82e1…f5458](https://sepolia.etherscan.io/tx/0x9a0e82e1422e0b81d6cc9b478b9205cccafd063cf020b1f4f7b3a2affa9f5458) |
+| FeeDistributor.setGovernance → 新 Governance | [0x9e16f8ec…2c71](https://sepolia.etherscan.io/tx/0x9e16f8ec58953646ff667ed519bd2152a3d61ca945682e643ce7be1a0b122c71) |
+| TokenRegistry.setGovernance → 新 Governance | [0x70d0d64b…dfa0](https://sepolia.etherscan.io/tx/0x70d0d64b98c8f4e61afe256c4c11474b917e7c78047480f1baf42a0c03d9dfa0) |
+| ChainConfig.setGovernance → 新 Governance | [0x68946bce…4960](https://sepolia.etherscan.io/tx/0x68946bceddf56f8911fa6a761a4c0ea3b62c19dd8796f3ee5702ea428aaf2496) |
+| AMMPool.setContributorReward → 新 ContributorReward | [0x000f2e6f…8546](https://sepolia.etherscan.io/tx/0x000f2e6f6da760144d8792cf3dee9062b41455b7ec63a2edd3f95a3bb85b8546) |
+
+### 链上验证（逐项读回，全部通过）
+
+- 四个新地址均有代码（字节码约 10.4 KB / 9.5 KB / 1.6 KB / 1.5 KB）✓
+- `Settlement.governance()`、`AMMPool.governance()`、`FeeDistributor.governance()`、
+  `ContributorReward.governance()`、`TokenRegistry.governance()`、
+  `ChainConfig.governance()` 六处读回均 == 新 Governance `0x26b60846…5bcce` ✓
+- `AMMPool.contributorReward()` == 新 ContributorReward `0xfe066c25…2663e` ✓
+
+### 余额消耗
+
+部署钱包：部署前 0.080608 ETH → 本轮后 0.073916 ETH，本轮 11 笔交易共耗
+≈ 0.006692 ETH（Sepolia 测试币）。
+
+### 前端与注意事项
+
+- 前端 `chains.ts` Sepolia 段四位已填新地址（段首注释改为"十合约全部署"），
+  `npm test` 77/77 全绿，构建产物已确认含新 Governance 地址。
+- **两个登记表目前是空表**：TokenRegistry 尚无任何代币登记、ChainConfig 尚无
+  任何链登记。两者的增删只认治理提案（创建提案 → 7 天投票 → 2 天 timelock →
+  执行），把 TKA/TKB 正式登记最快也要 9 天后，且需先备好贡献者活跃集的
+  Merkle 树。本轮只是把合约部署并接线到位，**未** populated 任何数据。
+- ContributorReward 尚未注入任何周期的奖励池（需 owner 调
+  `setPeriodReward`），治理区与贡献奖励页面即日起可连到真实合约，但暂无
+  可领取奖励；Governance 也尚无提案（提案需附活跃集 Merkle 根）。
