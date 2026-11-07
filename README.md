@@ -27,12 +27,19 @@
 
 ## 功能
 
-- **交易**：链下订单簿、限价单 + 市价单（IOC，带签名保护价）、链上 Settlement 结算（0.01% 手续费）；无自有 AMM，流动性走订单簿 + 做市金库（设计中）
+- **交易**：链下订单簿、限价单 + 市价单（IOC，带签名保护价）、链上 Settlement 结算（0.01% 手续费）；无自有 AMM，流动性走订单簿 + 做市金库（ERC-4626，第 27/30 轮已部署双测试网，前端金库子页第 31 轮已上线）
 - **资金**：Vault 存提 ERC20；下单时 Vault 可用不足可在下单面板内一键补存差额
 - **治理**：提案与投票、手续费分配
 - **贡献奖励**：节点贡献证明、链上领取、Merkle 空投
 - **跨链**：LayerZero OApp 跨链桥接
 - **P2P**：libp2p + 公共 bootstrap + DHT 发现，GossipSub 订单广播
+
+> **口径说明（第 32 轮补）**：订单经 P2P 网络去中心化传播、资金由用户
+> 签名自托管；但**链上结算目前是许可制**——`Settlement.settleTrade` 只
+> 接受合约 owner 或已登记的 relayer 提交（现行由运营节点的结算提交器
+> 执行）。「去中心化」在本项目现阶段指订单传播与签名/托管模型，不指
+> 结算提交的无许可性；无许可化在无节点改造路线图中分阶段推进
+> （见 `docs/nodeless-design-2026-11-07.md`）。
 
 ---
 
@@ -70,7 +77,7 @@ forge build
 forge test
 ```
 
-部署详见 [contracts/DEPLOY-SEPOLIA.md](contracts/DEPLOY-SEPOLIA.md)。
+部署详见 [contracts/README.md](contracts/README.md)（现行技术栈与地址）；`contracts/DEPLOY-SEPOLIA.md` 为早期部署记录，已被取代、仅作历史留存。
 
 ---
 
