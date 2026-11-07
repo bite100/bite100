@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Paper } from '@mantine/core'
+import { useMediaQuery } from '@mantine/hooks'
 import { OrderBookWidget, type OrderBookRow } from './OrderBookWidget'
 import { KLineChart } from './KLineChart'
 import { LimitOrderFormWidget } from './LimitOrderFormWidget'
+import { MobileTradeView } from './MobileTradeView'
 import { PairStatsBar } from './PairStatsBar'
 import { RecentTradesWidget } from './RecentTradesWidget'
 import { TradeTabsPanel } from './TradeTabsPanel'
@@ -69,6 +71,22 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
   const handlePriceClick = useCallback((price: string) => {
     setPricePick((prev) => ({ price, seq: prev.seq + 1 }))
   }, [])
+
+  // 第 31 轮：<1024px 走移动交易页（双列盘口+下单票骨架），≥1024px 维持第 28 轮三列网格。
+  // 两棵树只挂载一棵，盘口/统计轮询不双跑；数据与签名链路共用同一套组件与 hook。
+  const isMobile = useMediaQuery('(max-width: 1023px)')
+  if (isMobile) {
+    return (
+      <MobileTradeView
+        pair={pair}
+        setPair={setPair}
+        stats={stats}
+        account={account}
+        getSigner={getSigner}
+        onShowFullOrderbook={onShowFullOrderbook}
+      />
+    )
+  }
 
   return (
     <div className="trade-screen">

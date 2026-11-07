@@ -9,16 +9,32 @@
   display: flex;
   flex-direction: column;
   gap: 1.75rem;
-  max-width: 1120px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 1rem 0 2.5rem;
+  /* 第 31 轮：顶部为 48px 固定顶栏留白；底部为固定标签栏（56px + 安全区）留白 */
+  padding: calc(48px + 0.75rem) 0 calc(var(--b100-tabbar-h, 56px) + 1rem);
   width: 100%;
 }
 @media (max-width: 640px) {
   .app {
     gap: 1.25rem;
-    padding: 0.5rem 0 1.5rem;
   }
+}
+@media (min-width: 1024px) {
+  .app {
+    padding-bottom: 2.5rem;
+  }
+}
+
+/* 第 31 轮新增容器微调 */
+.markets-card {
+  padding: 14px 16px;
+}
+.govern-tabs {
+  margin-bottom: 0.25rem;
+}
+.account-details-card {
+  margin-bottom: 0;
 }
 
 /* ---------- 顶栏：Logo / 链切换 / 钱包 ---------- */
@@ -745,7 +761,8 @@ select.input {
 @media (max-width: 480px) {
   .app {
     gap: 1.25rem;
-    padding: 1rem 0.75rem 2rem;
+    /* 第 31 轮：与外层 .app 同口径——顶栏 48px 留白 + 底部标签栏留白（旧值 1rem 会让首屏被固定顶栏遮住） */
+    padding: calc(48px + 0.75rem) 0 calc(var(--b100-tabbar-h, 56px) + 1rem);
   }
   .subtitle {
     font-size: 0.8125rem;

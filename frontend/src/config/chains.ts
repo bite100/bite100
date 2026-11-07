@@ -26,6 +26,8 @@ export interface ChainConfig {
     crossChainBridge: string
     // 第十九轮：WrappedTKA（TKA 的 1:1 包装代币，CCIP / Wormhole 桥的载体代币）
     wrappedToken?: string
+    // 第三十轮：做市金库 MakerVault（ERC-4626，第 27 轮部署、第 30 轮随新栈换址）
+    makerVault?: string
   }
   // 第二十五轮：本链已部署的测试代币（符号 → 地址），供交易对切换器取下单/余额代币；
   // TKA/TKB 沿用 contracts.token0/token1 的地址，此处一并登记以便按符号统一取用。
@@ -86,6 +88,7 @@ const SEPOLIA: ChainConfig = {
     chainConfig: '0x52De0F096B169f612E55084eE05Efa7D1dEaa0c4',
     crossChainBridge: '0x7a0eCbc2Ffca2F8f7A1505Fa65e7E4759bE33d50',
     wrappedToken: '0x03ED8203236Bb5409caA6330fDCd16559C914b9a',
+    makerVault: '0x253a336CbDF20B8e1A2696b7749C22ADD2159b61',
   },
   // 第十九轮 CCIP（见 docs/round19-three-bridges-2026-11-07.md）
   ccip: {
@@ -151,6 +154,7 @@ const BASE_SEPOLIA: ChainConfig = {
     tokenRegistry: '0x8dC560038D392012C8562185E4C6Bf2Ce636E74D',
     chainConfig: '0x41b12b6620750564a412b294a1a2bBde24a3B9E8',
     crossChainBridge: '0xA7722A0ba7F2DA1d4D67D5191222C5e4c3835dBB',
+    makerVault: '0x04Da8F47a89421d853FeDAB572d1A62050474098',
     // 注意：Base Sepolia 的 wTKA 地址字符串与 Sepolia 的 FeeDistributor 相同，是不同链上的不同合约；
     // Base Sepolia 的 CCIP 池地址字符串又与 Sepolia 的 TKA 相同（CREATE nonce 巧合），引用时务必连链一起看。
     wrappedToken: '0x346DE29B7fEe95F44A5b5385e87182F031E8E1B5',

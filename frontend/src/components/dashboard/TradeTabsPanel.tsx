@@ -29,6 +29,12 @@ export interface TradeTabsPanelProps {
   getSigner: () => Promise<Signer | null>
   /** 下单成功后递增，触发挂单列表刷新 */
   refreshSignal?: number
+  /**
+   * 变体（第 31 轮）：full = 桌面四页签（当前挂单/历史订单/成交记录/余额，缺省不变）；
+   * mobile = 移动交易页三页签（当前委托/历史订单/持有币种），成交记录在图表展开态的
+   * 「最新成交」里与桌面端继续提供。数据管道两变体完全共用。
+   */
+  variant?: 'full' | 'mobile'
 }
 
 /**
@@ -62,7 +68,8 @@ interface BalanceRow {
  * 当前挂单 / 历史订单 / 成交记录 / 余额——实体全部来自本应用既有管道
  * （节点 /api/orders、/api/trades 与链上 ERC20/Vault 余额），无持仓/杠杆类概念。
  */
-export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refreshSignal = 0 }: TradeTabsPanelProps) {
+export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refreshSignal = 0, variant = 'full' }: TradeTabsPanelProps) {
+  const mobile = variant === 'mobile'
   const [baseSymbol, quoteSymbol] = pair.split('/')
   const pairTokens = getPairTokens(CHAIN_ID, pair)
   const [tab, setTab] = useState<string | null>('open')
@@ -236,10 +243,20 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
     <div className="trade-tabs">
       <Tabs value={tab} onChange={setTab}>
         <Tabs.List>
-          <Tabs.Tab value="open">当前挂单{openOrders.length > 0 ? ` (${openOrders.length})` : ''}</Tabs.Tab>
-          <Tabs.Tab value="history">历史订单</Tabs.Tab>
-          <Tabs.Tab value="trades">成交记录</Tabs.Tab>
-          <Tabs.Tab value="balance">余额</Tabs.Tab>
+          {mobile ? (
+            <>
+              <Tabs.Tab value="open">当前委托{openOrders.length > 0 ? ` (${openOrders.length})` : ''}</Tabs.Tab>
+              <Tabs.Tab value="history">历史订单</Tabs.Tab>
+              <Tabs.Tab value="balance">持有币种</Tabs.Tab>
+            </>
+          ) : (
+            <>
+              <Tabs.Tab value="open">当前挂单{openOrders.length > 0 ? ` (${openOrders.length})` : ''}</Tabs.Tab>
+              <Tabs.Tab value="history">历史订单</Tabs.Tab>
+              <Tabs.Tab value="trades">成交记录</Tabs.Tab>
+              <Tabs.Tab value="balance">余额</Tabs.Tab>
+            </>
+          )}
         </Tabs.List>
 
         <Tabs.Panel value="open" pt="sm">
@@ -260,6 +277,7 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
           {renderOrdersTable(sortedMine, false)}
         </Tabs.Panel>
 
+        {!mobile && (
         <Tabs.Panel value="trades" pt="sm">
           {sortedTrades.length === 0 ? (
             <Text size="sm" c="dimmed" py="sm">
@@ -296,6 +314,7 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
             </div>
           )}
         </Tabs.Panel>
+        )}
 
         <Tabs.Panel value="balance" pt="sm">
           {!account ? (

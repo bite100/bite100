@@ -1,0 +1,229 @@
+/* 第 31 轮共享控件样式：文字页签 / 分段控件 / 药丸 / 数字 / 键值行 / 菜单行
+   取值与设计演示图 demo.css 一致（皮肤 token 不变） */
+
+.num {
+  font-family: var(--b100-font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.text-tabs {
+  display: flex;
+  gap: 18px;
+  border-bottom: 1px solid var(--b100-border);
+}
+.text-tabs button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--b100-text-2);
+  padding: 9px 2px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.text-tabs button.on {
+  color: var(--b100-text);
+  border-bottom-color: var(--b100-accent);
+}
+
+.seg {
+  display: flex;
+  background: #efeff1;
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+.seg button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b100-text-2);
+  padding: 8px 4px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.seg button.on {
+  background: #fff;
+  color: var(--b100-text);
+  box-shadow: 0 1px 4px rgba(16, 16, 20, 0.1);
+}
+.seg.buy-sell button.on.buy {
+  background: var(--b100-up);
+  color: #fff;
+  box-shadow: none;
+}
+.seg.buy-sell button.on.sell {
+  background: var(--b100-down);
+  color: #fff;
+  box-shadow: none;
+}
+
+.pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f1f1f4;
+  color: var(--b100-text-2);
+  white-space: nowrap;
+}
+.pill-spot {
+  background: #eef7f1;
+  color: var(--b100-up);
+}
+.pill-accent {
+  background: #ffeef7;
+  color: var(--b100-accent);
+}
+.pill[disabled],
+button.pill:disabled {
+  opacity: 0.55;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--b100-hairline);
+  font-size: 13px;
+}
+.kv:last-child {
+  border-bottom: none;
+}
+.kv .k {
+  color: var(--b100-text-2);
+}
+.kv .v {
+  font-weight: 600;
+  text-align: right;
+}
+.kv .v small {
+  display: block;
+  font-size: 11px;
+  color: var(--b100-text-3);
+  font-weight: 500;
+}
+
+.menu-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--b100-text-3);
+  letter-spacing: 0.04em;
+  margin: 4px 2px -4px;
+}
+.menu-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 13px 2px;
+  border: none;
+  border-bottom: 1px solid var(--b100-hairline);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  color: var(--b100-text);
+}
+.menu-row:last-child {
+  border-bottom: none;
+}
+.menu-ico {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: #f4f4f6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--b100-text-2);
+}
+.menu-ico svg {
+  width: 19px;
+  height: 19px;
+}
+.menu-txt {
+  flex: 1;
+  min-width: 0;
+}
+.menu-txt b {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.menu-txt span {
+  display: block;
+  font-size: 12px;
+  color: var(--b100-text-3);
+  line-height: 1.45;
+  margin-top: 1px;
+}
+.menu-arrow {
+  color: var(--b100-text-3);
+  font-size: 18px;
+  flex: none;
+}
+
+/* 二级页返回头 */
+.subbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.subbar button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--b100-text);
+  padding: 2px 6px 2px 0;
+}
+.subbar .subbar-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+/* 固定在底部标签栏之上的操作条（桥页发起条等） */
+.sticky-cta {
+  position: sticky;
+  bottom: calc(var(--b100-tabbar-h, 56px) + 8px);
+  z-index: 40;
+  background: #fff;
+  border: 1px solid var(--b100-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(16, 16, 20, 0.1);
+  padding: 10px 12px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+@media (min-width: 1024px) {
+  .sticky-cta {
+    bottom: 12px;
+  }
+}
+.sticky-cta .fee {
+  font-size: 11.5px;
+  color: var(--b100-text-2);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.sticky-cta .fee b {
+  color: var(--b100-text);
+  font-size: 12.5px;
+}
+.sticky-cta button {
+  flex: 1;
+}
