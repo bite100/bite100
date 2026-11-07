@@ -2,7 +2,10 @@
 
 > 2026-11-07 第九轮（M2a）落档。决策背景：Ren 拍板「桥可以全都要」——做一个**可插拔的多桥层**，
 > 由交易者在每次转账时**自选**用哪座桥。本文定义统一接口与每座桥向前端暴露的元数据；
-> LayerZero 是首个实现，Chainlink CCIP、Wormhole 后续按同一接口接入（本轮不写它们的代码）。
+> LayerZero 是首个实现，Chainlink CCIP、Wormhole 已于第十九轮按同一接口接入（见 §6）。
+> 第二十轮再加第四个 provider：**垫资快线（聚合器 LI.FI）**——形态与消息桥不同
+> （做市商垫付而非消息验证），偏离点与门禁见 §7，全量记录见
+> `docs/round20-fastlane-2026-11-07.md`。
 > 选型调研（费用/安全/事故史）见 `~/workspace/bite100-bridge-research.md`（仓库外调研稿）。
 
 ## 1. 设计原则
@@ -25,7 +28,7 @@
 ```ts
 interface BridgeAdapter {
   /** 桥标识与静态元数据（见 §3） */
-  readonly id: 'layerzero' | 'ccip' | 'wormhole';
+  readonly id: 'layerzero' | 'ccip' | 'wormhole' | 'fastlane';
   readonly label: string;            // 前端展示名
   readonly securityModel: string;    // 安全模型标签（见 §3 表格）
   readonly etaSeconds: [number, number]; // 预估时延区间（下限, 上限）
@@ -72,13 +75,14 @@ interface BridgeAdapter {
 - 发送/完成两侧都落账：源侧 `Pending → （目标确认后由状态服务回填）`，
   目标侧放行即记 `Completed`（含 messageId 反查表）。
 
-## 3. 三座桥的元数据（前端展示口径）
+## 3. 四个 provider 的元数据（前端展示口径）
 
 | 桥 | id | 安全模型标签 | 费用口径（ETH↔Base 向，调研值） | 预估时延 | 状态 |
 |---|---|---|---|---|---|
 | LayerZero V2 | `layerzero` | 「DVN 多签验证（应用自选验证者集）」——**当前测试网部署为 1-of-1（仅 LayerZero Labs DVN），见 §5 如实标注**；主网目标 ≥2 独立 DVN | 按消息动态报价（DVN+执行者费，源链原生币付） | 约 1–15 分钟（源链确认数 + DVN 签名） | ✅ 首个实现（M2a） |
 | Chainlink CCIP | `ccip` | 「Chainlink 预言机网络共识（全网统一验证者集，零事故记录）」 | 固定价：ETH→Base $0.50 / Base→ETH $1.50（调研值）；第十九轮实测 10 wTKA Sepolia→Base Sepolia 为 0.0002274 ETH | 约 10–20 分钟（实测约 20 分钟） | ✅ 已接入（M2b，第十九轮） |
 | Wormhole | `wormhole` | 「19 Guardian 多签（协议费为零）」 | 协议费 0；测试网 messageFee 实测 0，自动中继在测试网不保证（实测需手动投递） | 约 5–20 分钟出 VAA，投递另计 | ✅ 已接入（M2c，第十九轮） |
+| 极速到账（LI.FI 聚合） | `fastlane` | 「做市商垫付（无跨链消息验证环节；聚合器在多家求解器/桥之间选路，履约方以报价返回为准）」 | 报价差额内扣：LI.FI 平台费 0.25% + 底层路由/求解器费（feeCosts 逐项可见）；gas 源链原生币另付 | 主网约 1–5 分钟（报价返回为准） | ✅ 已接入（M2d，第二十轮）——**仅主网**；测试网硬拦截只展示（见 §7） |
 
 ## 4. 防重放与失败语义（所有桥共同）
 
@@ -133,3 +137,30 @@ interface BridgeAdapter {
 - **费用/风险展示**：已按「确认前摊开」落地（round-19 文档 §7）：不预选桥、
   卡片实时报价 + 时效预估 + 安全标签 + 可展开风险、确认弹窗复述。
 - **DVN 状态不变**：§5 的 1-of-1 现状与主网硬门禁在本轮后继续有效。
+
+## 7. 第二十轮：垫资快线 provider（聚合器 LI.FI，2026-11-07）
+
+全量记录见 `docs/round20-fastlane-2026-11-07.md`，此处只记与本规格的对应关系与偏离：
+
+- **形态偏离（如实）**：三家消息桥走 Bit100 自己的锁定/解锁语义（§2 链上侧约定）；
+  快线**不经过 Bit100 桥合约**——资金由用户钱包直接按聚合器返回的
+  transactionRequest 进入聚合器合约/求解器流程，目的链由做市商以自有资金垫付。
+  因此 §2 的 `(srcChain, transferId)` 去重、源侧落账等链上约定**不适用于快线**；
+  快线的防重放与履约保障由履约方协议自身承担，Bit100 只做报价呈现、状态映射与留痕
+  （发送交易哈希 + `/v1/status` 轮询）。
+- **统一接口映射**：quote = LI.FI `GET /v1/quote`（feeCosts 的 included 标记区分
+  「从到账扣除」与「另付」，gasCosts 对应目标/源链执行费列，executionDuration 对应
+  etaSeconds）；initiate = 用户签名发送报价返回的 transactionRequest（发送前重新报价，
+  失败即中止）；status = `GET /v1/status` 映射统一四态（DONE→Completed、
+  PENDING→InFlight、FAILED/INVALID→Failed、NOT_FOUND→Initiated，不谎报进度）。
+  实现位于 `frontend/src/services/fastLane.ts`（纯胶水，官方 API 原样调用）。
+- **费用口径**：快线无 Bit100 桥费（本轮不加收集成方分成，integrator 参数默认不传）；
+  总费用 = 报价差额（LI.FI 平台费 0.25% + 底层路由/求解器费，从到账扣除）+ 发送 gas
+  （源链原生币另付）。确认弹窗逐项拆开展示，与 §1-4 的三分口径等价呈现。
+- **测试网门禁（硬性）**：求解器网络在 Sepolia / Base Sepolia 没有任意代币的垫资
+  流动性。快线在测试网链对上**只展示、不报价、不接受发起**（provider 在发任何网络
+  请求前拦截，单测断言零调用）；首批仅开通 Ethereum ↔ Base 主网。主网上线门槛
+  （Ren 申请 LI.FI API key、主网小额 E2E 一笔）见 round-20 文档 §5。
+- **选型留位**：Relay 直连、deBridge DLN 列为第二 provider 候选（单一求解器网络，
+  费用拆分同样合规），后续如需比价/兜底，按本节同一映射再加 provider，不改前端选择器
+  结构与知情选择规则。

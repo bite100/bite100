@@ -190,6 +190,7 @@ Bit100 的叙事是 P2P 无服务器，但现实检查：GitHub Pages 托管前�
 - ✅ 桥迁移（2026-11-07 第十六轮）：第十五轮换代币后桥重部署并绑定新 TKA——Sepolia 桥 `0x7a0eCbc2…`、Base Sepolia 桥 `0xA7722A0b…`，setPeer/映射/桥费/Base 侧 1000 新 TKA 流动性读回全过；前端 chains 新增 `crossChainBridge` 配置、桥页默认取配置地址并对齐组件 ABI。新一笔真实跨链达标：源 tx `0x054b2264…`、guid `0x1d11a42e…`、到账 9.9 TKA、双边 Completed、重放被拒。**DVN 仍为 1-of-1（LayerZero Labs），主网多 DVN 门禁不变**。全量记录见 `docs/round16-bridge-migration-2026-11-07.md`。
 - ⚠️ **DVN 未达标（如实）**：两路径生效配置经 `getConfig` 读回均为默认 **1-of-1（仅 LayerZero Labs）**，不满足「required DVN ≥2」硬前提；测试网第二家 DVN 无可用部署（Google 测试网证明不可靠，见部署记录 §4），未假装配置。主网前必须跑 `contracts/script/ConfigureDvns.s.sol` 并读回存档。
 - ✅ M2b/M2c（第十九轮，2026-11-07）：CCIP、Wormhole 已按 `docs/bridge-abstraction.md` 接入（报价/发起/状态 + fee/时延/安全标签），桥页交易者自选、无预选；双链各一笔真实到账 E2E 通过。全量记录见 `docs/round19-three-bridges-2026-11-07.md`。
+- ✅ M2d 垫资快线（第二十轮，2026-11-07）：Ren 拍板接入求解器/聚合器中间商——选定 **LI.FI 聚合**（一家覆盖 Across/Relay/deBridge 等多家履约方），桥页第四选项「极速到账（做市商垫付）」与三桥并列、无预选，费用拆分/履约方/回退路径在确认前摊开。**主网功能**：测试网无求解器流动性，测试网链对硬拦截只展示、不报价（单测断言零请求）；合约零改动；主网上线门槛 = Ren 申请 LI.FI API key + 主网小额 E2E 一笔。全量记录见 `docs/round20-fastlane-2026-11-07.md`。
 - 验收（原）：一笔 TKA 从 Sepolia 跨到第二条链，源链 `BridgeInitiated` 与目标链 `BridgeCompleted` 两侧事件可查、金额一致（扣桥费后）、目标链桥/用户余额到账；同一条消息重放被拒。—— LZ 实现已达成。
 
 **M3 跨链订单（最小闭环）**
