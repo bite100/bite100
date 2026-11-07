@@ -6,7 +6,8 @@ import { nodePost } from '../../nodeClient'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
-import { ERC20_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, VAULT_ABI, VAULT_ADDRESS } from '../../config'
+import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
+import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
 import { StandardConnect } from '../StandardConnect'
 import {
   bestOppositePrice,
@@ -30,8 +31,6 @@ import {
 } from '../../services/referencePrice'
 import type { Signer } from 'ethers'
 
-const DEFAULT_PAIR = 'TKA/TKB'
-const [BASE_SYMBOL, QUOTE_SYMBOL] = DEFAULT_PAIR.split('/')
 const PCT_MARKS = [
   { value: 0, label: '0%' },
   { value: 25, label: '25%' },
@@ -41,6 +40,8 @@ const PCT_MARKS = [
 ]
 
 interface LimitOrderFormWidgetProps {
+  /** 第二十五轮：当前交易对（由交易台传入，随 URL ?pair= 切换） */
+  pair?: string
   account: string | null
   getSigner: () => Promise<Signer | null>
   recommendedPrice?: string
@@ -71,7 +72,12 @@ function fmtDataTime(sec: number): string {
   })
 }
 
-export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, externalPrice, book, lastTradePrice, lastTradeAtSec, onSuccess }: LimitOrderFormWidgetProps) {
+export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, recommendedPrice, externalPrice, book, lastTradePrice, lastTradeAtSec, onSuccess }: LimitOrderFormWidgetProps) {
+  // 第二十五轮：基础/计价代币随交易对取（chains.ts tokens 登记）；未登记的交易对不下单。
+  const [baseSymbol, quoteSymbol] = pair.split('/')
+  const pairTokens = getPairTokens(CHAIN_ID, pair)
+  const baseToken = pairTokens?.base ?? ''
+  const quoteToken = pairTokens?.quote ?? ''
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
   const [orderType, setOrderType] = useState<'limit' | 'market'>('limit')
   const [price, setPrice] = useState(recommendedPrice ?? '')
@@ -94,12 +100,12 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
     }
   }, [externalPrice])
 
-  // 可用余额：Vault 可用额（总额 − 挂单锁定；卖出花 TKA、买入花 TKB）。
+  // 可用余额：Vault 可用额（总额 − 挂单锁定；卖出花基础币、买入花计价币）。
   // 下单按可用额校验：挂单被节点接受时即锁定对应余额，可用不足的订单不进订单簿。
   useEffect(() => {
     let cancelled = false
     const fetchBalance = async () => {
-      if (!account) {
+      if (!account || !pairTokens) {
         setBalance('')
         setAvailableWei(null)
         setLockedBalance('')
@@ -108,7 +114,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
       try {
         const provider = getProvider()
         if (!provider) return
-        const spendToken = side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+        const spendToken = side === 'sell' ? baseToken : quoteToken
         const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
         const [avail, locked] = await Promise.all([
           vault.availableBalance(account, spendToken) as Promise<bigint>,
@@ -131,7 +137,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
     return () => {
       cancelled = true
     }
-  }, [account, side, balanceTick])
+  }, [account, side, balanceTick, pair, pairTokens])
 
   const pickSide = (next: 'buy' | 'sell') => {
     setSide(next)
@@ -156,7 +162,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
   const effectivePrice = orderType === 'market' ? protectionStr : price
 
   // ---- 第二十三轮：参考价（预言机优先；无喂价的对走本所成交/盘口兜底，口径见 services/referencePrice.ts） ----
-  const refState = useReferencePrice(DEFAULT_PAIR, {
+  const refState = useReferencePrice(pair, {
     lastTradePrice: lastTradePrice ?? null,
     lastTradeAtSec: lastTradeAtSec ?? null,
     book,
@@ -189,7 +195,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
     }
   })()
 
-  /** 百分比滑杆：按可用余额比例换算数量（买入需按有效价格把 TKB 余额折算为 TKA 数量） */
+  /** 百分比滑杆：按可用余额比例换算数量（买入需按有效价格把计价币余额折算为基础币数量） */
   const handlePctChange = (value: number) => {
     setPct(value)
     const bal = parseFloat(balance)
@@ -206,6 +212,10 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
   const handlePlaceOrder = async () => {
     if (!account) {
       setError('请先连接钱包')
+      return
+    }
+    if (!pairTokens) {
+      setError(`交易对 ${pair} 未登记代币地址，无法下单`)
       return
     }
     const a = parseFloat(amount)
@@ -239,7 +249,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
       // 差额在面板内补齐；补存被拒/失败/回读仍不足都会抛错停在签名前。
       const provider = getProvider()
       if (provider) {
-        const spendToken = side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+        const spendToken = side === 'sell' ? baseToken : quoteToken
         const vaultRead = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
         const tokenRead = new Contract(spendToken, ERC20_ABI, provider)
         const [availFresh, walletBal] = await Promise.all([
@@ -276,8 +286,8 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
       const orderData = {
         orderId,
         userAddress: account,
-        tokenIn: TOKEN0_ADDRESS,
-        tokenOut: TOKEN1_ADDRESS,
+        tokenIn: baseToken,
+        tokenOut: quoteToken,
         amountIn: amountInWei.toString(),
         amountOut: String(amountOutWei),
         price: priceWei.toString(),
@@ -291,7 +301,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
       const order = {
         orderId,
         trader: account,
-        pair: DEFAULT_PAIR,
+        pair,
         side: side as 'buy' | 'sell',
         price: orderData.price,
         amount: orderData.amountIn,
@@ -328,7 +338,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
       : !Number.isNaN(priceNum) && !Number.isNaN(amountNum) && priceNum > 0 && amountNum > 0
         ? priceNum * amountNum
         : null
-  const spendSymbol = side === 'sell' ? BASE_SYMBOL : QUOTE_SYMBOL
+  const spendSymbol = side === 'sell' ? baseSymbol : quoteSymbol
   const topUpStepText =
     topUpStep === 'approving'
       ? '补存中：请在钱包中确认授权…'
@@ -341,7 +351,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
   return (
     <Paper p="md" style={{ background: 'transparent' }}>
       <Text size="sm" fw={600} mb="xs">
-        下单 · {DEFAULT_PAIR}
+        下单 · {pair}
       </Text>
       <Stack gap="sm">
         <div className="side-toggle" role="group" aria-label="买卖方向">
@@ -383,7 +393,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
             <Text size="xs" c="dimmed">
               参考价{' '}
               <button type="button" className="ref-price-value" onClick={handleRefPriceClick} title="点击填入价格框">
-                {trimNum(refState.ref.price, 6)} {QUOTE_SYMBOL}
+                {trimNum(refState.ref.price, 6)} {quoteSymbol}
               </button>{' '}
               · {REFERENCE_SOURCE_LABELS[refState.ref.source]} · 数据时间 {fmtDataTime(refState.ref.updatedAtSec)}
               （点击价格可填入）
@@ -412,7 +422,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
         </div>
         {orderType === 'limit' ? (
           <NumberInput
-            label={`价格 (${QUOTE_SYMBOL})`}
+            label={`价格 (${quoteSymbol})`}
             value={price || undefined}
             onChange={(v) => setPrice(String(v ?? ''))}
             min={0}
@@ -436,11 +446,11 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
               </Text>
             ) : (
               <Text size="xs" c="dimmed">
-                对手盘最优价 {trimNum(bestOpp, 6)} {QUOTE_SYMBOL} · 保护价 {protectionStr} {QUOTE_SYMBOL}
+                对手盘最优价 {trimNum(bestOpp, 6)} {quoteSymbol} · 保护价 {protectionStr} {quoteSymbol}
                 {fillEstimate && amountNum > 0 && (
                   <>
-                    {' '}· 预估成交均价 {fillEstimate.avgPrice != null ? trimNum(fillEstimate.avgPrice, 6) : '—'} {QUOTE_SYMBOL}，可成交{' '}
-                    {trimNum(fillEstimate.filledQty, 6)} / {trimNum(amountNum, 6)} {BASE_SYMBOL}
+                    {' '}· 预估成交均价 {fillEstimate.avgPrice != null ? trimNum(fillEstimate.avgPrice, 6) : '—'} {quoteSymbol}，可成交{' '}
+                    {trimNum(fillEstimate.filledQty, 6)} / {trimNum(amountNum, 6)} {baseSymbol}
                     {!fillEstimate.fullyFilled &&
                       (fillEstimate.cappedByProtection
                         ? '（有档位超出保护价，超出部分不会成交）'
@@ -452,7 +462,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
           </>
         )}
         <NumberInput
-          label={`数量 (${BASE_SYMBOL})`}
+          label={`数量 (${baseSymbol})`}
           value={amount || undefined}
           onChange={(v) => {
             setAmount(String(v ?? ''))
@@ -487,7 +497,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
           <div className="order-total-row">
             <span>{orderType === 'market' ? '预估总额' : '总额'}</span>
             <span className="order-total-val">
-              {trimNum(total)} {QUOTE_SYMBOL}
+              {trimNum(total)} {quoteSymbol}
             </span>
           </div>
         )}
@@ -518,8 +528,8 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
         )}
         {deviationWarning && refOk && devPct != null && (
           <Text size="sm" c="red" fw={600} role="alert">
-            ⚠ 你填的价格 {trimNum(limitPriceNum, 6)} {QUOTE_SYMBOL} 比参考价 {trimNum(refOk.price, 6)}{' '}
-            {QUOTE_SYMBOL} {devPct >= 0 ? '高' : '低'} {Math.abs(devPct).toFixed(1)}%——偏离超过{' '}
+            ⚠ 你填的价格 {trimNum(limitPriceNum, 6)} {quoteSymbol} 比参考价 {trimNum(refOk.price, 6)}{' '}
+            {quoteSymbol} {devPct >= 0 ? '高' : '低'} {Math.abs(devPct).toFixed(1)}%——偏离超过{' '}
             {DEVIATION_WARN_PCT}% 时请先确认不是手误。P2P 挂单允许任意报价，若是故意报价可直接继续下单，这里只提醒、不拦截。
           </Text>
         )}
@@ -532,6 +542,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
           loading={loading}
           disabled={
             !account ||
+            !pairTokens ||
             !amount ||
             (orderType === 'limit' ? !price : bestOpp == null)
           }
@@ -540,8 +551,8 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
             (displayShortfall
               ? `补存 ${formatTokenAmount(displayShortfall.shortfall)} ${spendSymbol} 并下单`
               : side === 'buy'
-                ? `买入 ${BASE_SYMBOL}`
-                : `卖出 ${BASE_SYMBOL}`)}
+                ? `买入 ${baseSymbol}`
+                : `卖出 ${baseSymbol}`)}
         </Button>
         {orderType === 'market' && (
           <Text size="xs" c="dimmed">

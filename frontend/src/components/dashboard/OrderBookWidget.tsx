@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Text } from '@mantine/core'
 import { nodeGet } from '../../nodeClient'
+import { DEFAULT_PAIR } from '../../config/pairs'
 
-const DEFAULT_PAIR = 'TKA/TKB'
 /** 右栏盘口每侧展示档位数（对标 HY 右栏密度） */
 const DISPLAY_DEPTH = 10
 
@@ -13,6 +13,8 @@ export interface OrderBookRow {
 }
 
 export interface OrderBookWidgetProps {
+  /** 第二十五轮：当前交易对（由交易台传入，随 URL ?pair= 切换） */
+  pair?: string
   /** 订单簿更新时回调，用于计算 mid 等 */
   onBookUpdate?: (bids: OrderBookRow[], asks: OrderBookRow[]) => void
   /** 点击某一档价格时回调，用于把价格带入下单面板 */
@@ -32,7 +34,7 @@ function withTotals(rows: OrderBookRow[]): BookLevel[] {
   })
 }
 
-export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetProps = {}) {
+export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClick }: OrderBookWidgetProps = {}) {
   const [bids, setBids] = useState<OrderBookRow[]>([])
   const [asks, setAsks] = useState<OrderBookRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -45,7 +47,7 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
       try {
         const { data } = await nodeGet<{ pair: string; bids: Array<{ price: string; amount: string }>; asks: Array<{ price: string; amount: string }> }>(
           '/api/orderbook',
-          { pair: DEFAULT_PAIR }
+          { pair }
         )
         if (cancelled) return
         const newBids = (data.bids ?? []).slice(0, 15).map((o) => ({ price: o.price, amount: o.amount, side: 'buy' as const }))
@@ -70,9 +72,9 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
       cancelled = true
       clearInterval(t)
     }
-  }, [onBookUpdate])
+  }, [pair, onBookUpdate])
 
-  const [base, quote] = DEFAULT_PAIR.split('/')
+  const [base, quote] = pair.split('/')
   const askLevels = withTotals(asks.slice(0, DISPLAY_DEPTH))
   const bidLevels = withTotals(bids.slice(0, DISPLAY_DEPTH))
   // 卖盘展示时最佳卖价贴近价差行：数组本身最佳档在前，渲染时反转为高价在上
@@ -118,7 +120,7 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
         <Text size="sm" fw={600}>
           订单簿
         </Text>
-        <Text size="xs" c="dimmed">{DEFAULT_PAIR}</Text>
+        <Text size="xs" c="dimmed">{pair}</Text>
       </div>
       <div className="book-cols" aria-hidden>
         <span>价格 ({quote})</span>

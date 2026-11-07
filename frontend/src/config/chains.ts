@@ -27,6 +27,11 @@ export interface ChainConfig {
     // 第十九轮：WrappedTKA（TKA 的 1:1 包装代币，CCIP / Wormhole 桥的载体代币）
     wrappedToken?: string
   }
+  // 第二十五轮：本链已部署的测试代币（符号 → 地址），供交易对切换器取下单/余额代币；
+  // TKA/TKB 沿用 contracts.token0/token1 的地址，此处一并登记以便按符号统一取用。
+  tokens?: {
+    [symbol: string]: string
+  }
   // 第十九轮：Chainlink CCIP 通道配置（官方 BurnMintTokenPool + 官方 Router）
   ccip?: {
     router: string
@@ -96,10 +101,29 @@ const SEPOLIA: ChainConfig = {
     nttTransceiver: '0x1bFb42E93F5860C76ef0E100E063083357b93C8A',
     wormholeChainId: 10002,
   },
-  // 第二十三轮 Chainlink 喂价（官方文档 Price Feed Addresses / API Reference 示例；
+  // 第二十五轮 Chainlink 喂价（官方文档 Price Feed Addresses / API Reference 示例；
   // 2026-11-07 实读 description()="ETH / USD"、decimals=8 验证，见 docs/round23-oracle-reference-price-2026-11-07.md）
+  // 新增：BTC/USDT 用 BTC/USD 喂价（美元计价；USDT 约等于 1 美元，故该喂价是 BTC/USDT 对的诚实参考价，
+  // 映射关系见 docs/round25-mainstream-pairs-2026-11-07.md §3）；ETH/USDT 同理复用 ETH/USD 喂价。
+  // 其余新对（SOL/BNB/XRP/DOGE/LINK/USDT）未在官方清单与链上实读中找到已核实喂价，故不配——
+  // 参考价层按第二十三轮口径走本所成交/盘口兜底，面板无数据时明说「新市场，暂无参考价」。
   chainlinkFeeds: {
     'ETH/USD': { address: '0x694AA1769357215DE4FAC081bf1f309aDC325306', heartbeatSec: 3600 },
+    'BTC/USDT': { address: '0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43', heartbeatSec: 3600 },
+    'ETH/USDT': { address: '0x694AA1769357215DE4FAC081bf1f309aDC325306', heartbeatSec: 3600 },
+  },
+  // 第二十五轮：主流测试币（MockERC20，18 位；部署见 docs/round25-mainstream-pairs-2026-11-07.md §1）
+  tokens: {
+    TKA: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
+    TKB: '0x1530b74E6d5C2D0e2b78314b5C253E66bfC4ddc2',
+    BTC: '0x8EDa0025C245B10eA1E10c257674B794C85350f3',
+    ETH: '0x6851ec177dB923ae0A97F262351437D12B21710A',
+    SOL: '0x42f7B1B6c2caFb1F3d930B0C247a08f608b034aa',
+    BNB: '0x5657f5DBb2C49DBCd4F6d16ebbCb3D4870aACd29',
+    XRP: '0x20191571978478AEea15BC39b7D5609BE343D88e',
+    DOGE: '0xAb2D18f97E2dd39450bf1C0E59BC4d2Fb23212C7',
+    LINK: '0x74159771935E66Ed7dC13370f2BCe89EC8292b18',
+    USDT: '0x6Ca8cb68Ee5BB15474f1cfFE07B895C974Ab9c6e',
   },
 }
 
@@ -147,8 +171,25 @@ const BASE_SEPOLIA: ChainConfig = {
   },
   // 第二十三轮 Chainlink 喂价（官方 Price Feed Addresses 的 Base Sepolia ETH/USD 代理；
   // 2026-11-07 实读 description()="ETH / USD"、decimals=8 验证，心跳 1200s/偏差 0.15%）
+  // 第二十五轮新增：ETH/USDT 复用 ETH/USD 喂价（美元计价，USDT 约等于 1 美元；见 Sepolia 段注释与
+  // docs/round25-mainstream-pairs-2026-11-07.md §3）。BTC/USDT 在 Base Sepolia 未找到已核实喂价，
+  // 故不配；SOL/BNB/XRP/DOGE/LINK/USDT 两链均无已核实喂价，均不配（参考价走本所数据兜底）。
   chainlinkFeeds: {
     'ETH/USD': { address: '0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1', heartbeatSec: 1200 },
+    'ETH/USDT': { address: '0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1', heartbeatSec: 1200 },
+  },
+  // 第二十五轮：主流测试币（MockERC20，18 位；部署见 docs/round25-mainstream-pairs-2026-11-07.md §1）
+  tokens: {
+    TKA: '0xd3f1136Cb3511b4546BDE5dDAC4F0D5a4D5C5D33',
+    TKB: '0x8492ccCE958803F04772C0f5B51DbbC320A54daF',
+    BTC: '0xf1a6d8fd31fe9e72664fb9f07ffab8056a84156f',
+    ETH: '0x151c6be0d525880626f4757d58cd141872af7914',
+    SOL: '0xcb704487d52ccf66cae7680c348966e15fa0e430',
+    BNB: '0xf567c000f53c76e14fa21c4b90efecc0e4d586ec',
+    XRP: '0x26b58d2528a7fdfe744da338c5605123ea2266f3',
+    DOGE: '0x68bf313360021dcf4e359ad18c4506f622a3666d',
+    LINK: '0x43dc5f7099d3689d0dc73dbdc1e73e7a47e636e2',
+    USDT: '0xaab464e0be805c199007e27d8f651038319207d6',
   },
 }
 

@@ -4,12 +4,11 @@ import { Contract } from 'ethers'
 import { nodeGet, nodePost } from '../../nodeClient'
 import { signCancelOrder } from '../../services/orderSigning'
 import { formatError, formatTokenAmount, getProvider } from '../../utils'
-import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, TOKEN0_ADDRESS, TOKEN1_ADDRESS } from '../../config'
+import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
+import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
 import type { Order, Trade } from '../../OrderBookSection'
 import type { Signer } from 'ethers'
 
-const DEFAULT_PAIR = 'TKA/TKB'
-const [BASE_SYMBOL, QUOTE_SYMBOL] = DEFAULT_PAIR.split('/')
 const POLL_MS = 15000
 
 const STATUS_LABEL: Record<string, string> = {
@@ -23,6 +22,8 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 export interface TradeTabsPanelProps {
+  /** 第二十五轮：当前交易对（由交易台传入，随 URL ?pair= 切换） */
+  pair?: string
   account: string | null
   getSigner: () => Promise<Signer | null>
   /** 下单成功后递增，触发挂单列表刷新 */
@@ -52,7 +53,9 @@ interface BalanceRow {
  * 当前挂单 / 历史订单 / 成交记录 / 余额——实体全部来自本应用既有管道
  * （节点 /api/orders、/api/trades 与链上 ERC20/Vault 余额），无持仓/杠杆类概念。
  */
-export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeTabsPanelProps) {
+export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refreshSignal = 0 }: TradeTabsPanelProps) {
+  const [baseSymbol, quoteSymbol] = pair.split('/')
+  const pairTokens = getPairTokens(CHAIN_ID, pair)
   const [tab, setTab] = useState<string | null>('open')
   const [myOrders, setMyOrders] = useState<Order[]>([])
   const [trades, setTrades] = useState<Trade[]>([])
@@ -70,7 +73,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
     try {
       const { data } = await nodeGet<Order[]>('/api/orders', {
         trader: account,
-        pair: DEFAULT_PAIR,
+        pair,
         limit: '50',
       })
       setMyOrders(Array.isArray(data) ? data : [])
@@ -78,21 +81,25 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
     } catch {
       setNodeError(true)
     }
-  }, [account])
+  }, [account, pair])
 
   const fetchTrades = useCallback(async () => {
     try {
-      const { data } = await nodeGet<Trade[]>('/api/trades', { pair: DEFAULT_PAIR, limit: '30' })
+      const { data } = await nodeGet<Trade[]>('/api/trades', { pair, limit: '30' })
       setTrades(Array.isArray(data) ? data : [])
       setTradesError(false)
     } catch {
       /* 成交拉取失败保留旧数据；从未成功过时由 tradesError 呈现节点未连接空态 */
       setTradesError(true)
     }
-  }, [])
+  }, [pair])
 
   const fetchBalances = useCallback(async () => {
     if (!account) {
+      setBalances([])
+      return
+    }
+    if (!pairTokens) {
       setBalances([])
       return
     }
@@ -102,8 +109,8 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
       const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
       const rows: BalanceRow[] = []
       for (const [symbol, addr] of [
-        [BASE_SYMBOL, TOKEN0_ADDRESS],
-        [QUOTE_SYMBOL, TOKEN1_ADDRESS],
+        [baseSymbol, pairTokens.base],
+        [quoteSymbol, pairTokens.quote],
       ] as const) {
         const token = new Contract(addr, ERC20_ABI, provider)
         const [w, v, va, vl] = await Promise.all([
@@ -124,7 +131,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
     } catch {
       setBalances([])
     }
-  }, [account])
+  }, [account, pairTokens, baseSymbol, quoteSymbol])
 
   useEffect(() => {
     fetchMyOrders()
@@ -173,8 +180,8 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
             <tr>
               <th>时间</th>
               <th>方向</th>
-              <th>价格 ({QUOTE_SYMBOL})</th>
-              <th>数量 ({BASE_SYMBOL})</th>
+              <th>价格 ({quoteSymbol})</th>
+              <th>数量 ({baseSymbol})</th>
               <th>已成交</th>
               <th>状态</th>
               {withCancel && <th></th>}
@@ -251,8 +258,8 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
                 <thead>
                   <tr>
                     <th>时间</th>
-                    <th>价格 ({QUOTE_SYMBOL})</th>
-                    <th>数量 ({BASE_SYMBOL})</th>
+                    <th>价格 ({quoteSymbol})</th>
+                    <th>数量 ({baseSymbol})</th>
                     <th>结算</th>
                   </tr>
                 </thead>

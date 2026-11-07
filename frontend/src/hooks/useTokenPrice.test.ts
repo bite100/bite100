@@ -95,30 +95,38 @@ describe('usePairMarketPrice', () => {
   })
 
   it('returns base and quote prices for an explicitly mapped pair', async () => {
-    PAIR_COINGECKO_IDS['ETH/USDT'] = { base: 'ethereum', quote: 'tether' }
-    try {
-      ;(globalThis.fetch as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({
-          json: () =>
-            Promise.resolve({
-              ethereum: { usd: 2000, usd_24h_change: 0 },
-            }),
-        })
-        .mockResolvedValueOnce({
-          json: () =>
-            Promise.resolve({
-              tether: { usd: 1, usd_24h_change: 0 },
-            }),
-        })
-      const { result } = renderHook(() => usePairMarketPrice('ETH/USDT', 0))
-
-      await waitFor(() => {
-        expect(result.current.loading).toBe(false)
+    // 第二十五轮起 ETH/USDT 已是静态登记（ethereum/tether），不再由测试临时写入；
+    // 此处只验证该登记的读取行为，不再改写/删除映射。
+    expect(PAIR_COINGECKO_IDS['ETH/USDT']).toEqual({ base: 'ethereum', quote: 'tether' })
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        json: () =>
+          Promise.resolve({
+            ethereum: { usd: 2000, usd_24h_change: 0 },
+          }),
       })
-      expect(result.current.basePrice?.usd).toBe(2000)
-      expect(result.current.quotePrice?.usd).toBe(1)
-    } finally {
-      delete PAIR_COINGECKO_IDS['ETH/USDT']
-    }
+      .mockResolvedValueOnce({
+        json: () =>
+          Promise.resolve({
+            tether: { usd: 1, usd_24h_change: 0 },
+          }),
+      })
+    const { result } = renderHook(() => usePairMarketPrice('ETH/USDT', 0))
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false)
+    })
+    expect(result.current.basePrice?.usd).toBe(2000)
+    expect(result.current.quotePrice?.usd).toBe(1)
+  })
+
+  it('第二十五轮：7 个主流对登记为同名真实资产的 CoinGecko ID，TKA/TKB 仍无映射', () => {
+    expect(PAIR_COINGECKO_IDS['BTC/USDT']).toEqual({ base: 'bitcoin', quote: 'tether' })
+    expect(PAIR_COINGECKO_IDS['SOL/USDT']).toEqual({ base: 'solana', quote: 'tether' })
+    expect(PAIR_COINGECKO_IDS['BNB/USDT']).toEqual({ base: 'binancecoin', quote: 'tether' })
+    expect(PAIR_COINGECKO_IDS['XRP/USDT']).toEqual({ base: 'ripple', quote: 'tether' })
+    expect(PAIR_COINGECKO_IDS['DOGE/USDT']).toEqual({ base: 'dogecoin', quote: 'tether' })
+    expect(PAIR_COINGECKO_IDS['LINK/USDT']).toEqual({ base: 'chainlink', quote: 'tether' })
+    expect(PAIR_COINGECKO_IDS['TKA/TKB']).toBeUndefined()
   })
 })

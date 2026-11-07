@@ -7,11 +7,10 @@ import { PairStatsBar } from './PairStatsBar'
 import { RecentTradesWidget } from './RecentTradesWidget'
 import { TradeTabsPanel } from './TradeTabsPanel'
 import { usePairStats } from '../../hooks/usePairStats'
+import { useCurrentPair } from '../../hooks/useCurrentPair'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import type { Signer } from 'ethers'
 import './TradeScreen.css'
-
-const DEFAULT_PAIR = 'TKA/TKB'
 
 export interface DashboardProps {
   account: string | null
@@ -38,12 +37,22 @@ function computeMidFromBook(
  * 此前可拖拽网格（react-grid-layout）按 Ren 指令让位于该固定布局；第十三轮已移除该依赖与旧网格样式。
  */
 export function Dashboard({ account, getSigner, onShowFullOrderbook }: DashboardProps) {
+  // 第二十五轮：当前交易对来自 URL ?pair=（默认 BTC/USDT），切换时统计/K 线/订单簿/
+  // 下单/最新成交随同一 pair 值切换；旧对的价格带入不跨对沿用。
+  const { pair, setPair } = useCurrentPair()
   const [recommendedPrice, setRecommendedPrice] = useState('')
   const [midPrice, setMidPrice] = useState('')
   const [pricePick, setPricePick] = useState<{ price: string; seq: number }>({ price: '', seq: 0 })
   const [ordersRefresh, setOrdersRefresh] = useState(0)
   const [book, setBook] = useState<{ bids: OrderBookRow[]; asks: OrderBookRow[] }>({ bids: [], asks: [] })
-  const stats = usePairStats(DEFAULT_PAIR)
+  const stats = usePairStats(pair)
+
+  useEffect(() => {
+    setRecommendedPrice('')
+    setMidPrice('')
+    setPricePick({ price: '', seq: 0 })
+    setBook({ bids: [], asks: [] })
+  }, [pair])
 
   // 进入 Dashboard 时启动 P2P（Bootstrap + DHT），便于挂单时广播
   useEffect(() => {
@@ -64,26 +73,27 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
   return (
     <div className="trade-screen">
       <PairStatsBar
-        pair={DEFAULT_PAIR}
+        pair={pair}
         stats={stats}
         midPrice={midPrice || undefined}
+        onPairChange={setPair}
         onShowFullOrderbook={onShowFullOrderbook}
       />
       <div className="trade-main">
         <Paper className="trade-card trade-area-chart" p="md" shadow="xs" withBorder>
-          <KLineChart />
+          <KLineChart pair={pair} />
         </Paper>
 
         <Paper className="trade-card trade-area-tabs" p="md" shadow="xs" withBorder>
-          <TradeTabsPanel account={account} getSigner={getSigner} refreshSignal={ordersRefresh} />
+          <TradeTabsPanel pair={pair} account={account} getSigner={getSigner} refreshSignal={ordersRefresh} />
         </Paper>
 
         <div className="trade-area-rail">
           <Paper className="trade-card" p="sm" shadow="xs" withBorder>
-            <OrderBookWidget onBookUpdate={handleBookUpdate} onPriceClick={handlePriceClick} />
+            <OrderBookWidget pair={pair} onBookUpdate={handleBookUpdate} onPriceClick={handlePriceClick} />
           </Paper>
           <Paper className="trade-card" p="sm" shadow="xs" withBorder>
-            <RecentTradesWidget />
+            <RecentTradesWidget pair={pair} />
           </Paper>
         </div>
 
@@ -94,6 +104,7 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
           withBorder
         >
           <LimitOrderFormWidget
+            pair={pair}
             account={account}
             getSigner={getSigner}
             recommendedPrice={recommendedPrice || undefined}

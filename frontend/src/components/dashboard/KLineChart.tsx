@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createChart, CandlestickSeries, type IChartApi, type ISeriesApi } from 'lightweight-charts'
 import { useTradesOHLC } from '../../hooks/useTradesOHLC'
 import { Text, Group, SegmentedControl } from '@mantine/core'
-
-const DEFAULT_PAIR = 'TKA/TKB'
+import { DEFAULT_PAIR } from '../../config/pairs'
 
 const CHART_HEIGHT_DESKTOP = 400
 const CHART_HEIGHT_MOBILE = 300
@@ -17,12 +16,12 @@ const INTERVALS = [
 ]
 
 /** K 线图：从 /api/trades 聚合 OHLC，并订阅 WS trade 实时更新（浅底、绿涨红跌，涨跌色仅数据语义） */
-export function KLineChart() {
+export function KLineChart({ pair = DEFAULT_PAIR }: { pair?: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const [interval, setIntervalValue] = useState('3600')
-  const { bars, loading, error } = useTradesOHLC(DEFAULT_PAIR, Number(interval))
+  const { bars, loading, error } = useTradesOHLC(pair, Number(interval))
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -90,7 +89,7 @@ export function KLineChart() {
     <div className="kline-chart-wrap" style={{ width: '100%', minHeight: CHART_HEIGHT_DESKTOP }}>
       <Group justify="space-between" align="center" mb="xs">
         <Text size="sm" fw={600}>
-          K 线 · {DEFAULT_PAIR}
+          K 线 · {pair}
         </Text>
         <SegmentedControl
           size="xs"

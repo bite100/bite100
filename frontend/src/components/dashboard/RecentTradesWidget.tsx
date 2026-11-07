@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Text } from '@mantine/core'
 import { nodeGet } from '../../nodeClient'
+import { DEFAULT_PAIR } from '../../config/pairs'
 
-const DEFAULT_PAIR = 'TKA/TKB'
 const DISPLAY_LIMIT = 18
 
 interface RecentTrade {
@@ -12,11 +12,16 @@ interface RecentTrade {
   timestamp: number
 }
 
+export interface RecentTradesWidgetProps {
+  /** 第二十五轮：当前交易对（由交易台传入，随 URL ?pair= 切换） */
+  pair?: string
+}
+
 /**
  * 右栏「最新成交」：与订单簿同源（节点 /api/trades），5 秒轮询。
  * 价格颜色按与上一笔（更早）成交的比较着色——成交记录本身不带 taker 方向字段，不臆造方向。
  */
-export function RecentTradesWidget() {
+export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetProps = {}) {
   const [trades, setTrades] = useState<RecentTrade[]>([])
   const [loading, setLoading] = useState(true)
   /** 节点不可达/未配置时为 true，区分「暂无成交」与「节点未连接」 */
@@ -27,7 +32,7 @@ export function RecentTradesWidget() {
     const fetchTrades = async () => {
       try {
         const { data } = await nodeGet<unknown>('/api/trades', {
-          pair: DEFAULT_PAIR,
+          pair,
           limit: '30',
         })
         if (cancelled) return
@@ -62,9 +67,9 @@ export function RecentTradesWidget() {
       cancelled = true
       clearInterval(t)
     }
-  }, [])
+  }, [pair])
 
-  const [base, quote] = DEFAULT_PAIR.split('/')
+  const [base, quote] = pair.split('/')
 
   return (
     <div className="recent-trades">
@@ -72,7 +77,7 @@ export function RecentTradesWidget() {
         <Text size="sm" fw={600}>
           最新成交
         </Text>
-        <Text size="xs" c="dimmed">{DEFAULT_PAIR}</Text>
+        <Text size="xs" c="dimmed">{pair}</Text>
       </div>
       <div className="book-cols" aria-hidden>
         <span>价格 ({quote})</span>

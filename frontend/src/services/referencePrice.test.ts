@@ -45,6 +45,32 @@ describe('getFeedConfig', () => {
     expect(getFeedConfig(BASE_SEPOLIA, 'TKA/TKB')).toBeNull()
   })
 
+  it('第二十五轮：Sepolia BTC/USDT 用 BTC/USD 官方喂价，心跳 3600s（实测轮次间隔约 3624s）', () => {
+    expect(getFeedConfig(SEPOLIA, 'BTC/USDT')).toEqual({
+      address: '0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43',
+      heartbeatSec: 3600,
+    })
+  })
+
+  it('第二十五轮：ETH/USDT 两链复用 ETH/USD 官方喂价（美元计价，USDT 约等于 1 美元）', () => {
+    expect(getFeedConfig(SEPOLIA, 'ETH/USDT')).toEqual({
+      address: '0x694AA1769357215DE4FAC081bf1f309aDC325306',
+      heartbeatSec: 3600,
+    })
+    expect(getFeedConfig(BASE_SEPOLIA, 'ETH/USDT')).toEqual({
+      address: '0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1',
+      heartbeatSec: 1200,
+    })
+  })
+
+  it('第二十五轮：未找到已核实喂价的对不配——SOL/BNB/XRP/DOGE/LINK/USDT 两链皆无，Base Sepolia BTC/USDT 亦无', () => {
+    for (const pair of ['SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'DOGE/USDT', 'LINK/USDT']) {
+      expect(getFeedConfig(SEPOLIA, pair)).toBeNull()
+      expect(getFeedConfig(BASE_SEPOLIA, pair)).toBeNull()
+    }
+    expect(getFeedConfig(BASE_SEPOLIA, 'BTC/USDT')).toBeNull()
+  })
+
   it('主网尚未配置喂价、未知链返回 null', () => {
     expect(getFeedConfig(1, 'ETH/USD')).toBeNull()
     expect(getFeedConfig(999, 'ETH/USD')).toBeNull()

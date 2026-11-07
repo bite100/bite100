@@ -4,7 +4,9 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { ethers, Contract } from 'ethers'
-import { NODE_API_URL, NODE_API_URLS, TOKEN0_ADDRESS, TOKEN1_ADDRESS, VAULT_ABI, VAULT_ADDRESS } from './config'
+import { NODE_API_URL, NODE_API_URLS, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from './config'
+import { TRADE_PAIRS, getPairTokens } from './config/pairs'
+import { useCurrentPair } from './hooks/useCurrentPair'
 import { formatError, formatTokenAmount, getProvider } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { nodeGet, nodePost } from './nodeClient'
@@ -71,7 +73,6 @@ const STATUS_LABEL: Record<string, string> = {
   settled: '已结算',
 }
 
-const DEFAULT_PAIR = 'TKA/TKB'
 const ORDERBOOK_DISPLAY_DEPTH = 100
 const ORDERBOOK_ROW_HEIGHT = 28
 const ORDERBOOK_PANEL_HEIGHT = 220
@@ -103,7 +104,9 @@ export interface OrderBookSectionProps {
 }
 
 export function OrderBookSection({ account, getSigner, onBackToDashboard }: OrderBookSectionProps) {
-  const [pair, setPair] = useState(DEFAULT_PAIR)
+  // 第二十五轮：当前交易对与交易台共用 URL ?pair=（默认 BTC/USDT）
+  const { pair, setPair } = useCurrentPair()
+  const pairTokens = getPairTokens(CHAIN_ID, pair)
   const [orderbook, setOrderbook] = useState<OrderbookResponse | null>(null)
   const [_prevOrderbook, setPrevOrderbook] = useState<OrderbookResponse | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
@@ -252,7 +255,11 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
     try {
       const provider = getProvider()
       if (!provider) return
-      const tokenAddress = side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+      if (!pairTokens) {
+        setBalance('')
+        return
+      }
+      const tokenAddress = side === 'sell' ? pairTokens.base : pairTokens.quote
       // 可用余额口径与交易面板一致：Vault 可用额（总额 − 挂单锁定）
       const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
       const bal = await vault.availableBalance(account, tokenAddress)
@@ -263,7 +270,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
     } finally {
       setBalanceLoading(false)
     }
-  }, [account, side])
+  }, [account, side, pair, pairTokens])
 
   useEffect(() => {
     fetchBalance()
@@ -346,6 +353,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
     try {
       const signer = await getSigner()
       if (!signer) throw new Error('请先连接钱包')
+      if (!pairTokens) throw new Error(`交易对 ${pair} 未登记代币地址，无法下单`)
       const timestamp = Math.floor(Date.now() / 1000)
       const expiresAt = timestamp + 86400
       const amountInWei = ethers.parseUnits(amount, 18)
@@ -357,8 +365,8 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       const orderData = {
         orderId,
         userAddress: account,
-        tokenIn: TOKEN0_ADDRESS,
-        tokenOut: TOKEN1_ADDRESS,
+        tokenIn: pairTokens.base,
+        tokenOut: pairTokens.quote,
         amountIn: amountInWei.toString(),
         amountOut: String(amountOutWei),
         price: priceWei.toString(),
@@ -460,8 +468,12 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
 
       <div className="row">
         <span className="label">交易对</span>
-        <select className="input" value={pair} onChange={(e) => setPair(e.target.value)} style={{ width: 'auto' }}>
-          <option value="TKA/TKB">TKA/TKB</option>
+        <select className="input" value={pair} onChange={(e) => setPair(e.target.value as (typeof TRADE_PAIRS)[number])} style={{ width: 'auto' }}>
+          {TRADE_PAIRS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
         </select>
       </div>
 

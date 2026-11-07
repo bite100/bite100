@@ -78,8 +78,20 @@ export function useTokenPrice(
  * 同一资产时，才允许在此显式登记；未登记的交易对不显示任何外部参考价。
  * 下单面板的参考价统一走第二十三轮参考价层（services/referencePrice.ts）：
  * Chainlink 预言机喂价优先，无喂价的对用本所成交/盘口数据兜底。
+ *
+ * 第二十五轮补充：主流测试币 BTC/ETH/SOL/BNB/XRP/DOGE/LINK/USDT 本身就是上述真实资产的
+ * 测试网表示（同名同 18 位 MockERC20），按上款规则显式登记各自的 CoinGecko ID；
+ * TKA/TKB 仍无映射（无外部报价），不在此登记。
  */
-export const PAIR_COINGECKO_IDS: Record<string, { base: string; quote: string }> = {}
+export const PAIR_COINGECKO_IDS: Record<string, { base: string; quote: string }> = {
+  'BTC/USDT': { base: 'bitcoin', quote: 'tether' },
+  'ETH/USDT': { base: 'ethereum', quote: 'tether' },
+  'SOL/USDT': { base: 'solana', quote: 'tether' },
+  'BNB/USDT': { base: 'binancecoin', quote: 'tether' },
+  'XRP/USDT': { base: 'ripple', quote: 'tether' },
+  'DOGE/USDT': { base: 'dogecoin', quote: 'tether' },
+  'LINK/USDT': { base: 'chainlink', quote: 'tether' },
+}
 
 export function usePairMarketPrice(
   pair: string,
