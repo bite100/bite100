@@ -1,38 +1,96 @@
-import { useState } from 'react'
-import { Paper, Text, Select, NumberInput, Button, Stack } from '@mantine/core'
-import { ethers } from 'ethers'
-import { formatError } from '../../utils'
+import { useEffect, useState } from 'react'
+import { Paper, Text, Select, NumberInput, Button, Stack, Slider } from '@mantine/core'
+import { ethers, Contract } from 'ethers'
+import { formatError, formatTokenAmount, getProvider } from '../../utils'
 import { nodePost } from '../../nodeClient'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
-import { TOKEN0_ADDRESS, TOKEN1_ADDRESS } from '../../config'
+import { TOKEN0_ADDRESS, TOKEN1_ADDRESS, ERC20_ABI } from '../../config'
 import type { Signer } from 'ethers'
 
 const DEFAULT_PAIR = 'TKA/TKB'
+const [BASE_SYMBOL, QUOTE_SYMBOL] = DEFAULT_PAIR.split('/')
+const PCT_MARKS = [
+  { value: 0, label: '0%' },
+  { value: 25, label: '25%' },
+  { value: 50, label: '50%' },
+  { value: 75, label: '75%' },
+  { value: 100, label: '100%' },
+]
 
 interface LimitOrderFormWidgetProps {
   account: string | null
   getSigner: () => Promise<Signer | null>
   recommendedPrice?: string
+  /** 盘口点击带入的价格（seq 递增触发写入，避免与用户手输冲突） */
+  externalPrice?: { price: string; seq: number }
   onSuccess?: () => void
 }
 
-export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onSuccess }: LimitOrderFormWidgetProps) {
-  const [side, setSide] = useState<string>('buy')
+function trimNum(n: number, digits = 6): string {
+  if (!Number.isFinite(n) || n <= 0) return ''
+  return String(parseFloat(n.toFixed(digits)))
+}
+
+export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, externalPrice, onSuccess }: LimitOrderFormWidgetProps) {
+  const [side, setSide] = useState<'buy' | 'sell'>('buy')
   const [price, setPrice] = useState(recommendedPrice ?? '')
   const [amount, setAmount] = useState('')
+  const [pct, setPct] = useState(0)
+  const [balance, setBalance] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const handleQuickBuy = () => {
-    setSide('buy')
+  // 盘口点击带入价格
+  useEffect(() => {
+    if (externalPrice && externalPrice.seq > 0 && externalPrice.price) {
+      setPrice(externalPrice.price)
+    }
+  }, [externalPrice])
+
+  // 可用余额：与完整订单簿同源（链上 ERC20 balanceOf；卖出花 TKA、买入花 TKB）
+  useEffect(() => {
+    let cancelled = false
+    const fetchBalance = async () => {
+      if (!account) {
+        setBalance('')
+        return
+      }
+      try {
+        const provider = getProvider()
+        if (!provider) return
+        const token = new Contract(side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS, ERC20_ABI, provider)
+        const bal = await token.balanceOf(account)
+        if (!cancelled) setBalance(formatTokenAmount(bal))
+      } catch {
+        if (!cancelled) setBalance('')
+      }
+    }
+    fetchBalance()
+    return () => {
+      cancelled = true
+    }
+  }, [account, side])
+
+  const pickSide = (next: 'buy' | 'sell') => {
+    setSide(next)
+    setPct(0)
     if (recommendedPrice) setPrice(recommendedPrice)
   }
 
-  const handleQuickSell = () => {
-    setSide('sell')
-    if (recommendedPrice) setPrice(recommendedPrice)
+  /** 百分比滑杆：按可用余额比例换算数量（买入需按当前价格把 TKB 余额折算为 TKA 数量） */
+  const handlePctChange = (value: number) => {
+    setPct(value)
+    const bal = parseFloat(balance)
+    if (Number.isNaN(bal) || bal <= 0) return
+    if (side === 'sell') {
+      setAmount(trimNum((bal * value) / 100))
+    } else {
+      const p = parseFloat(price)
+      if (Number.isNaN(p) || p <= 0) return
+      setAmount(trimNum((bal * value) / 100 / p))
+    }
   }
 
   const handlePlaceOrder = async () => {
@@ -92,6 +150,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
       await p2pOrderBroadcast.publishOrder(order)
       setPrice('')
       setAmount('')
+      setPct(0)
       onSuccess?.()
     } catch (e) {
       setError(formatError(e))
@@ -100,24 +159,47 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
     }
   }
 
+  const priceNum = parseFloat(price)
+  const amountNum = parseFloat(amount)
+  const total =
+    !Number.isNaN(priceNum) && !Number.isNaN(amountNum) && priceNum > 0 && amountNum > 0
+      ? priceNum * amountNum
+      : null
+  const spendSymbol = side === 'sell' ? BASE_SYMBOL : QUOTE_SYMBOL
+
   return (
-    <Paper p="md" style={{ background: 'transparent', height: '100%', minHeight: 280 }}>
+    <Paper p="md" style={{ background: 'transparent' }}>
       <Text size="sm" fw={600} mb="xs">
-        挂单 · {DEFAULT_PAIR}
+        下单 · {DEFAULT_PAIR}
       </Text>
       <Stack gap="sm">
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button size="xs" color="up" variant="light" onClick={handleQuickBuy}>一键买</Button>
-          <Button size="xs" color="down" variant="light" onClick={handleQuickSell}>一键卖</Button>
+        <div className="side-toggle" role="group" aria-label="买卖方向">
+          <Button
+            className="side-toggle-btn"
+            color="up"
+            variant={side === 'buy' ? 'filled' : 'light'}
+            onClick={() => pickSide('buy')}
+          >
+            买入
+          </Button>
+          <Button
+            className="side-toggle-btn"
+            color="down"
+            variant={side === 'sell' ? 'filled' : 'light'}
+            onClick={() => pickSide('sell')}
+          >
+            卖出
+          </Button>
         </div>
         <Select
-          label="方向"
-          data={[{ value: 'buy', label: '买入' }, { value: 'sell', label: '卖出' }]}
-          value={side}
-          onChange={(v) => v && setSide(v)}
+          label="订单类型"
+          data={[{ value: 'limit', label: '限价单' }]}
+          value="limit"
+          disabled
+          description="当前仅支持限价单"
         />
         <NumberInput
-          label="价格"
+          label={`价格 (${QUOTE_SYMBOL})`}
           value={price || undefined}
           onChange={(v) => setPrice(String(v ?? ''))}
           min={0}
@@ -125,12 +207,44 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
           placeholder={recommendedPrice ?? '0'}
         />
         <NumberInput
-          label="数量"
+          label={`数量 (${BASE_SYMBOL})`}
           value={amount || undefined}
-          onChange={(v) => setAmount(String(v ?? ''))}
+          onChange={(v) => {
+            setAmount(String(v ?? ''))
+            setPct(0)
+          }}
           min={0}
           decimalScale={4}
         />
+        <div>
+          <Slider
+            value={pct}
+            onChange={handlePctChange}
+            marks={PCT_MARKS}
+            step={1}
+            min={0}
+            max={100}
+            size="sm"
+            color="brand"
+            disabled={!account || !balance}
+            aria-label="可用余额比例"
+          />
+          <Text size="xs" c="dimmed" mt={4}>
+            {account
+              ? balance
+                ? `可用 ${balance} ${spendSymbol}`
+                : '余额读取中…'
+              : '连接钱包后可按比例下单'}
+          </Text>
+        </div>
+        {total != null && (
+          <div className="order-total-row">
+            <span>总额</span>
+            <span className="order-total-val">
+              {trimNum(total)} {QUOTE_SYMBOL}
+            </span>
+          </div>
+        )}
         {error && (
           <Text size="sm" c="red" mb={4} role="alert">
             {error}
@@ -139,13 +253,13 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
         <Button
           className="btn-primary-action"
           fullWidth
-          color="brand"
+          color={side === 'buy' ? 'up' : 'down'}
           size="md"
           onClick={handlePlaceOrder}
           loading={loading}
           disabled={!account || !price || !amount}
         >
-          挂单
+          {side === 'buy' ? `买入 ${BASE_SYMBOL}` : `卖出 ${BASE_SYMBOL}`}
         </Button>
       </Stack>
     </Paper>
