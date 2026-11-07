@@ -8,18 +8,23 @@ import { ContributionSection } from './ContributionSection'
 import { Dashboard } from './components/dashboard/Dashboard'
 import { OrderBookSection } from './OrderBookSection'
 import { CrossChainBridge } from './components/CrossChainBridge'
-import { RewardPoolInfo } from './components/RewardPoolInfo'
 import { UnifiedRewardClaim } from './components/UnifiedRewardClaim'
 import { MerkleAirdropClaim } from './components/MerkleAirdropClaim'
 import { AddNetworkButton } from './components/AddNetworkButton'
 import { MobileConnectHint } from './components/MobileConnectHint'
 import { Navigation, type Tab } from './components/Navigation'
+import { TopBar } from './components/TopBar'
+import { OtherPage } from './components/OtherPage'
+import { DataPage } from './components/DataPage'
+import { MarketsList } from './components/markets/MarketsList'
+import { FlywheelRewardPlaceholder } from './components/FlywheelRewardPlaceholder'
+import { isTradePair } from './config/pairs'
 import { ErrorDisplay } from './components/ErrorDisplay'
-import { ChainSwitcher } from './components/ChainSwitcher'
 import { useChain } from './hooks/useChain'
 import { useOnlineStatus } from './hooks/useOnlineStatus'
 import { getProvider, withSigner, formatTokenAmount, formatError, shortAddress, isValidAddress, cacheGet, cacheSet, cacheInvalidate, CACHE_KEYS, CACHE_TTL } from './utils'
 import './App.css'
+import './components/Shell.css'
 
 /** 治理模块错误边界：治理区报错时不影响整页 */
 class GovernanceErrorBoundary extends Component<{ account: string | null; children: ReactNode }, { hasError: boolean }> {
@@ -92,8 +97,20 @@ function PageHead({ title, desc }: { title: string; desc?: string }) {
   )
 }
 
+/** 二级页返回头（第 31 轮）：桥 / 治理 / 数据内容页经「其他」进入，顶部给一条返回行 */
+function SubBar({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <div className="subbar">
+      <button type="button" onClick={onBack} aria-label="返回其他页">
+        ‹
+      </button>
+      <span className="subbar-title">{title}</span>
+    </div>
+  )
+}
+
 /** 需要钱包的分区在未连接时的页面级空态：说明 + 连接入口，不报错、不白屏 */
-function ConnectGate({ title, desc }: { title: string; desc: string }) {
+function ConnectGate({ title, desc, chainId }: { title: string; desc: string; chainId?: number }) {
   return (
     <div className="card connect-gate">
       <h2>{title}</h2>
@@ -101,6 +118,7 @@ function ConnectGate({ title, desc }: { title: string; desc: string }) {
       <div className="connect-gate-actions">
         <StandardConnect />
         <MobileConnectHint />
+        {chainId !== undefined && <AddNetworkButton chainId={chainId} className="add-network-below-connect" />}
       </div>
     </div>
   )
@@ -139,15 +157,17 @@ function App() {
     const t = new URLSearchParams(window.location.search).get('tab')
     // 旧链接兼容（第十三轮导航重构前的页签值）：orderbook→trade、vault→assets、
     // governance/contribution→govern（并由 governSub 区分落点）
+    // 第 31 轮：data 页已解散，旧 ?tab=data 落到「其他」页（数据组入口在那里），不 404
     const legacy: Record<string, Tab> = {
       orderbook: 'trade',
       vault: 'assets',
       governance: 'govern',
       contribution: 'govern',
       swap: 'trade', // 第十七轮 AMM 兑换下线：旧「兑换」链接落到交易分区
+      data: 'other',
     }
     if (t && legacy[t]) return legacy[t]
-    const valid: Tab[] = ['trade', 'assets', 'bridge', 'govern', 'data']
+    const valid: Tab[] = ['trade', 'markets', 'assets', 'other', 'bridge', 'govern', 'data']
     return valid.includes(t as Tab) ? (t as Tab) : 'trade'
   })
   const [governSub, setGovernSub] = useState<'governance' | 'contribution'>(() => {
@@ -156,6 +176,23 @@ function App() {
     return t === 'contribution' ? 'contribution' : 'governance'
   })
   const [showFullOrderbook, setShowFullOrderbook] = useState(false)
+  /** 数据内容页的目标锚点（从「其他」页数据组进入时定位到对应区块） */
+  const [dataAnchor, setDataAnchor] = useState<string | null>(null)
+
+  /** 从行情页/选对页跳交易页：与 useCurrentPair 同一口径，先改写 ?pair= 再切页 */
+  const goTradeWithPair = useCallback((pair: string) => {
+    if (isTradePair(pair)) {
+      const url = new URL(window.location.href)
+      url.searchParams.set('pair', pair)
+      window.history.replaceState(null, '', url.toString())
+    }
+    setActiveTab('trade')
+  }, [])
+
+  const openData = useCallback((anchor: string) => {
+    setDataAnchor(anchor)
+    setActiveTab('data')
+  }, [])
 
   // 链切换
   const { currentChainId, switchChain } = useChain()
@@ -316,55 +353,27 @@ function App() {
           当前处于离线状态，请检查网络连接
         </div>
       )}
-      <header className="app-header-top">
-        <div className="brand-lockup">
-          <img className="brand-mark" src={`${import.meta.env.BASE_URL}icon.svg`} alt="" />
-          <div>
-            <h1>比特100</h1>
-            <p className="subtitle">
-              {currentChainConfig?.name || '未知网络'} · P2P 去中心化交易所 · 测试网
-            </p>
-          </div>
-        </div>
-        <div className="header-actions">
-          <ChainSwitcher
-            currentChainId={currentChainId}
-            onChainChange={switchChain}
-          />
-        </div>
-      </header>
-
-      {!account ? (
-        <div className="card connect-strip">
-          <div className="connect-strip-text">
-            <h2>连接钱包，开始交易</h2>
-            <p className="hint">比特100 是链无关的 P2P 去中心化交易所：资产在哪条链，连接钱包即可交易。行情、盘口与公开数据无需连接即可浏览；下单、存提与领取奖励需要连接钱包。gas 由中继代付、结算时由交易双方对半分摊，无需自备原生代币。当前运行于测试网。</p>
-          </div>
-          <div className="connect-strip-actions">
-            <StandardConnect />
-            <MobileConnectHint />
-            <AddNetworkButton chainId={currentChainId ?? undefined} className="add-network-below-connect" />
-          </div>
-        </div>
-      ) : (
-          <div className="card wallet-bar">
-            <div className="row">
-              <span className="label">当前账户</span>
-              <span className="value mono">{shortAddress(account)}</span>
-            </div>
-            <div className="row">
-              <span className="label">连接方式</span>
-              <span className="value">{connectionLabel}</span>
-            </div>
-            <div className="row">
-              <span className="label">钱包余额（ETH）</span>
-              <span className="value">{ethBalance} ETH</span>
-            </div>
-            <button type="button" className="btn secondary" onClick={() => disconnect()} style={{ marginTop: '0.5rem' }}>
-              断开连接
-            </button>
-          </div>
-      )}
+      <TopBar
+        title={
+          activeTab === 'trade'
+            ? '比特100'
+            : activeTab === 'markets'
+              ? '行情'
+              : activeTab === 'assets'
+                ? '资产'
+                : activeTab === 'other'
+                  ? '其他'
+                  : activeTab === 'bridge'
+                    ? '跨链桥'
+                    : activeTab === 'govern'
+                      ? '治理与贡献'
+                      : '数据'
+        }
+        chainId={currentChainId}
+        onChainChange={switchChain}
+        account={account}
+        onWalletClick={() => setActiveTab('assets')}
+      />
 
       <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
       <ErrorDisplay
@@ -380,6 +389,25 @@ function App() {
           {activeTab === 'assets' && (
             <>
               <PageHead title="资产" desc="资金路径：钱包 → 存入 Vault → 用 Vault 余额下单结算 → 提取回钱包。下单只能使用 Vault 余额，钱包里的代币需先存入才能用于交易；本页可查询两处余额并完成存入与提取。" />
+              {account && (
+                <div className="card account-details-card">
+                  <div className="row">
+                    <span className="label">当前账户</span>
+                    <span className="value mono">{shortAddress(account)}</span>
+                  </div>
+                  <div className="row">
+                    <span className="label">连接方式</span>
+                    <span className="value">{connectionLabel}</span>
+                  </div>
+                  <div className="row">
+                    <span className="label">钱包余额（ETH）</span>
+                    <span className="value">{ethBalance} ETH</span>
+                  </div>
+                  <button type="button" className="btn secondary" onClick={() => disconnect()} style={{ marginTop: '0.5rem' }}>
+                    断开连接
+                  </button>
+                </div>
+              )}
               {account ? (
             <div className="vault-layout">
               <div className="card vault-section">
@@ -474,17 +502,43 @@ function App() {
               </div>
             </div>
               ) : (
-                <ConnectGate title="连接钱包后管理资产" desc="存入、提取与余额查询需要连接钱包；行情与公开数据可在「交易」「数据」分区直接浏览。" />
+                <ConnectGate title="连接钱包后管理资产" desc="存入、提取与余额查询需要连接钱包；行情与公开数据可在「交易」「数据」分区直接浏览。" chainId={currentChainId ?? undefined} />
               )}
             </>
           )}
 
+          {activeTab === 'markets' && (
+            <>
+              <PageHead title="行情" desc="本站全部交易对的最新成交价与 24 小时涨跌；点任意一行进入该交易对的交易页。" />
+              <section className="card markets-card">
+                <MarketsList
+                  chainId={currentChainId ?? CHAIN_ID}
+                  account={account}
+                  mode="page"
+                  onSelectPair={goTradeWithPair}
+                />
+              </section>
+            </>
+          )}
+
+          {activeTab === 'other' && (
+            <OtherPage
+              onOpenBridge={() => setActiveTab('bridge')}
+              onOpenGovern={() => setActiveTab('govern')}
+              onOpenData={openData}
+            />
+          )}
+
           {activeTab === 'data' && (
             <>
-              <PageHead title="数据" desc="贡献奖励池的链上公开数据，无需连接钱包即可查看。" />
-              <div className="public-data-section">
-                <RewardPoolInfo />
-              </div>
+              <SubBar title="数据" onBack={() => setActiveTab('other')} />
+              <DataPage
+                anchor={dataAnchor}
+                chainName={currentChainConfig?.name || '未知网络'}
+                vaultAddress={currentChainConfig?.contracts.vault ?? ''}
+                settlementAddress={SETTLEMENT_ADDRESS}
+                governanceAddress={GOVERNANCE_ADDRESS}
+              />
             </>
           )}
 
@@ -504,23 +558,28 @@ function App() {
 
           {activeTab === 'govern' && (
             <>
-              <PageHead title="治理与贡献" desc="参与协议治理投票，或查询并领取你的贡献奖励。" />
-              <nav className="main-nav sub-nav" aria-label="治理与贡献分区">
+              <SubBar title="治理与贡献" onBack={() => setActiveTab('other')} />
+              <PageHead title="治理与贡献" desc="参与协议治理投票，或查询并领取你的贡献奖励。投票期 7 天、通过后有 2 天时锁才执行，规则写在治理合约里。" />
+              <div className="text-tabs govern-tabs" role="tablist" aria-label="治理与贡献分区">
                 <button
                   type="button"
-                  className={`nav-tab ${governSub === 'governance' ? 'active' : ''}`}
+                  role="tab"
+                  aria-selected={governSub === 'governance'}
+                  className={governSub === 'governance' ? 'on' : undefined}
                   onClick={() => setGovernSub('governance')}
                 >
                   治理
                 </button>
                 <button
                   type="button"
-                  className={`nav-tab ${governSub === 'contribution' ? 'active' : ''}`}
+                  role="tab"
+                  aria-selected={governSub === 'contribution'}
+                  className={governSub === 'contribution' ? 'on' : undefined}
                   onClick={() => setGovernSub('contribution')}
                 >
                   贡献奖励
                 </button>
-              </nav>
+              </div>
               {governSub === 'governance' ? (
                 <GovernanceErrorBoundary account={account}>
                   <GovernanceSection account={account} />
@@ -530,6 +589,7 @@ function App() {
                   <ContributionSection account={account} />
                   <UnifiedRewardClaim account={account} />
                   <MerkleAirdropClaim account={account} />
+                  <FlywheelRewardPlaceholder />
                 </>
               )}
             </>
@@ -537,17 +597,11 @@ function App() {
 
           {activeTab === 'bridge' && (
             <>
+              <SubBar title="跨链桥" onBack={() => setActiveTab('other')} />
               <PageHead title="跨链桥" desc="通过 LayerZero 在链之间转移代币，资产到达目标链后可继续交易；发起转移需要连接钱包。" />
               <CrossChainBridge account={account} currentChainId={currentChainId} />
             </>
           )}
-
-      <details className="card contracts-details">
-        <summary>合约地址（链上验证）</summary>
-        <div className="row"><span className="label">当前网络</span><span className="value">{currentChainConfig?.name || '未知网络'}</span></div>
-        <div className="row"><span className="label">治理合约 Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
-        <div className="row"><span className="label">结算合约 Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
-      </details>
 
     </div>
   )
