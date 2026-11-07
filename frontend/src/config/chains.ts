@@ -27,7 +27,7 @@ export interface ChainConfig {
   }
 }
 
-// Sepolia 测试网（2026-11-07 新部署：十合约全部署——核心六 + 治理/贡献者奖励/代币注册表/链配置）
+// Sepolia 测试网（2026-11-07 第十五轮重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md）
 const SEPOLIA: ChainConfig = {
   chainId: 11155111,
   name: 'Sepolia',
@@ -39,20 +39,20 @@ const SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0xb4945C5E0208803FF11d0f86173B55489aE87d2A',
-    settlement: '0xee35587f3e3f500de9f9E1E97c340F801dc71078',
-    token0: '0x903cdDF52963D9DEA0BDF8be9159E08706683654',
-    token1: '0x1Ee28c1c490727e49939C95032C749ea5b58b45f',
-    ammPool: '0x20a78bCb39Ff510AdBa3D3AEC9229a9583C5BDB3',
-    contributorReward: '0xfe066c25a25fddd6433fac7f7769d5806392663e',
-    feeDistributor: '0xB63a3D858E5230233e4D1B76052387C2274d6e3A',
-    governance: '0x26b608468bf5dd88b91eae3d16827a2b4a25bcce',
-    tokenRegistry: '0x8dc560038d392012c8562185e4c6bf2ce636e74d',
-    chainConfig: '0x439423ab16a1a3dadf5415243501ee9e6984b813',
+    vault: '0x7B6aFdd9799ABa60a4Fd77217b40E8191Dc498f5',
+    settlement: '0x929ceb054B86Bf222eb94Df7b75aDa4fD22A538A',
+    token0: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
+    token1: '0x1530b74E6d5C2D0e2b78314b5C253E66bfC4ddc2',
+    ammPool: '0x744d25a4163Da099c75aF9D10e32704420a76E94',
+    contributorReward: '0x12b8dA1b30771c46025488621bfe3DC665E9C0a8',
+    feeDistributor: '0x346DE29B7fEe95F44A5b5385e87182F031E8E1B5',
+    governance: '0x31900dD9C5190F72A2Da96E3efE45014B5748448',
+    tokenRegistry: '0x9d50B1088E483f3A192A018c6a59cb9a5bddeDDd',
+    chainConfig: '0x0f419cA52A47d2cA7Ae5f803cf010263012D2cA1',
   },
 }
 
-// Base Sepolia 测试网（2026-11-07 同构部署：十合约全套，与 Sepolia 同构；见 docs/base-sepolia-deployment-2026-11-07.md）
+// Base Sepolia 测试网（2026-11-07 第十五轮同构重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md）
 const BASE_SEPOLIA: ChainConfig = {
   chainId: 84532,
   name: 'Base Sepolia',
@@ -64,16 +64,16 @@ const BASE_SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0xfb458224973c91ddBa3Fb5B55DAD337038768b21',
-    settlement: '0x1f81caafa089cfbeb953fc88d272d0a6181e2985',
-    token0: '0x1ee28c1c490727e49939c95032c749ea5b58b45f',
-    token1: '0x20a78bcb39ff510adba3d3aec9229a9583c5bdb3',
-    ammPool: '0x46ac37629a76b6cadce8bc21e5463c6f433bf29b',
-    contributorReward: '0x7f9371C8a519014eC1ec2Ade4388B627Ec82F8F5',
-    feeDistributor: '0xa4eaa449360239e1f719608236d087c23379d5a6',
-    governance: '0x59e4416C5ca7CB977d8225E5E38088B7c801eaeF',
-    tokenRegistry: '0x924A2ac5B56709a9284fB6f99e611F669006F8A7',
-    chainConfig: '0xFD170979c08Ab8f06cc01ea9D34CbD2478B6e93c',
+    vault: '0xd09E808D0978bdD06738a5dAfBd3c0a286aE3Fb2',
+    settlement: '0x3F9F29A6Ff7F706Bd769da3f0F4b3dCe70371D4c',
+    token0: '0xd3f1136Cb3511b4546BDE5dDAC4F0D5a4D5C5D33',
+    token1: '0x8492ccCE958803F04772C0f5B51DbbC320A54daF',
+    ammPool: '0x20F25844bC6823325d67fB8aC71cA416601774a1',
+    contributorReward: '0xFe066c25a25Fddd6433Fac7f7769d5806392663e',
+    feeDistributor: '0xAeC85272Cba4F22eaf93a0313b0D09164Ca009b7',
+    governance: '0x26b608468bf5Dd88B91EAE3D16827A2b4a25BCcE',
+    tokenRegistry: '0x8dC560038D392012C8562185E4C6Bf2Ce636E74D',
+    chainConfig: '0x439423AB16A1A3dadf5415243501ee9e6984b813',
   },
 }
 
