@@ -105,10 +105,10 @@ export function ContributionSection({ account }: { account: string | null }) {
     <div className="card vault-section">
       <h2>贡献看板</h2>
       <p className="hint">
-        输入领奖地址后点击「查询」，仅展示最近两周（两个 UTC 自然周）的未领取与已领取记录；超过两周的周期不显示。周期结束超过两周的未领取不再发放，仅展示已领取。领取需连接钱包且为查询地址本人。
+        输入领奖地址后点击「查询」。仅展示最近两个自然周（UTC）的记录：未领取奖励需在周期结束后 90 天内领取，逾期未领部分回流下一期奖池；已领取记录不受影响。领取需连接钱包，且查询地址须为当前账户。
       </p>
       <p className="hint" style={{ marginTop: '0.25rem', marginBottom: '0.5rem' }}>
-        <a href={contributorRewardExplorerUrl} target="_blank" rel="noopener noreferrer">在区块浏览器查看 ContributorReward 合约</a>
+        <a href={contributorRewardExplorerUrl} target="_blank" rel="noopener noreferrer">在区块浏览器查看贡献奖励合约</a>
       </p>
       <div className="input-row">
         <input
@@ -129,7 +129,7 @@ export function ContributionSection({ account }: { account: string | null }) {
 
       {records && records.length > 0 && !error && (
         <div className="balances" style={{ marginTop: '1rem' }}>
-          <p className="hint" style={{ marginBottom: '0.5rem' }}>最近两周</p>
+          <p className="hint" style={{ marginBottom: '0.5rem' }}>最近两个周期</p>
           {records.map((r) => (
             <div key={r.period} className="card" style={{ marginBottom: '0.75rem', padding: '0.75rem' }}>
               <div className="row result">
@@ -141,10 +141,10 @@ export function ContributionSection({ account }: { account: string | null }) {
                 <span className="value mono">{r.score}</span>
               </div>
               <div className="row result">
-                <span className="label">TKA 单次可领</span>
+                <span className="label">TKA 本次可领</span>
                 <span className="value">{r.claimableT0}</span>
                 {isPastClaimDeadline(r.period) && (
-                  <span className="hint" style={{ marginLeft: '0.5rem' }}>已过领取期限（90 天），未领部分将回流下一期</span>
+                  <span className="hint" style={{ marginLeft: '0.5rem' }}>已过领取期限，未领部分将回流下一期奖池</span>
                 )}
                 {canClaimAny && Number(r.claimableT0) > 0 && !isPastClaimDeadline(r.period) && (
                   <button
@@ -163,10 +163,10 @@ export function ContributionSection({ account }: { account: string | null }) {
                 <span className="value">{r.claimedT0}</span>
               </div>
               <div className="row result">
-                <span className="label">TKB 单次可领</span>
+                <span className="label">TKB 本次可领</span>
                 <span className="value">{r.claimableT1}</span>
                 {isPastClaimDeadline(r.period) && (
-                  <span className="hint" style={{ marginLeft: '0.5rem' }}>已过领取期限（90 天），未领部分将回流下一期</span>
+                  <span className="hint" style={{ marginLeft: '0.5rem' }}>已过领取期限，未领部分将回流下一期奖池</span>
                 )}
                 {canClaimAny && Number(r.claimableT1) > 0 && !isPastClaimDeadline(r.period) && (
                   <button

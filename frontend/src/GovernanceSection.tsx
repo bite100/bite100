@@ -139,7 +139,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     try {
       proof = JSON.parse(voteProof) as string[]
     } catch {
-      setError('proof 需为 JSON 数组。若在活跃集内，可先尝试 []；否则运行 merkletool -proof-for 您的地址 获取')
+      setError('proof 需为 JSON 数组。若您在活跃集内，可先尝试 []；否则请运行 merkletool -proof-for 您的地址 生成后粘贴')
       return
     }
     setError(null)
@@ -175,7 +175,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     if (!account || !isGovDeployed()) return
     const root = createMerkleRoot.trim().toLowerCase()
     if (!root) {
-      setError('请填写活跃集证明（merkleRoot），需先用 merkletool 生成')
+      setError('请填写活跃集 Merkle 根（merkleRoot），需先用 merkletool 生成')
       return
     }
     if (!/^0x[0-9a-f]{64}$/.test(root)) {
@@ -198,7 +198,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     }
     const feeNum = parseFloat(createFeePercent)
     if (Number.isNaN(feeNum) || feeNum <= 0 || feeNum > 100) {
-      setError('手续费比例必须在 0.01～100 之间')
+      setError('手续费比例需在 0.01～100 之间')
       return
     }
     setError(null)
@@ -220,7 +220,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     return (
       <div className="card vault-section">
         <h2>治理</h2>
-        <p className="hint">Governance 合约未部署。运行 scripts/deploy-governance.ps1 后，将地址填入 frontend/src/config.ts 的 GOVERNANCE_ADDRESS。</p>
+        <p className="hint">治理合约尚未在当前链部署，治理功能暂不可用。</p>
       </div>
     )
   }
@@ -228,7 +228,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
   return (
     <div className="card vault-section governance-section">
       <h2>治理</h2>
-      <p className="hint">查看提案、投票、执行。参与投票需在活跃集内，proof 由 merkletool 生成。</p>
+      <p className="hint">查看治理提案，参与投票并执行已通过的提案。投票资格限活跃集成员，投票时需提交 merkletool 生成的活跃集证明（proof）。</p>
 
       <h3 className="gov-sub">
         提案列表
@@ -239,7 +239,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
             onChange={(e) => setAutoRefresh(e.target.checked)}
             style={{ marginRight: '0.25rem' }}
           />
-          自动刷新（30秒）
+          自动刷新（每 30 秒）
         </label>
       </h3>
       {loading && <p className="hint">加载中…</p>}
@@ -263,23 +263,23 @@ export function GovernanceSection({ account }: { account: string | null }) {
                 let statusText = ''
                 let statusColor = ''
                 if (p.executed) {
-                  statusText = '✅ 已执行'
+                  statusText = '已执行'
                   statusColor = 'green'
                 } else if (isVoting) {
-                  statusText = '⏳ 投票中'
+                  statusText = '投票中'
                   statusColor = 'blue'
                 } else if (canExecute) {
-                  statusText = '✅ 可执行'
+                  statusText = '可执行'
                   statusColor = 'green'
                 } else if (waitingTimelock) {
                   const waitHours = Math.ceil((executableAt - now) / (1000 * 60 * 60))
-                  statusText = `⏰ 等待 Timelock（${waitHours} 小时后可执行）`
+                  statusText = `时间锁等待中（约 ${waitHours} 小时后可执行）`
                   statusColor = 'orange'
                 } else if (!isPassed) {
-                  statusText = '❌ 未通过'
+                  statusText = '未通过'
                   statusColor = 'red'
                 } else {
-                  statusText = '⏳ 等待中'
+                  statusText = '待处理'
                   statusColor = 'gray'
                 }
 
@@ -289,7 +289,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
                       <span className="label">提案 #{actualIndex}</span>
                       <span className="value" style={{ color: statusColor, fontWeight: 'bold' }}>
                         {statusText}
-                        {p.isMultiStep && ' (多步骤)'}
+                        {p.isMultiStep && '（多步骤提案）'}
                       </span>
                     </div>
                     <div className="row">
@@ -353,7 +353,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
                           disabled={loadingExec}
                           style={{ fontSize: '0.9em', padding: '4px 12px' }}
                         >
-                          {loadingExec && parseInt(execProposalId, 10) === actualIndex ? '执行中...' : '立即执行'}
+                          {loadingExec && parseInt(execProposalId, 10) === actualIndex ? '执行中…' : '立即执行'}
                         </button>
                       </div>
                     )}
@@ -393,11 +393,11 @@ export function GovernanceSection({ account }: { account: string | null }) {
         </>
       )}
       <button className="btn secondary" onClick={fetchProposals} disabled={loading} style={{ marginTop: '0.5rem' }}>
-        {loading ? '刷新中…' : '手动刷新'}
+        {loading ? '刷新中…' : '刷新'}
       </button>
 
       <h3 className="gov-sub">投票</h3>
-      <p className="hint">参与投票需在活跃集内。上方每个「投票中」的提案旁可直接点「支持」「反对」；若提示需 proof，请运行 <code>go run ./cmd/merkletool -proof-for 您的地址</code> 获取后粘贴下方。</p>
+      <p className="hint">投票资格限活跃集成员。「投票中」的提案可直接在提案卡片上点「支持」或「反对」；若提示需要活跃集证明，请运行 <code>go run ./cmd/merkletool -proof-for 您的地址</code> 生成 proof 后，在下方手动提交。</p>
       <details className="vote-advanced">
         <summary>高级：手动填写 proof</summary>
         <textarea
@@ -417,7 +417,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
           />
           <label className="vote-support">
             <input type="checkbox" checked={voteSupport} onChange={(e) => setVoteSupport(e.target.checked)} />
-            赞成
+            支持
           </label>
         </div>
         <button className="btn secondary" onClick={() => { const id = parseInt(voteProposalId, 10); if (!Number.isNaN(id)) handleVote(id, voteSupport) }} disabled={loadingVote || !account}>
@@ -440,7 +440,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
       </div>
 
       <h3 className="gov-sub">创建提案</h3>
-      <p className="hint">模板：调整手续费。填写手续费比例后，在下方高级选项中粘贴 merkletool 生成的证明。</p>
+      <p className="hint">当前模板：调整交易手续费。填写新的手续费比例，并在下方高级选项中附上 merkletool 生成的活跃集证明后提交。</p>
       <div className="proposal-create-form">
         <div className="form-group">
           <label>新手续费比例（%）</label>
@@ -456,7 +456,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
           />
         </div>
         {createFeePercent && !Number.isNaN(parseFloat(createFeePercent)) && parseFloat(createFeePercent) > 0 && parseFloat(createFeePercent) <= 100 && (
-          <p className="proposal-preview">本提案将把手续费改为 {createFeePercent}%</p>
+          <p className="proposal-preview">本提案将把交易手续费调整为 {createFeePercent}%</p>
         )}
         <details className="proposal-create-advanced">
           <summary>高级：活跃集证明（需 merkletool 生成）</summary>

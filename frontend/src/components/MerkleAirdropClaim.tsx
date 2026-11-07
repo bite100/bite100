@@ -95,7 +95,7 @@ export function MerkleAirdropClaim({ account, onError }: MerkleAirdropClaimProps
   return (
     <section className="card merkle-airdrop-claim">
       <h3>Merkle 空投领取</h3>
-      <p className="hint">使用 merkle-distributor 工具获取 index、amount、proof 后在此领取</p>
+      <p className="hint">使用 merkle-distributor 工具生成 index、amount 与 proof 后，在此提交领取。</p>
       <div className="form-group">
         <label>MerkleDistributor 合约地址</label>
         <input
@@ -115,7 +115,7 @@ export function MerkleAirdropClaim({ account, onError }: MerkleAirdropClaimProps
       {claimed === false && (
         <>
           <div className="form-group">
-            <label>index（merkle-distributor 输出）</label>
+            <label>index（由 merkle-distributor 生成）</label>
             <input type="text" placeholder="0" value={index} onChange={(e) => setIndex(e.target.value)} />
           </div>
           <div className="form-group">

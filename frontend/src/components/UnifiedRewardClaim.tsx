@@ -178,7 +178,7 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
   if (!account) {
     return (
       <div className="card unified-reward-claim">
-        <h3 className="card-title">统一奖励领取</h3>
+        <h3 className="card-title">奖励领取</h3>
         <p className="unified-reward-hint">连接钱包后可查看并领取贡献奖励与手续费分成。</p>
       </div>
     )
@@ -187,7 +187,7 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
   if (loading && !rows?.length && !feeDistClaimable) {
     return (
       <div className="card unified-reward-claim">
-        <h3 className="card-title">统一奖励领取</h3>
+        <h3 className="card-title">奖励领取</h3>
         <p className="unified-reward-hint">加载中…</p>
       </div>
     )
@@ -225,7 +225,7 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
   return (
     <div className="card unified-reward-claim">
       <h3 className="card-title">奖励领取</h3>
-      <p className="unified-reward-hint">可领奖励一键领取，或在下方分项领取。</p>
+      <p className="unified-reward-hint">可一键领取全部可领奖励，或在下方按项领取。</p>
 
       {claimableItems.length > 0 && (
         <button
@@ -280,15 +280,15 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
                 <div className="unified-reward-period-label">贡献奖励 · {r.period}</div>
                 <p className="unified-reward-hint">
                   {deadline
-                    ? `领取截止：${deadline.toISOString().slice(0, 10)}（周期结束后 90 天内，单次领取上限为奖池 10%）`
-                    : '领取期限：周期结束后 90 天内，单次领取上限为奖池 10%'}
+                    ? `领取截止：${deadline.toISOString().slice(0, 10)}（周期结束后 90 天内；单次领取上限为奖池 10%）`
+                    : '领取期限：周期结束后 90 天内；单次领取上限为奖池 10%'}
                 </p>
                 {pastDeadline ? (
                   <p className="unified-reward-deadline">已过领取期限，未领部分将回流下一期奖池</p>
                 ) : (
                   <>
                     <div className="unified-reward-period-row">
-                      <span className="label">TKA 单次可领</span>
+                      <span className="label">TKA 本次可领</span>
                       <span className="value">{r.claimableT0}</span>
                     </div>
                     <div className="unified-reward-period-row">
@@ -304,7 +304,7 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
                       {claiming === `${r.period}-T0` ? '领取中…' : '领取 TKA'}
                     </button>
                     <div className="unified-reward-period-row">
-                      <span className="label">TKB 单次可领</span>
+                      <span className="label">TKB 本次可领</span>
                       <span className="value">{r.claimableT1}</span>
                     </div>
                     <div className="unified-reward-period-row">
@@ -326,7 +326,7 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
           })}
         </div>
       ) : (
-        !loading && !hasFeeDistClaim && <p className="unified-reward-hint muted">暂无贡献奖励或手续费分成可领，请先参与贡献。</p>
+        !loading && !hasFeeDistClaim && <p className="unified-reward-hint muted">暂无可领取的奖励。贡献奖励按周期生成，请在周期结束后查看。</p>
       )}
 
       {rows && rows.length > 0 && (
