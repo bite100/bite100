@@ -536,7 +536,7 @@ function App() {
 
           {activeTab === 'assets' && (
             <>
-              <PageHead title="资产" desc="向 Vault 存入代币用于下单结算，或提取回钱包，并查询钱包与 Vault 两处余额。" />
+              <PageHead title="资产" desc="资金路径：钱包 → 存入 Vault → 用 Vault 余额下单结算 → 提取回钱包。下单只能使用 Vault 余额，钱包里的代币需先存入才能用于交易；本页可查询两处余额并完成存入与提取。" />
               {account ? (
             <div className="vault-layout">
               <div className="card vault-section">
@@ -579,7 +579,7 @@ function App() {
               <div className="vault-actions-grid">
                 <div className="card vault-section">
                   <h2>存入</h2>
-                  <p className="hint">存入后代币进入 Vault，可用于下单结算。首次存入需在钱包中确认两次：代币授权与存入。</p>
+                  <p className="hint">步骤：填入数量后点「存入」，在钱包中确认即可。首次存入需确认两次：代币授权与存入，之后可直接存入。注意：存入是链上交易，由你自己在钱包中确认（与下单、撤单只需签名不同）；存入完成后，Vault 余额即可用于下单。</p>
                   <div className="input-row">
                     <input
                       type="text"
@@ -601,7 +601,7 @@ function App() {
 
                 <div className="card vault-section">
                   <h2>提取</h2>
-                  <p className="hint">将 Vault 余额提取回钱包，提取数量不超过 Vault 余额。</p>
+                  <p className="hint">将 Vault 余额提取回钱包：填入数量后点「提取」并在钱包中确认，提取数量不超过 Vault 余额。注意：挂单不会冻结余额，但成交结算时从 Vault 扣款——若提取后余额不足，未成交挂单成交时将结算失败，建议先撤单再提取。</p>
                   <div className="input-row">
                     <input
                       type="text"
@@ -659,7 +659,7 @@ function App() {
             <div className="swap-page">
               <div className="card vault-section swap-hero">
                 <h2>兑换</h2>
-                <p className="hint">TKA 与 TKB 按池内储备比例即时兑换，手续费 0.01%，从成交金额中扣除；兑换需要池中有充足流动性。</p>
+                <p className="hint">TKA 与 TKB 按池内储备比例即时兑换，手续费 0.01%，从成交金额中扣除。步骤：填入数量，确认兑换方向与到手数量后提交，并在钱包中确认（兑换是链上交易）。注意：实际成交价按提交上链时的池内储备计算，大额兑换可能产生滑点；池中流动性不足时兑换会失败。</p>
                 <div className="row">
                   <span className="label">池内储备</span>
                   <span className="value mono">TKA: {reserve0} · TKB: {reserve1}</span>
