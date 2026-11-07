@@ -46,7 +46,8 @@ export interface ChainConfig {
 }
 
 // Sepolia 测试网（2026-11-07 第十五轮重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md；
-// 跨链桥为第十六轮迁移部署，见 docs/round16-bridge-migration-2026-11-07.md）
+// 跨链桥为第十六轮迁移部署，见 docs/round16-bridge-migration-2026-11-07.md；
+// 第二十一轮仅 Vault/Settlement/ChainConfig 三合约换新为 gas 规则版，其余沿用，见 docs/round21-gas-rules-2026-11-07.md）
 const SEPOLIA: ChainConfig = {
   chainId: 11155111,
   name: 'Sepolia',
@@ -58,15 +59,15 @@ const SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0x7B6aFdd9799ABa60a4Fd77217b40E8191Dc498f5',
-    settlement: '0x929ceb054B86Bf222eb94Df7b75aDa4fD22A538A',
+    vault: '0xF9695C43bEBA0aB43e4Bef206DCd6C40480bE9f5',
+    settlement: '0x549690D6bb9f1b5dB072A8E3fd3A4060e55B7Ef6',
     token0: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
     token1: '0x1530b74E6d5C2D0e2b78314b5C253E66bfC4ddc2',
     contributorReward: '0x12b8dA1b30771c46025488621bfe3DC665E9C0a8',
     feeDistributor: '0x346DE29B7fEe95F44A5b5385e87182F031E8E1B5',
     governance: '0x31900dD9C5190F72A2Da96E3efE45014B5748448',
     tokenRegistry: '0x9d50B1088E483f3A192A018c6a59cb9a5bddeDDd',
-    chainConfig: '0x0f419cA52A47d2cA7Ae5f803cf010263012D2cA1',
+    chainConfig: '0x52De0F096B169f612E55084eE05Efa7D1dEaa0c4',
     crossChainBridge: '0x7a0eCbc2Ffca2F8f7A1505Fa65e7E4759bE33d50',
     wrappedToken: '0x03ED8203236Bb5409caA6330fDCd16559C914b9a',
   },
@@ -87,7 +88,8 @@ const SEPOLIA: ChainConfig = {
 }
 
 // Base Sepolia 测试网（2026-11-07 第十五轮同构重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md；
-// 跨链桥为第十六轮迁移部署，见 docs/round16-bridge-migration-2026-11-07.md）
+// 跨链桥为第十六轮迁移部署，见 docs/round16-bridge-migration-2026-11-07.md；
+// 第二十一轮仅 Vault/Settlement/ChainConfig 三合约换新为 gas 规则版，其余沿用，见 docs/round21-gas-rules-2026-11-07.md）
 const BASE_SEPOLIA: ChainConfig = {
   chainId: 84532,
   name: 'Base Sepolia',
@@ -99,15 +101,15 @@ const BASE_SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0xd09E808D0978bdD06738a5dAfBd3c0a286aE3Fb2',
-    settlement: '0x3F9F29A6Ff7F706Bd769da3f0F4b3dCe70371D4c',
+    vault: '0x46592e98ea76D8d1e987b69194b74828A91E3D50',
+    settlement: '0x6291E0F2da9754ca933CcDc8D013184A7cE63671',
     token0: '0xd3f1136Cb3511b4546BDE5dDAC4F0D5a4D5C5D33',
     token1: '0x8492ccCE958803F04772C0f5B51DbbC320A54daF',
     contributorReward: '0xFe066c25a25Fddd6433Fac7f7769d5806392663e',
     feeDistributor: '0xAeC85272Cba4F22eaf93a0313b0D09164Ca009b7',
     governance: '0x26b608468bf5Dd88B91EAE3D16827A2b4a25BCcE',
     tokenRegistry: '0x8dC560038D392012C8562185E4C6Bf2Ce636E74D',
-    chainConfig: '0x439423AB16A1A3dadf5415243501ee9e6984b813',
+    chainConfig: '0x41b12b6620750564a412b294a1a2bBde24a3B9E8',
     crossChainBridge: '0xA7722A0ba7F2DA1d4D67D5191222C5e4c3835dBB',
     // 注意：Base Sepolia 的 wTKA 地址字符串与 Sepolia 的 FeeDistributor 相同，是不同链上的不同合约；
     // Base Sepolia 的 CCIP 池地址字符串又与 Sepolia 的 TKA 相同（CREATE nonce 巧合），引用时务必连链一起看。

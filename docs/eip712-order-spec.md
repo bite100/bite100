@@ -98,3 +98,49 @@ ethers 的 `TypedDataEncoder`（中立的 EIP-712 参考实现）生成，Go 测
 向量参数：chainId = 31337，verifyingContract =
 `0x5FbDB2315678afecb367f032d93F642f64180aa3`，私钥 = anvil 账户 #0
 （`0xac0974…ff80`，公开测试私钥），地址 `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`。
+
+## 7. Gas 规则（第二十一轮，2026-11-07）
+
+结算 gas 不由用户自备原生代币：中继代付后在结算层回收，规则如下（经济口径为产品定版，
+实现细节与实测证据见 `docs/round21-gas-rules-2026-11-07.md`）。
+
+### 7.1 成功结算：对半回收
+
+- 每笔结算的 gas 成本由合约在链上计量：`gasUsed = (入口 gasleft 差值 + 内在成本
+  21000 + 16×calldata 字节数 + 常量 85,000) × meterKeepBps / 10,000`（批量入口整批
+  计量后按笔均摊）。`gasCostWei = gasUsed × tx.gasprice`（tx.gasprice 即回执的
+  effectiveGasPrice，链上可核）。
+- `meterKeepBps`（默认 7600）是净成本校准系数：gasleft 计量为 SSTORE 退款前毛值，
+  提交者实付为退款后净值，系数把收费压回净成本附近且宁可少收不多收；治理可更新，
+  主网部署前必须在主网分叉重新校准。
+- 双方各承担 50%（ETH 计）：`halfWei = gasCostWei / 2`（奇数 1 wei 由协议吸收）。
+  换算成各方**收到的资产**扣除：收到 quote 的一方按 ChainConfig 的
+  `ethPriceInQuote` 换算直扣；收到 base 的一方再按该笔成交价（成交量比）换算。
+  ChainConfig 未配参考价、或交易对两币均非 quote 时整笔不扣（事件 reason 标注）。
+- 安全阀：单方扣除 ≤ 其该笔收到金额的 `gasDeductCapBps`（默认 1000 = 10%，硬顶
+  50%），且不超过其 Vault 可用余额；差额（shortfall）由协议/提交者吸收，不转嫁。
+  扣除经 Vault 转给结算提交者（msg.sender）。
+- 每笔成交发射 `GasCostShared` 事件（gasUsed、gasCostWei、reason、双方扣除资产/
+  金额/差额），前端与节点可逐笔对账。交易费（0.01%，FeeDistributor 99% / 开发者
+  1%）与 gas 扣除是两条独立的账，互不混算。
+- `Fill.gasReimburseIn/Out` 为旧版节点自报字段：保留在结构体中维持 ABI 兼容，
+  结算路径**不再读取**（防自报套利），`maxGasReimbursePerTrade` 同步废弃。
+
+### 7.2 失败结算：归责扣费
+
+revert 的交易内无法扣款，失败扣费走独立入口 `chargeFailedSettlement(signedOrder,
+reason, gasUsedClaimed)`，由结算调用方（owner/治理/白名单 relayer）在失败后申报：
+
+- **归责只认两类链上可验事实**：`FAIL_ORDER_EXPIRED = 1`（订单 `expiresAt` 已过）、
+  `FAIL_LOCK_RELEASED = 2`（订单锁已被释放/取消且该订单未成交完毕）。被扣方与被扣
+  资产由 Vault 的**落锁墓碑**（`lockForOrder` 时写入、永不删除）决定，申报者无法
+  指定或伪造；订单从未落锁则拒绝。
+- 扣费额 = `min(gasUsedClaimed × 本笔 tx.gasprice × ethPriceInQuote, 
+  maxFailureGasChargeQuote)`，再按订单签名价格换算成墓碑资产、按可用余额封顶。
+  `maxFailureGasChargeQuote` 默认 0 = 功能关闭；同一订单只收一次
+  （`failureCharged[digest]`）。
+- `gasUsedClaimed` 无法链上核验（revert 回执不上链）——由硬上限与既有中继信誉
+  机制约束申报者，节点侧只应以自己提交且 revert 的交易回执如实申报。
+- 不可归责的失败不扣用户：撮合参数错误、重复提交已成交订单、提交者自身问题、
+  参考价未配置、链/节点系统性故障——gas 由提交者自担。
+- 存入/提取 Vault 的 gas 由用户自付，不在本规则内。

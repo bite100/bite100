@@ -17,7 +17,7 @@ describe('getChainConfig', () => {
     expect(c).not.toBeNull()
     expect(c!.chainId).toBe(11155111)
     expect(c!.name).toBe('Sepolia')
-    expect(c!.contracts.settlement).toBe('0x929ceb054B86Bf222eb94Df7b75aDa4fD22A538A')
+    expect(c!.contracts.settlement).toBe('0x549690D6bb9f1b5dB072A8E3fd3A4060e55B7Ef6')
     expect(c!.contracts.crossChainBridge).toBe('0x7a0eCbc2Ffca2F8f7A1505Fa65e7E4759bE33d50')
   })
 
@@ -26,8 +26,8 @@ describe('getChainConfig', () => {
     expect(c).not.toBeNull()
     expect(c!.chainId).toBe(84532)
     expect(c!.name).toBe('Base Sepolia')
-    expect(c!.contracts.settlement).toBe('0x3F9F29A6Ff7F706Bd769da3f0F4b3dCe70371D4c')
-    expect(c!.contracts.vault).toBe('0xd09E808D0978bdD06738a5dAfBd3c0a286aE3Fb2')
+    expect(c!.contracts.settlement).toBe('0x6291E0F2da9754ca933CcDc8D013184A7cE63671')
+    expect(c!.contracts.vault).toBe('0x46592e98ea76D8d1e987b69194b74828A91E3D50')
     expect(c!.contracts.crossChainBridge).toBe('0xA7722A0ba7F2DA1d4D67D5191222C5e4c3835dBB')
   })
 

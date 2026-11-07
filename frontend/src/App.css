@@ -562,6 +562,7 @@ select.input {
 .fee-display-row .gas-relayer { color: var(--b100-up); font-weight: normal; margin-left: 0.25rem; }
 .fee-display-row .gas-suggestion { color: var(--b100-warning); font-size: 0.8em; font-weight: normal; margin-left: 0.25rem; }
 .fee-display-split { border-top: 1px solid var(--b100-border-strong); margin-top: 0.5rem; padding-top: 0.5rem; }
+.fee-display-note { color: var(--b100-text-2); font-size: 0.8rem; line-height: 1.5; margin: 0.5rem 0 0; }
 
 /* ---------- 订单簿 ---------- */
 .orderbook-section .orderbook-grid {

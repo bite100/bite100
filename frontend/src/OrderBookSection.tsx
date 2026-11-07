@@ -734,7 +734,6 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         <div className="orderbook-fee-panel">
           <FeeDisplay
             platformFeePercent={0.01}
-            feeDistribution={{ nodes: 20, developers: 30, liquidity: 50 }}
             showGasEstimate={true}
             tradeAmount={
               price && amount && !Number.isNaN(Number(price)) && !Number.isNaN(Number(amount))
