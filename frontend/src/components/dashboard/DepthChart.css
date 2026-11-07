@@ -1,0 +1,38 @@
+.depth-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.depth-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 11px;
+  color: var(--b100-text-2);
+  align-items: center;
+}
+.depth-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 5px;
+}
+.depth-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.depth-empty {
+  padding: 26px 10px;
+  text-align: center;
+  color: var(--b100-text-2);
+  font-size: 13px;
+}
+.depth-empty p {
+  margin: 0 0 6px;
+}
+.depth-empty-sub {
+  font-size: 11.5px;
+  color: var(--b100-text-3);
+}

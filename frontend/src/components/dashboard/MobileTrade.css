@@ -1,0 +1,238 @@
+/* 移动交易页（第 31 轮） */
+.mtrade {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mtrade-pairrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+.mtrade-pairbtn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 17px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--b100-text);
+}
+.mtrade-chev {
+  font-size: 12px;
+  color: var(--b100-text-3);
+}
+.mtrade-change {
+  font-size: 13px;
+  font-weight: 700;
+}
+.mtrade-up {
+  color: var(--b100-up);
+}
+.mtrade-down {
+  color: var(--b100-down);
+}
+.mtrade-spacer {
+  flex: 1;
+}
+.mtrade-iconbtn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--b100-text-2);
+  padding: 4px;
+  display: flex;
+}
+.mtrade-iconbtn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.mtrade-dual {
+  display: flex;
+  gap: 0;
+  padding: 14px 16px;
+}
+.mtrade-book {
+  width: 42%;
+  flex: none;
+  padding-right: 12px;
+  min-width: 0;
+}
+.mtrade-ticket {
+  flex: 1;
+  border-left: 1px solid var(--b100-hairline);
+  padding-left: 12px;
+  min-width: 0;
+}
+
+.mtrade-orders {
+  padding: 6px 16px 10px;
+}
+.mtrade-booklink {
+  display: block;
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--b100-hairline);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--b100-text);
+  text-align: left;
+  padding: 12px 0 4px;
+  margin-top: 6px;
+}
+
+.mtrade-chartbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  border: 1px solid var(--b100-border);
+  background: #fff;
+  border-radius: 16px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--b100-text);
+  padding: 13px 16px;
+}
+.mtrade-chartbar-toggle {
+  color: var(--b100-text-3);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.mtrade-overlay {
+  position: fixed;
+  top: 48px;
+  bottom: var(--b100-tabbar-h, 56px);
+  left: 0;
+  right: 0;
+  z-index: 55;
+  background: var(--b100-bg);
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mtrade-overlay .card {
+  flex: none;
+}
+.mtrade-head-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.mtrade-head-pair {
+  font-size: 15px;
+  font-weight: 700;
+}
+.mtrade-head-last {
+  font-size: 24px;
+  font-weight: 800;
+  margin-top: 2px;
+}
+.mtrade-head-usd {
+  font-size: 12px;
+  color: var(--b100-text-3);
+}
+.mtrade-head-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 14px;
+  margin-top: 12px;
+}
+.mtrade-head-grid span {
+  display: block;
+  font-size: 10.5px;
+  color: var(--b100-text-3);
+}
+.mtrade-head-grid b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.mtrade-chart-body {
+  padding-top: 12px;
+}
+
+/* 下单票（ticket 布局）细节 */
+.ticket-form .ticket-type-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.ticket-form .ticket-type-row > div {
+  flex: 1;
+}
+.ticket-type-info {
+  color: var(--b100-text-3);
+  font-size: 14px;
+  padding-bottom: 8px;
+  cursor: help;
+}
+.ticket-max {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--b100-accent);
+  padding: 2px 4px;
+}
+.ticket-slider {
+  padding: 2px 2px 0;
+}
+/* 菱形节点：把 Mantine Slider 的刻度点旋转 45° 成菱形 */
+.ticket-slider .mantine-Slider-mark {
+  transform: translate(-50%, -50%) rotate(45deg);
+  border-radius: 2px;
+  width: 9px;
+  height: 9px;
+  border-color: #d8d8de;
+  background: #fff;
+}
+.ticket-slider .mantine-Slider-markLabel {
+  font-size: 10px;
+  color: var(--b100-text-3);
+}
+.ticket-rows .kv .v small,
+.ticket-protect-row .v small {
+  display: block;
+  font-size: 10.5px;
+  color: var(--b100-text-3);
+  font-weight: 500;
+  line-height: 1.5;
+}
+.ticket-fee-row {
+  border-bottom: none;
+  padding-top: 2px;
+}
+.ticket-gasnote {
+  line-height: 1.6;
+}
+.ticket-details {
+  font-size: 12px;
+  color: var(--b100-text-2);
+}
+.ticket-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--b100-text);
+  padding: 4px 0;
+}
+.ticket-details p {
+  line-height: 1.7;
+  margin: 6px 0;
+}

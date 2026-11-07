@@ -85,8 +85,10 @@
   min-width: 0;
 }
 
-/* 中等宽度：右侧两栏并为一列（下单在上、盘口/成交在下），K 线与页签仍占左列 */
-@media (max-width: 1280px) {
+/* 中等宽度：右侧两栏并为一列（下单在上、盘口/成交在下），K 线与页签仍占左列。
+   第 31 轮：断点由 1280 收到 1023——<1024px 已由移动交易页接管，本规则只在
+   桌面树残留宽度内兜底；≥1024px 按设计维持三列网格。 */
+@media (max-width: 1023px) {
   .trade-main {
     grid-template-columns: minmax(0, 1fr) 300px;
     grid-template-areas:

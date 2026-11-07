@@ -54,6 +54,12 @@ interface LimitOrderFormWidgetProps {
   lastTradePrice?: number | null
   lastTradeAtSec?: number | null
   onSuccess?: () => void
+  /**
+   * 布局（第 31 轮）：full = 桌面完整布局（缺省，行为与文案不变）；
+   * ticket = 移动交易页下单票——分段买卖、只读保护价行、菱形节点滑杆、关键键值行，
+   * 长说明收进票内「下单说明」折叠区（文案只搬不删）。下单/签名/补存逻辑两布局完全共用。
+   */
+  layout?: 'full' | 'ticket'
 }
 
 function trimNum(n: number, digits = 6): string {
@@ -73,7 +79,8 @@ function fmtDataTime(sec: number): string {
   })
 }
 
-export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, recommendedPrice, externalPrice, book, lastTradePrice, lastTradeAtSec, onSuccess }: LimitOrderFormWidgetProps) {
+export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, recommendedPrice, externalPrice, book, lastTradePrice, lastTradeAtSec, onSuccess, layout = 'full' }: LimitOrderFormWidgetProps) {
+  const ticket = layout === 'ticket'
   // 第二十五轮：基础/计价代币随交易对取（chains.ts tokens 登记）；未登记的交易对不下单。
   const [baseSymbol, quoteSymbol] = pair.split('/')
   const pairTokens = getPairTokens(CHAIN_ID, pair)
@@ -342,6 +349,17 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         ? priceNum * amountNum
         : null
   const spendSymbol = side === 'sell' ? baseSymbol : quoteSymbol
+  // 下单票（ticket）键值行派生值：可买（买入按可用计价余额 ÷ 有效价）/ 预计可得（卖出）/ 预估手续费
+  const balNum = parseFloat(balance)
+  const estBuyQty =
+    side === 'buy' && !Number.isNaN(balNum) && balNum > 0 && !Number.isNaN(priceNum) && priceNum > 0
+      ? balNum / priceNum
+      : null
+  const estSellGet =
+    side === 'sell' && !Number.isNaN(amountNum) && amountNum > 0 && !Number.isNaN(priceNum) && priceNum > 0
+      ? amountNum * priceNum
+      : null
+  const estFee = total != null ? total * 0.0001 : null
   const topUpStepText =
     topUpStep === 'approving'
       ? '补存中：请在钱包中确认授权…'
@@ -352,39 +370,73 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
           : null
 
   return (
-    <Paper p="md" style={{ background: 'transparent' }}>
-      <Text size="sm" fw={600} mb="xs">
-        下单 · {pair}
-      </Text>
+    <Paper p={ticket ? 0 : 'md'} style={{ background: 'transparent' }} className={ticket ? 'ticket-form' : undefined}>
+      {!ticket && (
+        <Text size="sm" fw={600} mb="xs">
+          下单 · {pair}
+        </Text>
+      )}
       <Stack gap="sm">
-        <div className="side-toggle" role="group" aria-label="买卖方向">
-          <Button
-            className="side-toggle-btn"
-            color="up"
-            variant={side === 'buy' ? 'filled' : 'light'}
-            onClick={() => pickSide('buy')}
-          >
-            买入
-          </Button>
-          <Button
-            className="side-toggle-btn"
-            color="down"
-            variant={side === 'sell' ? 'filled' : 'light'}
-            onClick={() => pickSide('sell')}
-          >
-            卖出
-          </Button>
+        {ticket ? (
+          <div className="seg buy-sell" role="group" aria-label="买卖方向">
+            <button type="button" className={side === 'buy' ? 'on buy' : undefined} onClick={() => pickSide('buy')}>
+              买入
+            </button>
+            <button type="button" className={side === 'sell' ? 'on sell' : undefined} onClick={() => pickSide('sell')}>
+              卖出
+            </button>
+          </div>
+        ) : (
+          <div className="side-toggle" role="group" aria-label="买卖方向">
+            <Button
+              className="side-toggle-btn"
+              color="up"
+              variant={side === 'buy' ? 'filled' : 'light'}
+              onClick={() => pickSide('buy')}
+            >
+              买入
+            </Button>
+            <Button
+              className="side-toggle-btn"
+              color="down"
+              variant={side === 'sell' ? 'filled' : 'light'}
+              onClick={() => pickSide('sell')}
+            >
+              卖出
+            </Button>
+          </div>
+        )}
+        <div className={ticket ? 'ticket-type-row' : undefined}>
+          <Select
+            label={ticket ? undefined : '订单类型'}
+            aria-label="订单类型"
+            data={[
+              { value: 'limit', label: '限价单' },
+              { value: 'market', label: '市价单' },
+            ]}
+            value={orderType}
+            onChange={(v) => setOrderType(v === 'market' ? 'market' : 'limit')}
+            description={
+              ticket
+                ? undefined
+                : orderType === 'limit'
+                  ? '按指定价格或更优价格成交，未成交部分挂在盘口'
+                  : '立即按盘口最优价逐档成交，未成交部分自动取消'
+            }
+          />
+          {ticket && (
+            <span
+              className="ticket-type-info"
+              title={
+                orderType === 'limit'
+                  ? '限价单：按指定价格或更优价格成交，未成交部分挂在盘口'
+                  : '市价单：立即按盘口最优价逐档成交，未成交部分自动取消'
+              }
+            >
+              ⓘ
+            </span>
+          )}
         </div>
-        <Select
-          label="订单类型"
-          data={[
-            { value: 'limit', label: '限价单' },
-            { value: 'market', label: '市价单' },
-          ]}
-          value={orderType}
-          onChange={(v) => setOrderType(v === 'market' ? 'market' : 'limit')}
-          description={orderType === 'limit' ? '按指定价格或更优价格成交，未成交部分挂在盘口' : '立即按盘口最优价逐档成交，未成交部分自动取消'}
-        />
         {/* 第二十三轮：参考价行（来源/时效口径见 services/referencePrice.ts）+ 产品内说明 */}
         <div>
           {refState.status === 'loading' && (
@@ -418,10 +470,12 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
               新市场，暂无参考价：这个交易对还没有成交记录、盘口也未形成双边报价，价格由挂单双方自行约定。
             </Text>
           )}
-          <Text size="xs" c="dimmed" mt={2}>
-            参考价是什么：报价时的对照值，不是成交价。有 Chainlink
-            预言机喂价的交易对读预言机聚合价；没有的用本所最近成交价或盘口中间价（来源已在上方标注）。实际成交价以盘口挂单为准，可能与参考价不同。
-          </Text>
+          {!ticket && (
+            <Text size="xs" c="dimmed" mt={2}>
+              参考价是什么：报价时的对照值，不是成交价。有 Chainlink
+              预言机喂价的交易对读预言机聚合价；没有的用本所最近成交价或盘口中间价（来源已在上方标注）。实际成交价以盘口挂单为准，可能与参考价不同。
+            </Text>
+          )}
         </div>
         {orderType === 'limit' ? (
           <NumberInput
@@ -432,6 +486,36 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
             decimalScale={4}
             placeholder={recommendedPrice ?? '0'}
           />
+        ) : ticket ? (
+          <>
+            {/* 下单票（第 31 轮）：市价单不展示滑点输入（滑点沿用默认 1%），改只读保护价行（第 17 轮口径） */}
+            {bestOpp == null ? (
+              <Text size="xs" c="red">
+                当前盘口没有{side === 'buy' ? '卖盘' : '买盘'}挂单，市价单无法成交（节点会直接拒绝）。可改用限价单先挂单。
+              </Text>
+            ) : (
+              <>
+                <div className="kv ticket-protect-row">
+                  <span className="k">{side === 'buy' ? '保护上限价' : '保护下限价'}</span>
+                  <span className="v num">
+                    {protectionStr} {quoteSymbol}
+                    <small>市价单按保护价签名下单（限价机制）；超过此价不成交，未成交余量自动取消。</small>
+                  </span>
+                </div>
+                {fillEstimate && amountNum > 0 && (
+                  <Text size="xs" c="dimmed">
+                    对手盘最优价 {trimNum(bestOpp, 6)} {quoteSymbol} · 预估成交均价{' '}
+                    {fillEstimate.avgPrice != null ? trimNum(fillEstimate.avgPrice, 6) : '—'} {quoteSymbol}，可成交{' '}
+                    {trimNum(fillEstimate.filledQty, 6)} / {trimNum(amountNum, 6)} {baseSymbol}
+                    {!fillEstimate.fullyFilled &&
+                      (fillEstimate.cappedByProtection
+                        ? '（有档位超出保护价，超出部分不会成交）'
+                        : '（盘口深度不足）')}
+                  </Text>
+                )}
+              </>
+            )}
+          </>
         ) : (
           <>
             <NumberInput
@@ -473,8 +557,16 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
           }}
           min={0}
           decimalScale={4}
+          rightSection={
+            ticket ? (
+              <button type="button" className="ticket-max" onClick={() => handlePctChange(100)}>
+                最大
+              </button>
+            ) : undefined
+          }
+          rightSectionWidth={ticket ? 44 : undefined}
         />
-        <div>
+        <div className={ticket ? 'ticket-slider' : undefined}>
           <Slider
             value={pct}
             onChange={handlePctChange}
@@ -487,15 +579,50 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
             disabled={!account || !balance}
             aria-label="可用余额比例"
           />
-          <Text size="xs" c="dimmed" mt={4}>
-            {account
-              ? balance
-                ? `可用 ${balance} ${spendSymbol}` +
-                  (lockedBalance && parseFloat(lockedBalance) > 0 ? ` · 锁定中 ${lockedBalance} ${spendSymbol}（挂单占用）` : '')
-                : '可用余额加载中…'
-              : '连接钱包后可按比例下单'}
-          </Text>
+          {!ticket && (
+            <Text size="xs" c="dimmed" mt={4}>
+              {account
+                ? balance
+                  ? `可用 ${balance} ${spendSymbol}` +
+                    (lockedBalance && parseFloat(lockedBalance) > 0 ? ` · 锁定中 ${lockedBalance} ${spendSymbol}（挂单占用）` : '')
+                  : '可用余额加载中…'
+                : '连接钱包后可按比例下单'}
+            </Text>
+          )}
         </div>
+        {ticket && (
+          <div className="ticket-rows">
+            <div className="kv">
+              <span className="k">可用（Vault）</span>
+              <span className="v num">
+                {account
+                  ? balance
+                    ? `${balance} ${spendSymbol}`
+                    : '加载中…'
+                  : '连接钱包后显示'}
+                {lockedBalance && parseFloat(lockedBalance) > 0 && (
+                  <small>锁定中 {lockedBalance} {spendSymbol}（挂单占用）</small>
+                )}
+              </span>
+            </div>
+            {side === 'buy' && estBuyQty != null && (
+              <div className="kv">
+                <span className="k">可买</span>
+                <span className="v num">
+                  ≈ {trimNum(estBuyQty, 6)} {baseSymbol}
+                </span>
+              </div>
+            )}
+            {side === 'sell' && estSellGet != null && (
+              <div className="kv">
+                <span className="k">预计可得</span>
+                <span className="v num">
+                  ≈ {trimNum(estSellGet, 6)} {quoteSymbol}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
         {total != null && (
           <div className="order-total-row">
             <span>{orderType === 'market' ? '预估总额' : '总额'}</span>
@@ -504,11 +631,19 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
             </span>
           </div>
         )}
-        <Text size="xs" c="dimmed">
-          费用提示：成交后从你收到的资产中扣除两项——交易手续费 0.01%，以及结算 gas 的一半
-          （gas 由中继代付、无需自备原生代币，按实际成本买卖双方对半分摊，单方扣除不超过其收到金额的 10%）。
-          因此实际到账会比成交金额少这两项；精确金额以结算上链时的实际 gas 为准。
-        </Text>
+        {ticket && (
+          <div className="kv ticket-fee-row">
+            <span className="k">预估手续费（0.01%）</span>
+            <span className="v num">{estFee != null ? `≈ ${trimNum(estFee, 6)} ${quoteSymbol}` : '—'}</span>
+          </div>
+        )}
+        {!ticket && (
+          <Text size="xs" c="dimmed">
+            费用提示：成交后从你收到的资产中扣除两项——交易手续费 0.01%，以及结算 gas 的一半
+            （gas 由中继代付、无需自备原生代币，按实际成本买卖双方对半分摊，单方扣除不超过其收到金额的 10%）。
+            因此实际到账会比成交金额少这两项；精确金额以结算上链时的实际 gas 为准。
+          </Text>
+        )}
         {displayShortfall && (
           <Text size="xs" c="orange">
             Vault 可用余额不足：本单需要 {formatTokenAmount(displayShortfall.required)} {spendSymbol}，还差{' '}
@@ -557,14 +692,46 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
                 ? `买入 ${baseSymbol}`
                 : `卖出 ${baseSymbol}`)}
         </Button>
-        {orderType === 'market' && (
-          <Text size="xs" c="dimmed">
-            市价单怎么成交：提交后立即按盘口最优价逐档吃单，成交价不会差于你签名的保护价（保护价 = 对手盘最优价按上面滑点容忍放宽，签名即绑定这个上限/下限，节点不能越过它成交）。吃到保护价或盘口深度用尽为止，没成交的部分立即自动取消、不挂到盘口上。锁定与限价单相同：下单时按保护价全额义务锁定 Vault 余额，成交部分由结算消耗，未成交部分与买单的价格改善差额会在结算完成后自动释放。盘口为空时节点会直接拒绝并报错。
+        {ticket && (
+          <Text size="xs" c="dimmed" className="ticket-gasnote">
+            下单只需签名，不发链上交易；gas 由中继代付、结算时买卖双方对半分摊，无需自备原生代币。
           </Text>
         )}
-        <Text size="xs" c="dimmed">
-          限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。Vault 可用不足时不用先去资产页：下单按钮会先在面板内一键补存差额（从钱包存入恰好差额，可能需要授权与存入两次钱包确认），确认到账后自动继续签名下单；补存的钱与普通存入没有区别，随时可在资产页提取。成交后由中继提交链上结算：你不需要自备原生代币付 gas；结算 gas 按实际成本由买卖双方对半分摊、以各自收到的资产扣除（单方扣除不超过其收到金额的 10%，超出部分平台吸收），交易手续费 0.01% 从成交金额中扣除，两条账分开计算。若因你的订单已过期或已被你撤单导致结算失败，失败所耗的 gas 由你承担。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
-        </Text>
+        {ticket ? (
+          <details className="ticket-details">
+            <summary>下单说明（参考价 / 费用 / 锁定 / 市价单规则）</summary>
+            <Text size="xs" c="dimmed" component="div">
+              <p>
+                参考价是什么：报价时的对照值，不是成交价。有 Chainlink
+                预言机喂价的交易对读预言机聚合价；没有的用本所最近成交价或盘口中间价（来源已在上方标注）。实际成交价以盘口挂单为准，可能与参考价不同。
+              </p>
+              <p>
+                费用提示：成交后从你收到的资产中扣除两项——交易手续费 0.01%，以及结算 gas 的一半
+                （gas 由中继代付、无需自备原生代币，按实际成本买卖双方对半分摊，单方扣除不超过其收到金额的 10%）。
+                因此实际到账会比成交金额少这两项；精确金额以结算上链时的实际 gas 为准。
+              </p>
+              {orderType === 'market' && (
+                <p>
+                  市价单怎么成交：提交后立即按盘口最优价逐档吃单，成交价不会差于你签名的保护价（保护价 = 对手盘最优价按滑点容忍放宽，签名即绑定这个上限/下限，节点不能越过它成交；下单票按演示口径不展示滑点输入，沿用默认 1%）。吃到保护价或盘口深度用尽为止，没成交的部分立即自动取消、不挂到盘口上。锁定与限价单相同：下单时按保护价全额义务锁定 Vault 余额，成交部分由结算消耗，未成交部分与买单的价格改善差额会在结算完成后自动释放。盘口为空时节点会直接拒绝并报错。
+                </p>
+              )}
+              <p>
+                限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。Vault 可用不足时不用先去资产页：下单按钮会先在面板内一键补存差额（从钱包存入恰好差额，可能需要授权与存入两次钱包确认），确认到账后自动继续签名下单；补存的钱与普通存入没有区别，随时可在资产页提取。成交后由中继提交链上结算：你不需要自备原生代币付 gas；结算 gas 按实际成本由买卖双方对半分摊、以各自收到的资产扣除（单方扣除不超过其收到金额的 10%，超出部分平台吸收），交易手续费 0.01% 从成交金额中扣除，两条账分开计算。若因你的订单已过期或已被你撤单导致结算失败，失败所耗的 gas 由你承担。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
+              </p>
+            </Text>
+          </details>
+        ) : (
+          <>
+            {orderType === 'market' && (
+              <Text size="xs" c="dimmed">
+                市价单怎么成交：提交后立即按盘口最优价逐档吃单，成交价不会差于你签名的保护价（保护价 = 对手盘最优价按上面滑点容忍放宽，签名即绑定这个上限/下限，节点不能越过它成交）。吃到保护价或盘口深度用尽为止，没成交的部分立即自动取消、不挂到盘口上。锁定与限价单相同：下单时按保护价全额义务锁定 Vault 余额，成交部分由结算消耗，未成交部分与买单的价格改善差额会在结算完成后自动释放。盘口为空时节点会直接拒绝并报错。
+              </Text>
+            )}
+            <Text size="xs" c="dimmed">
+              限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。Vault 可用不足时不用先去资产页：下单按钮会先在面板内一键补存差额（从钱包存入恰好差额，可能需要授权与存入两次钱包确认），确认到账后自动继续签名下单；补存的钱与普通存入没有区别，随时可在资产页提取。成交后由中继提交链上结算：你不需要自备原生代币付 gas；结算 gas 按实际成本由买卖双方对半分摊、以各自收到的资产扣除（单方扣除不超过其收到金额的 10%，超出部分平台吸收），交易手续费 0.01% 从成交金额中扣除，两条账分开计算。若因你的订单已过期或已被你撤单导致结算失败，失败所耗的 gas 由你承担。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
+            </Text>
+          </>
+        )}
       </Stack>
     </Paper>
   )
