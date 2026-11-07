@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390, initial-scale=1">
+<title>比特100 · 交易 v2（第31轮设计演示）</title>
+<link rel="stylesheet" href="demo.css">
+</head>
+<body>
+<div class="phone">
+
+  <!-- 全局顶栏（固定）：本站瘦顶栏保留 -->
+  <div class="topbar">
+    <div class="mark">B</div>
+    <div class="title">比特100</div>
+    <span class="demo-flag">设计演示 · 示意数据</span>
+    <div class="spacer"></div>
+    <div class="chain-chip"><span class="dot"></span>Sepolia</div>
+    <div class="wallet-chip">0x4B3f…a93e</div>
+  </div>
+
+  <div class="page">
+
+    <!-- 交易对行：对名 ▾ + 涨跌%，右侧图表图标（进图表展开态） -->
+    <div class="pair-row2">
+      <div>
+        <div class="pn">BTC/USDT <span class="chev">▾</span></div>
+        <div class="chg"><span class="up num">+1.86%</span><span class="pill accent">现货</span></div>
+      </div>
+      <div class="acts">
+        <a class="icbtn" href="demo-trade-chart.html" aria-label="打开图表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 4v2.5M7 13.5V20M5.3 6.5h3.4v7H5.3zM16.5 3v2.5M16.5 12.5V21M14.8 5.5h3.4v7h-3.4z"/></svg></a>
+        <span class="icbtn" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></span>
+      </div>
+    </div>
+
+    <!-- 双列区：左盘口（约 42%） | 右下单 ticket（约 58%），骨架按币安 App 真机截图 -->
+    <div class="card trade-card">
+      <div class="trade-flex">
+
+        <!-- 左列：盘口 -->
+        <div class="book-col">
+          <div class="bk-head"><span class="p">价格（USDT）</span><span class="a">数量（BTC）⇅</span></div>
+          <!-- 卖盘 5 档（红色，深度条按累计占比自右生长） -->
+          <div class="bk-row"><span class="depth" style="width:8.5%;background:var(--b100-depth-ask)"></span><span class="p num" style="color:var(--b100-down)">76,435.00</span><span class="a num">0.0521</span></div>
+          <div class="bk-row"><span class="depth" style="width:27.8%;background:var(--b100-depth-ask)"></span><span class="p num" style="color:var(--b100-down)">76,430.50</span><span class="a num">0.1180</span></div>
+          <div class="bk-row"><span class="depth" style="width:41.9%;background:var(--b100-depth-ask)"></span><span class="p num" style="color:var(--b100-down)">76,428.00</span><span class="a num">0.0864</span></div>
+          <div class="bk-row"><span class="depth" style="width:74.8%;background:var(--b100-depth-ask)"></span><span class="p num" style="color:var(--b100-down)">76,425.00</span><span class="a num">0.2013</span></div>
+          <div class="bk-row"><span class="depth" style="width:100%;background:var(--b100-depth-ask)"></span><span class="p num" style="color:var(--b100-down)">76,423.00</span><span class="a num">0.1542</span></div>
+          <!-- 中间：最新价大号 + 参考价小字（本站以 Chainlink 参考价替代币安的 ≈法币行） -->
+          <div class="mid-price">
+            <div class="mp num up">76,420.50</div>
+            <div class="ref">参考价（Chainlink）<span class="num">76,402.10</span></div>
+          </div>
+          <!-- 买盘 5 档（绿色） -->
+          <div class="bk-row"><span class="depth" style="width:13.8%;background:var(--b100-depth-bid)"></span><span class="p num" style="color:var(--b100-up)">76,418.00</span><span class="a num">0.0935</span></div>
+          <div class="bk-row"><span class="depth" style="width:32.7%;background:var(--b100-depth-bid)"></span><span class="p num" style="color:var(--b100-up)">76,415.50</span><span class="a num">0.1274</span></div>
+          <div class="bk-row"><span class="depth" style="width:42.8%;background:var(--b100-depth-bid)"></span><span class="p num" style="color:var(--b100-up)">76,412.00</span><span class="a num">0.0681</span></div>
+          <div class="bk-row"><span class="depth" style="width:68.8%;background:var(--b100-depth-bid)"></span><span class="p num" style="color:var(--b100-up)">76,409.50</span><span class="a num">0.1756</span></div>
+          <div class="bk-row"><span class="depth" style="width:100%;background:var(--b100-depth-bid)"></span><span class="p num" style="color:var(--b100-up)">76,405.00</span><span class="a num">0.2108</span></div>
+          <!-- 买卖力量条（按两侧累计深度占比：买 0.6754 / 卖 0.6120） -->
+          <div class="power">
+            <div class="nums"><span class="up num">买 52.46%</span><span class="down num">47.54% 卖</span></div>
+            <div class="power-bar"><i class="pb" style="width:52.46%"></i><i class="ps" style="width:47.54%"></i></div>
+          </div>
+          <div class="prec-row">
+            <span class="prec-chip num">0.50 <span class="chev">▾</span></span>
+            <span class="disp-ic"><i style="background:var(--b100-down)"></i><i style="background:var(--b100-up)"></i></span>
+          </div>
+        </div>
+
+        <div class="vdiv"></div>
+
+        <!-- 右列：下单 ticket（本图为市价态；限价态见方案文档 §3.3） -->
+        <div class="ticket-col">
+          <div class="seg buy-sell">
+            <button class="on buy">买入</button><button>卖出</button>
+          </div>
+          <div class="type-row">
+            <span>市价单</span>
+            <span class="tr-acts">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 11v5" stroke-linecap="round"/><circle cx="12" cy="8" r="0.5" fill="currentColor"/></svg>
+              <span class="tr-div"></span><span style="font-size:11px">▾</span>
+            </span>
+          </div>
+          <div class="field">
+            <label>成交金额</label>
+            <div class="inputbox">
+              <input class="num" value="764.20" readonly>
+              <span class="unit">USDT ▾</span>
+            </div>
+          </div>
+          <!-- 菱形节点百分比滑杆（0 / 25 / 50 / 75 / 100） -->
+          <div class="dia">
+            <div class="track"></div><div class="fill" style="width:50%"></div>
+            <span class="node done" style="left:0%"></span>
+            <span class="node done" style="left:25%"></span>
+            <span class="node now" style="left:50%"></span>
+            <span class="node" style="left:75%"></span>
+            <span class="node" style="left:100%"></span>
+            <span class="dlab first" style="left:0%">0%</span>
+            <span class="dlab" style="left:25%">25%</span>
+            <span class="dlab" style="left:50%">50%</span>
+            <span class="dlab" style="left:75%">75%</span>
+            <span class="dlab last" style="left:100%">100%</span>
+          </div>
+          <!-- 本站适配：市价单用保护价机制，以「保护上限价」只读行替代币安的滑点容差勾选 -->
+          <div class="protect-note">
+            <div class="l1"><span>保护上限价</span><span class="num">84,062.55 USDT</span></div>
+            <div class="cap">市价单按保护价签名下单（限价机制）；超过此价不成交，未成交余量自动取消。</div>
+          </div>
+          <div class="tk-row"><span>可用（Vault）</span><span class="num">1,528.40 USDT</span></div>
+          <div class="tk-row"><span>可买</span><span class="num">≈ 0.0100 BTC</span></div>
+          <div class="tk-row"><span>预估手续费（0.01%）</span><span class="num">≈ 0.08 USDT</span></div>
+          <div style="height:12px"></div>
+          <button class="btn buy">买入 BTC</button>
+          <p class="gas-note">下单只需签名，不发链上交易；gas 由中继代付、结算时买卖双方对半分摊，无需自备原生代币。</p>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 委托区：当前委托 / 历史订单 / 持有币种 三页签 -->
+    <div class="card" style="padding-top:12px">
+      <div class="text-tabs">
+        <button class="on">当前委托（2）</button><button>历史订单</button><button>持有币种</button>
+      </div>
+      <div class="order-row">
+        <div class="l1"><span class="pill up">买入</span> BTC/USDT · 限价 <span class="pill amber">挂单中</span><button class="cancel-btn">撤单</button></div>
+        <div class="l2"><span>价格 <span class="num">75,900.00</span></span><span>数量 <span class="num">0.0200</span></span><span>已成交 <span class="num">0.0000</span></span></div>
+      </div>
+      <div class="order-row">
+        <div class="l1"><span class="pill down">卖出</span> BTC/USDT · 限价 <span class="pill accent">部分成交</span><button class="cancel-btn">撤单</button></div>
+        <div class="l2"><span>价格 <span class="num">77,000.00</span></span><span>数量 <span class="num">0.0150</span></span><span>已成交 <span class="num">0.0060</span></span></div>
+      </div>
+      <div class="link-row" style="margin-top:10px"><span>查看完整订单簿</span><span class="chev">›</span></div>
+    </div>
+
+    <!-- 图表可展开条：图表不在主交易屏，点开进入展开态 -->
+    <a class="chart-bar" href="demo-trade-chart.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V10M9.5 20V4M15 20v-8M20 20V7"/></svg>
+      BTC/USDT 图表
+      <span class="cb-act">展开 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 15l7-7 7 7"/></svg></span>
+    </a>
+
+  </div>
+
+  <!-- 全局底部标签栏（固定） -->
+  <nav class="tabbar">
+    <a class="active" href="demo-trade-v2.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 3v3M7 15v6M5 6h4v9H5zM17 2v4M17 14v8M15 6h4v8h-4z"/></svg>交易</a>
+    <a href="demo-assets-v2.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16.5 15h.01"/></svg>资产</a>
+    <a href="demo-bridge.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg>跨链桥</a>
+    <a href="demo-govern.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>治理与贡献</a>
+    <a href="demo-data.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3"/></svg>数据</a>
+  </nav>
+
+</div>
+</body>
+</html>
