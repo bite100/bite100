@@ -56,10 +56,12 @@ contract FeeDistributorTest is Test {
 
         fd.setRecipients(accounts, shareBps);
 
-        assertEq(fd.recipients(0).account, alice);
-        assertEq(fd.recipients(0).shareBps, 6000);
-        assertEq(fd.recipients(1).account, bob);
-        assertEq(fd.recipients(1).shareBps, 4000);
+        (address r0Account, uint16 r0Share) = fd.recipients(0);
+        assertEq(r0Account, alice);
+        assertEq(r0Share, 6000);
+        (address r1Account, uint16 r1Share) = fd.recipients(1);
+        assertEq(r1Account, bob);
+        assertEq(r1Share, 4000);
         assertEq(fd.totalShareBps(), 10000);
     }
 
@@ -75,8 +77,9 @@ contract FeeDistributorTest is Test {
         vm.prank(gov);
         fd.setRecipients(accounts, shareBps);
 
-        assertEq(fd.recipients(0).account, alice);
-        assertEq(fd.recipients(0).shareBps, 10000);
+        (address g0Account, uint16 g0Share) = fd.recipients(0);
+        assertEq(g0Account, alice);
+        assertEq(g0Share, 10000);
     }
 
     function test_SetRecipients_RevertNotAuth() public {
@@ -159,7 +162,7 @@ contract FeeDistributorTest is Test {
         assertEq(fd.owner(), alice);
 
         vm.prank(owner);
-        vm.expectRevert("FeeDistributor: not owner");
+        vm.expectRevert("FeeDistributor: not auth");
         fd.setRecipients(new address[](0), new uint16[](0));
     }
 

@@ -60,12 +60,12 @@ contract GovernanceTest is Test {
         vm.prank(alice);
         gov.vote(pid, true, proof);
 
-        (, , , , , uint256 yes, uint256 no, ) = gov.getProposal(pid);
+        (, , , , , uint256 yes, uint256 no, , ) = gov.getProposal(pid);
         assertEq(yes, 1);
         assertEq(no, 0);
 
         // Fast forward past voting period
-        vm.warp(block.timestamp + 8 days);
+        vm.warp(block.timestamp + 10 days); // 投票期 7 天 + Timelock 2 天
 
         gov.execute(pid);
 
@@ -95,10 +95,10 @@ contract GovernanceTest is Test {
         vm.prank(bob);
         gov.vote(pid, true, proofB);
 
-        (, , , , , uint256 yes, , ) = gov.getProposal(pid);
+        (, , , , , uint256 yes, , , ) = gov.getProposal(pid);
         assertEq(yes, 2);
 
-        vm.warp(block.timestamp + 8 days);
+        vm.warp(block.timestamp + 10 days); // 投票期 7 天 + Timelock 2 天
         gov.execute(pid);
         assertEq(settlement.feeBps(), 10);
     }
@@ -121,13 +121,15 @@ contract GovernanceTest is Test {
         vm.prank(alice);
         gov.vote(pid, true, _singleAddressProof(alice));
 
-        vm.warp(block.timestamp + 8 days);
+        vm.warp(block.timestamp + 10 days); // 投票期 7 天 + Timelock 2 天
         gov.execute(pid);
 
-        assertEq(fd.recipients(0).account, alice);
-        assertEq(fd.recipients(0).shareBps, 6000);
-        assertEq(fd.recipients(1).account, bob);
-        assertEq(fd.recipients(1).shareBps, 4000);
+        (address r0Account, uint16 r0Share) = fd.recipients(0);
+        assertEq(r0Account, alice);
+        assertEq(r0Share, 6000);
+        (address r1Account, uint16 r1Share) = fd.recipients(1);
+        assertEq(r1Account, bob);
+        assertEq(r1Share, 4000);
         assertEq(fd.totalShareBps(), 10000);
     }
 

@@ -22,7 +22,7 @@ contract CrossChainBridgeTest is Test {
         bridge = new CrossChainBridge(endpoint, owner, owner);
         
         // 部署测试代币
-        token = new MockERC20("Test Token", "TEST");
+        token = new MockERC20("Test Token", "TEST", 0);
         token.mint(user, 1000e18);
         
         // 配置桥接
@@ -49,7 +49,7 @@ contract CrossChainBridgeTest is Test {
     }
     
     function test_BridgeToken_RevertIfNotSupported() public {
-        MockERC20 unsupportedToken = new MockERC20("Unsupported", "UNS");
+        MockERC20 unsupportedToken = new MockERC20("Unsupported", "UNS", 0);
         unsupportedToken.mint(user, 100e18);
         
         vm.startPrank(user);
@@ -61,7 +61,7 @@ contract CrossChainBridgeTest is Test {
     }
     
     function test_BridgeToken_RevertIfNoMapping() public {
-        MockERC20 newToken = new MockERC20("New", "NEW");
+        MockERC20 newToken = new MockERC20("New", "NEW", 0);
         newToken.mint(user, 100e18);
         
         vm.startPrank(owner);

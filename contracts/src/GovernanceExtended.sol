@@ -19,8 +19,7 @@ contract GovernanceExtended is Governance {
     mapping(uint256 => ProposalMetadata) public proposalMetadata;
     mapping(uint256 => bool) public cancelled; // 提案是否已取消
 
-    // 委托投票
-    mapping(address => address) public delegates; // 委托人 -> 被委托人
+    // 委托投票（delegates 映射继承自 Governance：委托人 -> 被委托人）
     mapping(address => address[]) public delegators; // 被委托人的委托人列表
 
     // ContributorReward 合约地址（用于查询贡献分和信誉分）
