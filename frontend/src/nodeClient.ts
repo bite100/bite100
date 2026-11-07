@@ -51,7 +51,11 @@ export async function nodePost(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (!r.ok) throw new Error(r.statusText || String(r.status))
+    if (!r.ok) {
+      // 把服务端响应体带进错误：市价单空盘口拒绝等业务原因写在 body 里，用户需要看到
+      const detail = (await r.text().catch(() => '')).trim()
+      throw new Error(detail || r.statusText || String(r.status))
+    }
     return r.json() as Promise<{ ok: boolean }>
   })
 }

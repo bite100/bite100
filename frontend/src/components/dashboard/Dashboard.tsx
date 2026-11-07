@@ -42,6 +42,7 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
   const [midPrice, setMidPrice] = useState('')
   const [pricePick, setPricePick] = useState<{ price: string; seq: number }>({ price: '', seq: 0 })
   const [ordersRefresh, setOrdersRefresh] = useState(0)
+  const [book, setBook] = useState<{ bids: OrderBookRow[]; asks: OrderBookRow[] }>({ bids: [], asks: [] })
   const stats = usePairStats(DEFAULT_PAIR)
 
   // 进入 Dashboard 时启动 P2P（Bootstrap + DHT），便于挂单时广播
@@ -53,6 +54,7 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
     const mid = computeMidFromBook(bids, asks)
     setRecommendedPrice(mid)
     setMidPrice(mid)
+    setBook({ bids, asks })
   }, [])
 
   const handlePriceClick = useCallback((price: string) => {
@@ -96,6 +98,7 @@ export function Dashboard({ account, getSigner, onShowFullOrderbook }: Dashboard
             getSigner={getSigner}
             recommendedPrice={recommendedPrice || undefined}
             externalPrice={pricePick}
+            book={book}
             onSuccess={() => setOrdersRefresh((n) => n + 1)}
           />
         </Paper>

@@ -6,8 +6,21 @@ import { nodePost } from '../../nodeClient'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
-import { TOKEN0_ADDRESS, TOKEN1_ADDRESS, VAULT_ABI, VAULT_ADDRESS } from '../../config'
+import { ERC20_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS, VAULT_ABI, VAULT_ADDRESS } from '../../config'
 import { StandardConnect } from '../StandardConnect'
+import {
+  bestOppositePrice,
+  protectionPrice,
+  estimateMarketFill,
+  type MarketBookLevel,
+} from './marketOrder'
+import {
+  ensureVaultBalance,
+  orderObligationWei,
+  shortfallWei,
+  VaultTopUpError,
+  type VaultTopUpStep,
+} from './vaultTopUp'
 import type { Signer } from 'ethers'
 
 const DEFAULT_PAIR = 'TKA/TKB'
@@ -26,6 +39,8 @@ interface LimitOrderFormWidgetProps {
   recommendedPrice?: string
   /** 盘口点击带入的价格（seq 递增触发写入，避免与用户手输冲突） */
   externalPrice?: { price: string; seq: number }
+  /** 当前盘口快照（市价单保护价与预估成交用；人类单位） */
+  book?: { bids: MarketBookLevel[]; asks: MarketBookLevel[] }
   onSuccess?: () => void
 }
 
@@ -34,19 +49,25 @@ function trimNum(n: number, digits = 6): string {
   return String(parseFloat(n.toFixed(digits)))
 }
 
-export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, externalPrice, onSuccess }: LimitOrderFormWidgetProps) {
+export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, externalPrice, book, onSuccess }: LimitOrderFormWidgetProps) {
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
+  const [orderType, setOrderType] = useState<'limit' | 'market'>('limit')
   const [price, setPrice] = useState(recommendedPrice ?? '')
+  const [slippage, setSlippage] = useState('1')
   const [amount, setAmount] = useState('')
   const [pct, setPct] = useState(0)
   const [balance, setBalance] = useState('')
+  const [availableWei, setAvailableWei] = useState<bigint | null>(null)
   const [lockedBalance, setLockedBalance] = useState('')
   const [loading, setLoading] = useState(false)
+  const [topUpStep, setTopUpStep] = useState<VaultTopUpStep | null>(null)
+  const [balanceTick, setBalanceTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
-  // 盘口点击带入价格
+  // 盘口点击带入价格：点击的语义是「按这个价下单」= 限价行为，切回限价单并带入价格
   useEffect(() => {
     if (externalPrice && externalPrice.seq > 0 && externalPrice.price) {
+      setOrderType('limit')
       setPrice(externalPrice.price)
     }
   }, [externalPrice])
@@ -58,6 +79,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
     const fetchBalance = async () => {
       if (!account) {
         setBalance('')
+        setAvailableWei(null)
         setLockedBalance('')
         return
       }
@@ -72,11 +94,13 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
         ])
         if (!cancelled) {
           setBalance(formatTokenAmount(avail))
+          setAvailableWei(avail)
           setLockedBalance(formatTokenAmount(locked))
         }
       } catch {
         if (!cancelled) {
           setBalance('')
+          setAvailableWei(null)
           setLockedBalance('')
         }
       }
@@ -85,7 +109,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
     return () => {
       cancelled = true
     }
-  }, [account, side])
+  }, [account, side, balanceTick])
 
   const pickSide = (next: 'buy' | 'sell') => {
     setSide(next)
@@ -93,7 +117,38 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
     if (recommendedPrice) setPrice(recommendedPrice)
   }
 
-  /** 百分比滑杆：按可用余额比例换算数量（买入需按当前价格把 TKB 余额折算为 TKA 数量） */
+  // ---- 市价单派生值：对手盘最优价 → 保护价 → 逐档预估成交 ----
+  const bids = book?.bids ?? []
+  const asks = book?.asks ?? []
+  const bestOpp = orderType === 'market' ? bestOppositePrice(side, bids, asks) : null
+  const slippageNum = parseFloat(slippage)
+  const protection =
+    bestOpp != null ? protectionPrice(side, bestOpp, Number.isNaN(slippageNum) ? 0 : slippageNum) : null
+  const protectionStr = protection != null ? trimNum(protection, 6) : ''
+  const amountNumPre = parseFloat(amount)
+  const fillEstimate =
+    orderType === 'market' && protection != null
+      ? estimateMarketFill(side, Number.isNaN(amountNumPre) ? 0 : amountNumPre, side === 'buy' ? asks : bids, protection)
+      : null
+  /** 本单实际签名价格：限价单为填写价，市价单为自动推导的保护价 */
+  const effectivePrice = orderType === 'market' ? protectionStr : price
+
+  // ---- Part D：差额预估（用已加载的可用额做面板展示；提交前会重新读链上值复核） ----
+  const displayShortfall = (() => {
+    if (!account || availableWei == null) return null
+    const a = parseFloat(amount)
+    const p = parseFloat(effectivePrice)
+    if (Number.isNaN(a) || a <= 0 || Number.isNaN(p) || p <= 0) return null
+    try {
+      const required = orderObligationWei(side, ethers.parseUnits(amount, 18), ethers.parseUnits(effectivePrice, 18))
+      const sf = shortfallWei(required, availableWei)
+      return sf > 0n ? { required, shortfall: sf } : null
+    } catch {
+      return null
+    }
+  })()
+
+  /** 百分比滑杆：按可用余额比例换算数量（买入需按有效价格把 TKB 余额折算为 TKA 数量） */
   const handlePctChange = (value: number) => {
     setPct(value)
     const bal = parseFloat(balance)
@@ -101,7 +156,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
     if (side === 'sell') {
       setAmount(trimNum((bal * value) / 100))
     } else {
-      const p = parseFloat(price)
+      const p = parseFloat(effectivePrice)
       if (Number.isNaN(p) || p <= 0) return
       setAmount(trimNum((bal * value) / 100 / p))
     }
@@ -112,22 +167,68 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
       setError('请先连接钱包')
       return
     }
-    const p = parseFloat(price)
     const a = parseFloat(amount)
-    if (Number.isNaN(p) || p <= 0 || Number.isNaN(a) || a <= 0) {
-      setError('请输入有效的价格和数量')
+    if (Number.isNaN(a) || a <= 0) {
+      setError('请输入有效的数量')
+      return
+    }
+    if (orderType === 'market' && bestOpp == null) {
+      setError('当前盘口没有对手盘挂单，市价单无法成交。请等有挂单后再试，或改用限价单。')
+      return
+    }
+    const p = parseFloat(effectivePrice)
+    if (Number.isNaN(p) || p <= 0) {
+      setError(orderType === 'market' ? '保护价计算失败，请刷新盘口后重试' : '请输入有效的价格')
       return
     }
     setError(null)
     setLoading(true)
+    setTopUpStep(null)
     try {
       const signer = await getSigner()
       if (!signer) throw new Error('请先连接钱包')
       const timestamp = Math.floor(Date.now() / 1000)
       const expiresAt = timestamp + 86400
       const amountInWei = ethers.parseUnits(amount, 18)
-      const priceWei = ethers.parseUnits(price, 18)
+      const priceWei = ethers.parseUnits(effectivePrice, 18)
       const amountOutWei = (BigInt(amountInWei.toString()) * BigInt(priceWei.toString())) / BigInt(1e18)
+
+      // ---- Part D：一键补存差额（签名前；不足则先补、确认到账再继续） ----
+      // 结算与挂单锁定都走 Vault 可用余额：这里用刚读回的链上值复核本单义务，
+      // 差额在面板内补齐；补存被拒/失败/回读仍不足都会抛错停在签名前。
+      const provider = getProvider()
+      if (provider) {
+        const spendToken = side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+        const vaultRead = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
+        const tokenRead = new Contract(spendToken, ERC20_ABI, provider)
+        const [availFresh, walletBal] = await Promise.all([
+          vaultRead.availableBalance(account, spendToken) as Promise<bigint>,
+          tokenRead.balanceOf(account) as Promise<bigint>,
+        ])
+        const vaultWrite = new Contract(VAULT_ADDRESS, VAULT_ABI, signer)
+        const tokenWrite = new Contract(spendToken, ERC20_ABI, signer)
+        await ensureVaultBalance({
+          requiredWei: orderObligationWei(side, amountInWei, priceWei),
+          availableWei: availFresh,
+          walletWei: walletBal,
+          deps: {
+            allowance: () => tokenRead.allowance(account, VAULT_ADDRESS) as Promise<bigint>,
+            approve: async (amt) => {
+              const tx = await tokenWrite.approve(VAULT_ADDRESS, amt)
+              await tx.wait()
+            },
+            deposit: async (amt) => {
+              const tx = await vaultWrite.deposit(spendToken, amt)
+              await tx.wait()
+            },
+            available: () => vaultRead.availableBalance(account, spendToken) as Promise<bigint>,
+          },
+          onStep: (s) => setTopUpStep(s),
+        })
+        setTopUpStep(null)
+        setBalanceTick((n) => n + 1)
+      }
+
       const orderId = generateOrderId()
       // 统一规范：签名必须带链上结算 nonce（结算时被合约消耗）；广播/入库的 nonce 字段同此值，不再用时间戳冒充
       const nonce = await fetchOrderNonce(account, signer)
@@ -159,6 +260,8 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
         createdAt: timestamp,
         expiresAt,
         signature,
+        // 市价单：签名价格即保护价，execType 是未签名的 IOC 执行指令（节点永不越过保护价）
+        ...(orderType === 'market' ? { execType: 'market' } : {}),
       }
       await nodePost('/api/order', order)
       await p2pOrderBroadcast.publishOrder(order)
@@ -167,19 +270,32 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
       setPct(0)
       onSuccess?.()
     } catch (e) {
-      setError(formatError(e))
+      setError(e instanceof VaultTopUpError ? e.message : formatError(e))
     } finally {
       setLoading(false)
+      setTopUpStep(null)
     }
   }
 
-  const priceNum = parseFloat(price)
+  const priceNum = parseFloat(effectivePrice)
   const amountNum = parseFloat(amount)
   const total =
-    !Number.isNaN(priceNum) && !Number.isNaN(amountNum) && priceNum > 0 && amountNum > 0
-      ? priceNum * amountNum
-      : null
+    orderType === 'market'
+      ? fillEstimate && fillEstimate.filledQty > 0
+        ? fillEstimate.notional
+        : null
+      : !Number.isNaN(priceNum) && !Number.isNaN(amountNum) && priceNum > 0 && amountNum > 0
+        ? priceNum * amountNum
+        : null
   const spendSymbol = side === 'sell' ? BASE_SYMBOL : QUOTE_SYMBOL
+  const topUpStepText =
+    topUpStep === 'approving'
+      ? '补存中：请在钱包中确认授权…'
+      : topUpStep === 'depositing'
+        ? '补存中：等待存入交易上链…'
+        : topUpStep === 'verifying'
+          ? '补存中：确认 Vault 到账…'
+          : null
 
   return (
     <Paper p="md" style={{ background: 'transparent' }}>
@@ -207,19 +323,55 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
         </div>
         <Select
           label="订单类型"
-          data={[{ value: 'limit', label: '限价单' }]}
-          value="limit"
-          disabled
-          description="当前仅支持限价单"
+          data={[
+            { value: 'limit', label: '限价单' },
+            { value: 'market', label: '市价单' },
+          ]}
+          value={orderType}
+          onChange={(v) => setOrderType(v === 'market' ? 'market' : 'limit')}
+          description={orderType === 'limit' ? '按指定价格或更优价格成交，未成交部分挂在盘口' : '立即按盘口最优价逐档成交，未成交部分自动取消'}
         />
-        <NumberInput
-          label={`价格 (${QUOTE_SYMBOL})`}
-          value={price || undefined}
-          onChange={(v) => setPrice(String(v ?? ''))}
-          min={0}
-          decimalScale={4}
-          placeholder={recommendedPrice ?? '0'}
-        />
+        {orderType === 'limit' ? (
+          <NumberInput
+            label={`价格 (${QUOTE_SYMBOL})`}
+            value={price || undefined}
+            onChange={(v) => setPrice(String(v ?? ''))}
+            min={0}
+            decimalScale={4}
+            placeholder={recommendedPrice ?? '0'}
+          />
+        ) : (
+          <>
+            <NumberInput
+              label="滑点容忍 (%)"
+              value={slippage || undefined}
+              onChange={(v) => setSlippage(String(v ?? ''))}
+              min={0}
+              max={50}
+              decimalScale={2}
+              description="保护价 = 对手盘最优价按滑点放宽，成交永不超过这个价"
+            />
+            {bestOpp == null ? (
+              <Text size="xs" c="red">
+                当前盘口没有{side === 'buy' ? '卖盘' : '买盘'}挂单，市价单无法成交（节点会直接拒绝）。可改用限价单先挂单。
+              </Text>
+            ) : (
+              <Text size="xs" c="dimmed">
+                对手盘最优价 {trimNum(bestOpp, 6)} {QUOTE_SYMBOL} · 保护价 {protectionStr} {QUOTE_SYMBOL}
+                {fillEstimate && amountNum > 0 && (
+                  <>
+                    {' '}· 预估成交均价 {fillEstimate.avgPrice != null ? trimNum(fillEstimate.avgPrice, 6) : '—'} {QUOTE_SYMBOL}，可成交{' '}
+                    {trimNum(fillEstimate.filledQty, 6)} / {trimNum(amountNum, 6)} {BASE_SYMBOL}
+                    {!fillEstimate.fullyFilled &&
+                      (fillEstimate.cappedByProtection
+                        ? '（有档位超出保护价，超出部分不会成交）'
+                        : '（盘口深度不足）')}
+                  </>
+                )}
+              </Text>
+            )}
+          </>
+        )}
         <NumberInput
           label={`数量 (${BASE_SYMBOL})`}
           value={amount || undefined}
@@ -254,11 +406,18 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
         </div>
         {total != null && (
           <div className="order-total-row">
-            <span>总额</span>
+            <span>{orderType === 'market' ? '预估总额' : '总额'}</span>
             <span className="order-total-val">
               {trimNum(total)} {QUOTE_SYMBOL}
             </span>
           </div>
+        )}
+        {displayShortfall && (
+          <Text size="xs" c="orange">
+            Vault 可用余额不足：本单需要 {formatTokenAmount(displayShortfall.required)} {spendSymbol}，还差{' '}
+            {formatTokenAmount(displayShortfall.shortfall)} {spendSymbol}。不用去资产页——点下方按钮会先在本面板内把差额从你的钱包存入
+            Vault（可能需要两次钱包确认：授权 + 存入），确认到账后自动继续下单；差额不足时不会签名提交。
+          </Text>
         )}
         {error && (
           <Text size="sm" c="red" mb={4} role="alert">
@@ -280,12 +439,26 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
           size="md"
           onClick={handlePlaceOrder}
           loading={loading}
-          disabled={!account || !price || !amount}
+          disabled={
+            !account ||
+            !amount ||
+            (orderType === 'limit' ? !price : bestOpp == null)
+          }
         >
-          {side === 'buy' ? `买入 ${BASE_SYMBOL}` : `卖出 ${BASE_SYMBOL}`}
+          {topUpStepText ??
+            (displayShortfall
+              ? `补存 ${formatTokenAmount(displayShortfall.shortfall)} ${spendSymbol} 并下单`
+              : side === 'buy'
+                ? `买入 ${BASE_SYMBOL}`
+                : `卖出 ${BASE_SYMBOL}`)}
         </Button>
+        {orderType === 'market' && (
+          <Text size="xs" c="dimmed">
+            市价单怎么成交：提交后立即按盘口最优价逐档吃单，成交价不会差于你签名的保护价（保护价 = 对手盘最优价按上面滑点容忍放宽，签名即绑定这个上限/下限，节点不能越过它成交）。吃到保护价或盘口深度用尽为止，没成交的部分立即自动取消、不挂到盘口上。锁定与限价单相同：下单时按保护价全额义务锁定 Vault 余额，成交部分由结算消耗，未成交部分与买单的价格改善差额会在结算完成后自动释放。盘口为空时节点会直接拒绝并报错。
+          </Text>
+        )}
         <Text size="xs" c="dimmed">
-          限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。成交后由中继提交链上结算，结算 gas 由买卖双方对半分摊、手续费从成交金额中扣除。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
+          限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。Vault 可用不足时不用先去资产页：下单按钮会先在面板内一键补存差额（从钱包存入恰好差额，可能需要授权与存入两次钱包确认），确认到账后自动继续签名下单；补存的钱与普通存入没有区别，随时可在资产页提取。成交后由中继提交链上结算，结算 gas 由买卖双方对半分摊、手续费从成交金额中扣除。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
         </Text>
       </Stack>
     </Paper>
