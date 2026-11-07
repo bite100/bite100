@@ -18,6 +18,7 @@ describe('getChainConfig', () => {
     expect(c!.chainId).toBe(11155111)
     expect(c!.name).toBe('Sepolia')
     expect(c!.contracts.settlement).toBe('0x929ceb054B86Bf222eb94Df7b75aDa4fD22A538A')
+    expect(c!.contracts.crossChainBridge).toBe('0x7a0eCbc2Ffca2F8f7A1505Fa65e7E4759bE33d50')
   })
 
   it('returns Base Sepolia config for chainId 84532', () => {
@@ -27,6 +28,7 @@ describe('getChainConfig', () => {
     expect(c!.name).toBe('Base Sepolia')
     expect(c!.contracts.settlement).toBe('0x3F9F29A6Ff7F706Bd769da3f0F4b3dCe70371D4c')
     expect(c!.contracts.vault).toBe('0xd09E808D0978bdD06738a5dAfBd3c0a286aE3Fb2')
+    expect(c!.contracts.crossChainBridge).toBe('0xA7722A0ba7F2DA1d4D67D5191222C5e4c3835dBB')
   })
 
   it('returns Ethereum mainnet for chainId 1', () => {

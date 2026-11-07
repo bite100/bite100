@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { AbiCoder, Contract, ZeroAddress } from 'ethers'
+import { Contract, ZeroAddress } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig } from '../config/chains'
 import { getProvider, withSigner, formatTokenAmount, formatError } from '../utils'
 import { ErrorDisplay } from './ErrorDisplay'
@@ -12,14 +12,14 @@ interface CrossChainBridgeProps {
 }
 
 const CROSS_CHAIN_BRIDGE_ABI = [
-  'function bridgeToken(address token, uint256 amount, uint32 dstChainId, bytes calldata options) payable',
-  'function quoteBridgeFee(uint32 dstChainId, bytes calldata payload, bytes calldata options) view returns (uint256 nativeFee, uint256 lzTokenFee)',
+  'function bridgeToken(address token, uint256 amount, uint32 dstEid, bytes calldata options) payable returns (uint256 transferId, bytes32 guid)',
+  'function quoteBridgeFee(address token, uint256 amount, uint32 dstEid, address user, bytes calldata options) view returns (uint256 nativeFee, uint256 lzTokenFee)',
   'function supportedTokens(address token) view returns (bool)',
-  'function tokenMapping(uint16 chainId, address token) view returns (address)',
-  'function getBridgeStatus(bytes32 requestId) view returns (uint8 status, uint256 initiatedAt, uint256 completedAt, uint256 attempts)',
-  'function retryBridge(bytes32 requestId, uint32 dstChainId, bytes calldata options) payable',
-  'event BridgeInitiated(bytes32 indexed requestId, address indexed user, address indexed token, uint256 amount, uint32 dstChainId)',
-  'event BridgeStatusUpdated(bytes32 indexed requestId, uint8 status, uint256 timestamp)',
+  'function tokenMapping(uint32 dstEid, address token) view returns (address)',
+  'function getBridgeStatus(bytes32 guid) view returns (uint8 status, uint256 transferId, uint256 initiatedAt, uint256 completedAt, uint256 attempts)',
+  'function retryBridge(uint256 transferId, bytes calldata options) payable returns (bytes32 guid)',
+  'event BridgeInitiated(bytes32 indexed guid, uint256 indexed transferId, address indexed user, address token, uint256 amount, uint32 dstEid)',
+  'event BridgeStatusUpdated(uint256 indexed transferId, uint8 status, uint256 timestamp)',
 ] as const
 
 // LayerZero EID（Endpoint ID）映射
@@ -42,7 +42,11 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   const [balance, setBalance] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [bridgeAddress, setBridgeAddress] = useState<string>('')
+  const [customBridgeAddress, setCustomBridgeAddress] = useState<string>('')
+  // 桥合约地址默认取源链配置（config/chains.ts 的 crossChainBridge）；输入框填了自定义地址时以输入为准
+  const configuredBridge = sourceChainId ? getChainConfig(sourceChainId)?.contracts.crossChainBridge : undefined
+  const bridgeAddress =
+    customBridgeAddress || (configuredBridge && configuredBridge !== ZeroAddress ? configuredBridge : '')
   const [estimatedFee, setEstimatedFee] = useState<string>('')
   const [bridgeStatus, setBridgeStatus] = useState<string>('')
   const [lastRequestId, setLastRequestId] = useState<string | null>(null)
@@ -82,15 +86,10 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       if (!provider) return null
 
       const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
-      
-      // 构建实际的payload（包含用户地址、代币、数量等）
+
       const amountBigInt = BigInt(Math.floor(parseFloat(amount) * 1e18))
-      const payload = AbiCoder.defaultAbiCoder().encode(
-        ['tuple(address,address,uint256,uint32,uint256)'],
-        [[account || ZeroAddress, tokenAddress, amountBigInt, LAYERZERO_EIDS[targetChainId] || 0, Math.floor(Date.now() / 1000)]]
-      )
-      const options = '0x' // 默认选项
-      
+      const options = '0x' // 默认选项（合约侧对空 options 自动构造 type-3 执行选项）
+
       // 获取 LayerZero EID
       const dstEid = LAYERZERO_EIDS[targetChainId]
       if (!dstEid) {
@@ -98,7 +97,13 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
         return null
       }
 
-      const [nativeFee] = await bridge.quoteBridgeFee(dstEid, payload, options)
+      const [nativeFee] = await bridge.quoteBridgeFee(
+        tokenAddress,
+        amountBigInt,
+        dstEid,
+        account || ZeroAddress,
+        options
+      )
       const feeFormatted = formatTokenAmount(nativeFee)
       setEstimatedFee(`预计跨链费用：${feeFormatted} ETH`)
       return nativeFee
@@ -118,7 +123,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       if (!provider) return
       
       const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
-      const [status, _initiatedAt, _completedAt, attempts] = await bridge.getBridgeStatus(requestId)
+      const [status, _transferId, _initiatedAt, _completedAt, attempts] = await bridge.getBridgeStatus(requestId)
       
       const statusMap: Record<number, string> = {
         0: '待处理',
@@ -331,8 +336,8 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           <label>跨链桥合约地址（可选）</label>
           <input
             type="text"
-            value={bridgeAddress}
-            onChange={(e) => setBridgeAddress(e.target.value)}
+            value={customBridgeAddress}
+            onChange={(e) => setCustomBridgeAddress(e.target.value)}
             placeholder="0x...（留空使用默认）"
             disabled={loading}
           />

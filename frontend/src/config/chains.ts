@@ -24,10 +24,12 @@ export interface ChainConfig {
     governance: string
     tokenRegistry: string
     chainConfig: string
+    crossChainBridge: string
   }
 }
 
-// Sepolia 测试网（2026-11-07 第十五轮重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md）
+// Sepolia 测试网（2026-11-07 第十五轮重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md；
+// 跨链桥为第十六轮迁移部署，见 docs/round16-bridge-migration-2026-11-07.md）
 const SEPOLIA: ChainConfig = {
   chainId: 11155111,
   name: 'Sepolia',
@@ -49,10 +51,12 @@ const SEPOLIA: ChainConfig = {
     governance: '0x31900dD9C5190F72A2Da96E3efE45014B5748448',
     tokenRegistry: '0x9d50B1088E483f3A192A018c6a59cb9a5bddeDDd',
     chainConfig: '0x0f419cA52A47d2cA7Ae5f803cf010263012D2cA1',
+    crossChainBridge: '0x7a0eCbc2Ffca2F8f7A1505Fa65e7E4759bE33d50',
   },
 }
 
-// Base Sepolia 测试网（2026-11-07 第十五轮同构重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md）
+// Base Sepolia 测试网（2026-11-07 第十五轮同构重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md；
+// 跨链桥为第十六轮迁移部署，见 docs/round16-bridge-migration-2026-11-07.md）
 const BASE_SEPOLIA: ChainConfig = {
   chainId: 84532,
   name: 'Base Sepolia',
@@ -74,6 +78,7 @@ const BASE_SEPOLIA: ChainConfig = {
     governance: '0x26b608468bf5Dd88B91EAE3D16827A2b4a25BCcE',
     tokenRegistry: '0x8dC560038D392012C8562185E4C6Bf2Ce636E74D',
     chainConfig: '0x439423AB16A1A3dadf5415243501ee9e6984b813',
+    crossChainBridge: '0xA7722A0ba7F2DA1d4D67D5191222C5e4c3835dBB',
   },
 }
 
@@ -99,6 +104,7 @@ const MAINNET: ChainConfig = {
     governance: '0x0000000000000000000000000000000000000000',
     tokenRegistry: '0x0000000000000000000000000000000000000000',
     chainConfig: '0x0000000000000000000000000000000000000000',
+    crossChainBridge: '0x0000000000000000000000000000000000000000',
   },
 }
 
@@ -124,6 +130,7 @@ const BASE: ChainConfig = {
     governance: '0x0000000000000000000000000000000000000000',
     tokenRegistry: '0x0000000000000000000000000000000000000000',
     chainConfig: '0x0000000000000000000000000000000000000000',
+    crossChainBridge: '0x0000000000000000000000000000000000000000',
   },
 }
 
@@ -149,6 +156,7 @@ const ARBITRUM: ChainConfig = {
     governance: '0x0000000000000000000000000000000000000000',
     tokenRegistry: '0x0000000000000000000000000000000000000000',
     chainConfig: '0x0000000000000000000000000000000000000000',
+    crossChainBridge: '0x0000000000000000000000000000000000000000',
   },
 }
 
@@ -174,6 +182,7 @@ const POLYGON: ChainConfig = {
     governance: '0x0000000000000000000000000000000000000000',
     tokenRegistry: '0x0000000000000000000000000000000000000000',
     chainConfig: '0x0000000000000000000000000000000000000000',
+    crossChainBridge: '0x0000000000000000000000000000000000000000',
   },
 }
 
@@ -199,6 +208,7 @@ const BSC: ChainConfig = {
     governance: '0x0000000000000000000000000000000000000000',
     tokenRegistry: '0x0000000000000000000000000000000000000000',
     chainConfig: '0x0000000000000000000000000000000000000000',
+    crossChainBridge: '0x0000000000000000000000000000000000000000',
   },
 }
 
@@ -224,6 +234,7 @@ const OPTIMISM: ChainConfig = {
     governance: '0x0000000000000000000000000000000000000000',
     tokenRegistry: '0x0000000000000000000000000000000000000000',
     chainConfig: '0x0000000000000000000000000000000000000000',
+    crossChainBridge: '0x0000000000000000000000000000000000000000',
   },
 }
 
