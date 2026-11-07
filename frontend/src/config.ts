@@ -59,6 +59,8 @@ export { getChainConfig, DEFAULT_CHAIN_ID } from './config/chains'
 
 export const VAULT_ABI = [
   'function balanceOf(address token, address user) view returns (uint256)',
+  'function locked(address user, address token) view returns (uint256)',
+  'function availableBalance(address user, address token) view returns (uint256)',
   'function deposit(address token, uint256 amount)',
   'function withdraw(address token, uint256 amount)',
 ] as const

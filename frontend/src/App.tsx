@@ -119,6 +119,8 @@ function App() {
 
   const [ethBalance, setEthBalance] = useState<string>('')
   const [vaultBalance, setVaultBalance] = useState<string>('')
+  const [vaultLocked, setVaultLocked] = useState<string>('')
+  const [vaultAvailable, setVaultAvailable] = useState<string>('')
   const [walletTokenBalance, setWalletTokenBalance] = useState<string>('')
   const [tokenAddress, setTokenAddress] = useState<string>(() => {
     try {
@@ -197,11 +199,13 @@ function App() {
   /** background: 为 true 时不设置全局 loading，避免链/账户变化或刷新时误显示「连接中」 */
   const fetchBalances = useCallback(async (background = true) => {
     if (!account || !isValidAddress(tokenAddr) || !currentChainConfig) return
-    const cacheKey = CACHE_KEYS.BALANCE + account + tokenAddr + currentChainConfig.chainId
-    const cached = cacheGet<[string, string]>(cacheKey)
+    const cacheKey = CACHE_KEYS.BALANCE + account + tokenAddr + currentChainConfig.chainId + ':lock1'
+    const cached = cacheGet<[string, string, string, string]>(cacheKey)
     if (cached) {
       setVaultBalance(cached[0])
       setWalletTokenBalance(cached[1])
+      setVaultLocked(cached[2])
+      setVaultAvailable(cached[3])
       return
     }
     if (!background) {
@@ -217,14 +221,24 @@ function App() {
         vault.balanceOf(tokenAddr, account),
         token.balanceOf(account),
       ])
+      const [lockedBal, availBal] = await Promise.all([
+        vault.locked(account, tokenAddr).catch(() => 0n) as Promise<bigint>,
+        vault.availableBalance(account, tokenAddr).catch(() => vBal) as Promise<bigint>,
+      ])
       const vStr = formatTokenAmount(vBal)
       const wStr = formatTokenAmount(wBal)
+      const lStr = formatTokenAmount(lockedBal)
+      const aStr = formatTokenAmount(availBal)
       setVaultBalance(vStr)
       setWalletTokenBalance(wStr)
-      cacheSet(cacheKey, [vStr, wStr], CACHE_TTL.BALANCE)
+      setVaultLocked(lStr)
+      setVaultAvailable(aStr)
+      cacheSet(cacheKey, [vStr, wStr, lStr, aStr], CACHE_TTL.BALANCE)
     } catch (e) {
       setVaultBalance('')
       setWalletTokenBalance('')
+      setVaultLocked('')
+      setVaultAvailable('')
       if (!background) setError(formatError(e))
     } finally {
       if (!background) setLoading(false)
@@ -270,6 +284,10 @@ function App() {
       await withSigner(async (signer) => {
         if (!currentChainConfig) throw new Error('链配置未加载')
         const vault = new Contract(currentChainConfig.contracts.vault, VAULT_ABI, signer)
+        const avail = (await vault.availableBalance(account, tokenAddr).catch(() => null)) as bigint | null
+        if (avail !== null && amount > avail) {
+          throw new Error(`提取数量超过可用余额：可用 ${formatTokenAmount(avail)}。挂单锁定的部分不能提取，先撤单释放后再提取。`)
+        }
         const tx = await vault.withdraw(tokenAddr, amount)
         await tx.wait()
       })
@@ -404,9 +422,10 @@ function App() {
   }, [walletTokenBalance])
 
   const handleMaxWithdraw = useCallback(() => {
-    if (vaultBalance) setWithdrawAmount(vaultBalance)
+    if (vaultAvailable) setWithdrawAmount(vaultAvailable)
+    else if (vaultBalance) setWithdrawAmount(vaultBalance)
     else setError('请先查询该代币余额')
-  }, [vaultBalance])
+  }, [vaultAvailable, vaultBalance])
 
   const fetchTokenBalance = useCallback(async (tokenAddress: string): Promise<string> => {
     const provider = getProvider()
@@ -552,8 +571,8 @@ function App() {
                   />
                 </div>
                 <div className="quick-tokens">
-                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token0); setVaultBalance(''); setWalletTokenBalance('') } }}>TKA</button>
-                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token1); setVaultBalance(''); setWalletTokenBalance('') } }}>TKB</button>
+                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token0); setVaultBalance(''); setWalletTokenBalance(''); setVaultLocked(''); setVaultAvailable('') } }}>TKA</button>
+                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token1); setVaultBalance(''); setWalletTokenBalance(''); setVaultLocked(''); setVaultAvailable('') } }}>TKB</button>
                 </div>
                 <button
                   className="btn secondary"
@@ -569,8 +588,16 @@ function App() {
                       <span className="value">{walletTokenBalance}</span>
                     </div>
                     <div className="row result">
-                      <span className="label">Vault 余额（可提取）</span>
+                      <span className="label">Vault 总额</span>
                       <span className="value">{vaultBalance}</span>
+                    </div>
+                    <div className="row result">
+                      <span className="label">可用（可下单 / 可提取）</span>
+                      <span className="value">{vaultAvailable}</span>
+                    </div>
+                    <div className="row result">
+                      <span className="label">锁定中（挂单占用）</span>
+                      <span className="value">{vaultLocked}</span>
                     </div>
                   </div>
                 )}
@@ -601,7 +628,7 @@ function App() {
 
                 <div className="card vault-section">
                   <h2>提取</h2>
-                  <p className="hint">将 Vault 余额提取回钱包：填入数量后点「提取」并在钱包中确认，提取数量不超过 Vault 余额。注意：挂单不会冻结余额，但成交结算时从 Vault 扣款——若提取后余额不足，未成交挂单成交时将结算失败，建议先撤单再提取。</p>
+                  <p className="hint">将 Vault 余额提取回钱包：填入数量后点「提取」并在钱包中确认。只能提取「可用」部分：挂单会锁定对应余额（下单时锁定，成交时按成交量消耗，撤单或到期后释放未成交部分），锁定中的部分提不出来；想提取被锁定的部分，先到「交易」页撤掉对应挂单，释放后再提取。</p>
                   <div className="input-row">
                     <input
                       type="text"

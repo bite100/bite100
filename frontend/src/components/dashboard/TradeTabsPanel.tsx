@@ -43,6 +43,8 @@ interface BalanceRow {
   symbol: string
   wallet: string
   vault: string
+  vaultAvailable: string
+  vaultLocked: string
 }
 
 /**
@@ -104,11 +106,19 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
         [QUOTE_SYMBOL, TOKEN1_ADDRESS],
       ] as const) {
         const token = new Contract(addr, ERC20_ABI, provider)
-        const [w, v] = await Promise.all([
+        const [w, v, va, vl] = await Promise.all([
           token.balanceOf(account),
           vault.balanceOf(addr, account).catch(() => 0n),
+          vault.availableBalance(account, addr).catch(() => 0n),
+          vault.locked(account, addr).catch(() => 0n),
         ])
-        rows.push({ symbol, wallet: formatTokenAmount(w), vault: formatTokenAmount(v as bigint) })
+        rows.push({
+          symbol,
+          wallet: formatTokenAmount(w),
+          vault: formatTokenAmount(v as bigint),
+          vaultAvailable: formatTokenAmount(va as bigint),
+          vaultLocked: formatTokenAmount(vl as bigint),
+        })
       }
       setBalances(rows)
     } catch {
@@ -279,7 +289,9 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
                   <tr>
                     <th>资产</th>
                     <th>钱包余额</th>
-                    <th>Vault 余额</th>
+                    <th>Vault 总额</th>
+                    <th>可用</th>
+                    <th>锁定中</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -288,10 +300,15 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
                       <td>{r.symbol}</td>
                       <td className="num">{r.wallet}</td>
                       <td className="num">{r.vault}</td>
+                      <td className="num">{r.vaultAvailable}</td>
+                      <td className="num">{r.vaultLocked}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              <Text size="xs" c="dimmed" mt={6}>
+                「可用」= Vault 总额 − 挂单锁定；下单时按订单义务锁定，成交消耗、撤单或到期释放，锁定中的部分不能提取。
+              </Text>
             </div>
           )}
         </Tabs.Panel>

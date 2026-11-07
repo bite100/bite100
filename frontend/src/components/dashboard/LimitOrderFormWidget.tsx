@@ -6,7 +6,7 @@ import { nodePost } from '../../nodeClient'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
-import { TOKEN0_ADDRESS, TOKEN1_ADDRESS, ERC20_ABI } from '../../config'
+import { TOKEN0_ADDRESS, TOKEN1_ADDRESS, VAULT_ABI, VAULT_ADDRESS } from '../../config'
 import { StandardConnect } from '../StandardConnect'
 import type { Signer } from 'ethers'
 
@@ -40,6 +40,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
   const [amount, setAmount] = useState('')
   const [pct, setPct] = useState(0)
   const [balance, setBalance] = useState('')
+  const [lockedBalance, setLockedBalance] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -50,22 +51,34 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
     }
   }, [externalPrice])
 
-  // 可用余额：与完整订单簿同源（链上 ERC20 balanceOf；卖出花 TKA、买入花 TKB）
+  // 可用余额：Vault 可用额（总额 − 挂单锁定；卖出花 TKA、买入花 TKB）。
+  // 下单按可用额校验：挂单被节点接受时即锁定对应余额，可用不足的订单不进订单簿。
   useEffect(() => {
     let cancelled = false
     const fetchBalance = async () => {
       if (!account) {
         setBalance('')
+        setLockedBalance('')
         return
       }
       try {
         const provider = getProvider()
         if (!provider) return
-        const token = new Contract(side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS, ERC20_ABI, provider)
-        const bal = await token.balanceOf(account)
-        if (!cancelled) setBalance(formatTokenAmount(bal))
+        const spendToken = side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
+        const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
+        const [avail, locked] = await Promise.all([
+          vault.availableBalance(account, spendToken) as Promise<bigint>,
+          (vault.locked(account, spendToken).catch(() => 0n) as Promise<bigint>),
+        ])
+        if (!cancelled) {
+          setBalance(formatTokenAmount(avail))
+          setLockedBalance(formatTokenAmount(locked))
+        }
       } catch {
-        if (!cancelled) setBalance('')
+        if (!cancelled) {
+          setBalance('')
+          setLockedBalance('')
+        }
       }
     }
     fetchBalance()
@@ -233,7 +246,8 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
           <Text size="xs" c="dimmed" mt={4}>
             {account
               ? balance
-                ? `可用 ${balance} ${spendSymbol}`
+                ? `可用 ${balance} ${spendSymbol}` +
+                  (lockedBalance && parseFloat(lockedBalance) > 0 ? ` · 锁定中 ${lockedBalance} ${spendSymbol}（挂单占用）` : '')
                 : '可用余额加载中…'
               : '连接钱包后可按比例下单'}
           </Text>
@@ -271,7 +285,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, ext
           {side === 'buy' ? `买入 ${BASE_SYMBOL}` : `卖出 ${BASE_SYMBOL}`}
         </Button>
         <Text size="xs" c="dimmed">
-          限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas；成交后由中继提交链上结算，结算 gas 由买卖双方对半分摊、手续费从成交金额中扣除。下单使用 Vault 余额，下单前请先在「资产」中存入，并保持余额充足，否则成交时结算会失败。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
+          限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。成交后由中继提交链上结算，结算 gas 由买卖双方对半分摊、手续费从成交金额中扣除。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
         </Text>
       </Stack>
     </Paper>

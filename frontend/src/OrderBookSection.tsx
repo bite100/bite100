@@ -4,7 +4,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { ethers, Contract } from 'ethers'
-import { NODE_API_URL, NODE_API_URLS, TOKEN0_ADDRESS, TOKEN1_ADDRESS, ERC20_ABI } from './config'
+import { NODE_API_URL, NODE_API_URLS, TOKEN0_ADDRESS, TOKEN1_ADDRESS, VAULT_ABI, VAULT_ADDRESS } from './config'
 import { formatError, formatTokenAmount, getProvider } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { nodeGet, nodePost } from './nodeClient'
@@ -253,8 +253,9 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       const provider = getProvider()
       if (!provider) return
       const tokenAddress = side === 'sell' ? TOKEN0_ADDRESS : TOKEN1_ADDRESS
-      const token = new Contract(tokenAddress, ERC20_ABI, provider)
-      const bal = await token.balanceOf(account)
+      // 可用余额口径与交易面板一致：Vault 可用额（总额 − 挂单锁定）
+      const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
+      const bal = await vault.availableBalance(account, tokenAddress)
       setBalance(formatTokenAmount(bal))
     } catch (e) {
       console.error('获取余额失败:', e)
@@ -336,7 +337,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
     if (balance) {
       const balanceNum = parseFloat(balance)
       if (!Number.isNaN(balanceNum) && !Number.isNaN(a) && a > balanceNum) {
-        setError(`余额不足。当前余额：${balance}，需要：${amount}`)
+        setError(`可用余额不足。当前可用：${balance}，需要：${amount}（挂单锁定的部分不计入可用）`)
         return
       }
     }
@@ -436,7 +437,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         )}
       </div>
       <p className="hint">
-        完整的盘口深度、全部挂单与成交记录，数据来自节点 API。在此下单与撤单只需钱包签名、订单不上链；成交后由中继提交链上结算，结算从 Vault 余额扣款。下单前请先在「资产」中存入并保持 Vault 余额充足；撤单在下方「我的订单」中操作。
+        完整的盘口深度、全部挂单与成交记录，数据来自节点 API。在此下单与撤单只需钱包签名、订单不上链；订单被接受时即锁定对应 Vault 余额（成交消耗、撤单释放），可用余额不足的订单不会被接受。下单前请先在「资产」中存入足额余额；撤单在下方「我的订单」中操作。
         {nodeType && (
           <span className="node-type"> · 节点类型：{nodeType === 'match' ? '撮合' : nodeType === 'storage' ? '存储' : '中继'}</span>
         )}
