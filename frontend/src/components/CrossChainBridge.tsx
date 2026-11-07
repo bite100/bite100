@@ -253,7 +253,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   return (
     <div className="cross-chain-bridge">
       <h2>跨链桥</h2>
-      <p className="hint">通过 LayerZero 在链之间转移代币：选择源链与目标链，填写代币与数量后发起。跨链费用在发起时实时估算，以源链原生代币支付。</p>
+      <p className="hint">把代币从一条链转移到另一条链（通过 LayerZero），到达后可在目标链继续交易。步骤：① 选择源链与目标链；② 填入代币地址与数量；③ 查看预计费用后点「发起跨链转移」，在钱包中依次确认代币授权与转移。费用：跨链费用在发起时实时估算，以源链原生代币（如 ETH）支付，钱包里需留有足够原生代币；桥还会收取少量代币费用，从到账数量中扣除。到账时间：通常数分钟至十几分钟，发起后页面下方会持续显示转移状态。前提：已连接钱包，且钱包网络与所选源链一致。</p>
 
       <ErrorDisplay error={error} onDismiss={() => setError(null)} className="bridge-error" />
 
@@ -352,6 +352,8 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           <p>{bridgeStatus}</p>
         </div>
       )}
+
+      <p className="hint">注意：发起后请勿重复提交同一笔转移。若状态长时间停留在「处理中」，说明跨链消息仍在传递，请耐心等待；若显示「失败」或长时间未到账，可凭源链交易哈希在区块浏览器或 LayerZero Scan 查询进度，确认原转移未成功后再重新发起。</p>
       
       {sourceChain && targetChain && (
         <div className="bridge-info">
