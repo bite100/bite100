@@ -8,6 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+
 	"github.com/P2P-P2P/p2p/node/internal/metrics"
 	"github.com/P2P-P2P/p2p/node/internal/storage"
 )
@@ -36,7 +39,9 @@ type Engine struct {
 	currentVolume  *big.Int
 	periodStats    map[string]*PeriodStats // 已结束周期缓存，供证明读取
 	// 性能优化：订单验证缓存（避免重复验证）
-	signatureCache map[string]bool // orderID -> 验证结果
+	// 第 32 轮起键为「订单 EIP-712 摘要 ‖ 签名」的哈希（见 signatureCacheKey），
+	// 不再以 orderID 单独做键——同 ID 异内容/异签名的订单不得串用验证结果。
+	signatureCache map[string]bool
 	cacheMu        sync.RWMutex
 	// 内存优化：订单簿大小限制
 	maxOrdersPerPair int
@@ -166,31 +171,52 @@ func (e *Engine) GetOrderbook(pair string) (bids, asks []*storage.Order) {
 	return bids, asks
 }
 
-// IsSignatureValid 检查订单签名是否有效（带缓存）
-func (e *Engine) IsSignatureValid(orderID string, order *storage.Order, pairTokens *PairTokens) (bool, error) {
-	// 检查缓存
-	e.cacheMu.RLock()
-	if cached, ok := e.signatureCache[orderID]; ok {
-		e.cacheMu.RUnlock()
-		metrics.RecordSignatureCacheHit()
-		return cached, nil
+// signatureCacheKey 计算签名验证缓存的键：订单的 EIP-712 摘要（复用
+// OrderDigest，与合约 Settlement.orderDigest / Vault 落锁键同一口径）与
+// 签名字节的 keccak 绑定。仅用摘要做键仍不够：同字段异签名（一个合法、
+// 一个伪造）的两单摘要相同，必须把签名本身也绑进键，验证结果才与「这张
+// 订单 + 这个签名」严格一一对应（第 32 轮整改，ChatGPT 审查项）。
+func signatureCacheKey(order *storage.Order, pairTokens *PairTokens) (string, error) {
+	digest, err := OrderDigest(BuildSignedOrder(order, pairTokens))
+	if err != nil {
+		return "", err
 	}
-	e.cacheMu.RUnlock()
+	h := crypto.Keccak256Hash(digest.Bytes(), common.FromHex(order.Signature))
+	return h.Hex(), nil
+}
+
+// IsSignatureValid 检查订单签名是否有效（带缓存）
+// 缓存键见 signatureCacheKey；摘要计算失败时不走缓存、直接验签（与旧行为
+// 对该类输入的结果一致）。
+func (e *Engine) IsSignatureValid(orderID string, order *storage.Order, pairTokens *PairTokens) (bool, error) {
+	cacheKey, keyErr := signatureCacheKey(order, pairTokens)
+	// 检查缓存
+	if keyErr == nil {
+		e.cacheMu.RLock()
+		if cached, ok := e.signatureCache[cacheKey]; ok {
+			e.cacheMu.RUnlock()
+			metrics.RecordSignatureCacheHit()
+			return cached, nil
+		}
+		e.cacheMu.RUnlock()
+	}
 	metrics.RecordSignatureCacheMiss()
-	
+
 	// 验证签名
 	valid, err := VerifyOrderSignature(order, pairTokens)
 	if err != nil {
 		return false, err
 	}
-	
+
 	// 更新缓存（限制缓存大小）
-	e.cacheMu.Lock()
-	if len(e.signatureCache) < 10000 {
-		e.signatureCache[orderID] = valid
+	if keyErr == nil {
+		e.cacheMu.Lock()
+		if len(e.signatureCache) < 10000 {
+			e.signatureCache[cacheKey] = valid
+		}
+		e.cacheMu.Unlock()
 	}
-	e.cacheMu.Unlock()
-	
+
 	return valid, nil
 }
 
@@ -230,27 +256,33 @@ func (e *Engine) AddOrder(o *storage.Order) bool {
 	if left.Cmp(big.NewFloat(0)) <= 0 {
 		return false
 	}
-	e.orderIDToPair[o.OrderID] = o.Pair
 	o2 := *o
 	o2.Filled = "0"
 	o2.Amount = left.Text('f', 18)
-	// 内存管理优化：限制订单簿大小
+	// 订单簿容量策略（第 32 轮整改）：达到上限时**拒绝新单**（如实返回
+	// false），不再静默截掉尾单——旧逻辑丢弃的尾单还残留在 orderIDToPair
+	// 索引里，造成簿/索引不一致（ChatGPT 审查项）。同 orderID 的替换已在
+	// 上方先行移除旧单，故替换永远先腾位、不会被本检查误拒。
+	// 索引只在确实入簿后写入；被拒时若索引残留指向本簿，一并清除。
 	if o.Side == "buy" {
 		if len(ob.Bids) >= e.maxOrdersPerPair {
-			// 移除最旧的订单（价格最低或时间最晚）
-			if len(ob.Bids) > 0 {
-				ob.Bids = ob.Bids[:len(ob.Bids)-1]
+			if e.orderIDToPair[o.OrderID] == o.Pair {
+				delete(e.orderIDToPair, o.OrderID)
 			}
+			return false
 		}
+		e.orderIDToPair[o.OrderID] = o.Pair
 		ob.Bids = append(ob.Bids, &o2)
 		// 算法优化：使用更高效的插入排序（对于已排序列表，插入排序比完整排序更快）
 		e.insertOrderSorted(ob.Bids, true)
 	} else {
 		if len(ob.Asks) >= e.maxOrdersPerPair {
-			if len(ob.Asks) > 0 {
-				ob.Asks = ob.Asks[:len(ob.Asks)-1]
+			if e.orderIDToPair[o.OrderID] == o.Pair {
+				delete(e.orderIDToPair, o.OrderID)
 			}
+			return false
 		}
+		e.orderIDToPair[o.OrderID] = o.Pair
 		ob.Asks = append(ob.Asks, &o2)
 		e.insertOrderSorted(ob.Asks, false)
 	}
