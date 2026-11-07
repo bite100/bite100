@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"os/signal"
 	"runtime"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/P2P-P2P/p2p/node/internal/api"
 	"github.com/P2P-P2P/p2p/node/internal/config"
@@ -56,6 +59,19 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		exitFatalf("加载配置: %v", err)
+	}
+	// EIP-712 签名域按链配置（多链地基，第七轮）：chain_id / settlement 来自配置文件；
+	// settlement 未配置时传零地址，SetDomain 保持默认 verifyingContract 不变。
+	if cfg.Chain.ChainID != 0 {
+		settlementAddr := common.Address{}
+		if cfg.Chain.Settlement != "" {
+			if !common.IsHexAddress(cfg.Chain.Settlement) {
+				exitFatalf("配置 chain.settlement 地址格式错误: %q", cfg.Chain.Settlement)
+			}
+			settlementAddr = common.HexToAddress(cfg.Chain.Settlement)
+		}
+		match.SetDomain(big.NewInt(cfg.Chain.ChainID), settlementAddr)
+		log.Printf("  签名域: chainId=%d verifyingContract=%s", cfg.Chain.ChainID, match.CurrentDomain().VerifyingContract)
 	}
 	// 无配置文件或未设置 api.listen 时默认开启 :8080（便于 Railway/Fly 等云部署）
 	if cfg.API.Listen == "" {
@@ -171,7 +187,7 @@ func main() {
 		}
 		matchEngine = match.NewEngine(pairTokens)
 		log.Printf("[match] 撮合引擎已启用（%s），交易对: %d", cfg.Node.Type, len(pairTokens))
-		
+
 		// 方案 B：初始化路由和注册表（分片按交易对）
 		localPeerID := h.ID().String()
 		router = match.NewRouter(localPeerID, matchEngine)
@@ -181,7 +197,7 @@ func main() {
 		registry = match.NewRegistry(router, localPeerID, localPairs, publishFn)
 		registry.Start()
 		log.Printf("[router] 路由和注册表已启用，本地交易对: %v", localPairs)
-		
+
 		// 定期清理过期节点
 		go func() {
 			ticker := time.NewTicker(5 * time.Minute)
@@ -215,7 +231,7 @@ func main() {
 	// 8. 订单处理 Handler：新订单入簿并撮合，成交广播
 	handler := &orderMatchHandler{
 		engine:    matchEngine,
-		publisher:  orderPub,
+		publisher: orderPub,
 		store:     store,
 		ws:        wsServer,
 		router:    router,
@@ -269,12 +285,12 @@ func main() {
 
 	// 10. HTTP API
 	srv := &api.Server{
-		Store:                   store,
-		MatchEngine:             matchEngine,
-		Publish:                 publishFn,
-		NodeType:                cfg.Node.Type,
-		RewardWallet:            cfg.Node.RewardWallet,
-		WSServer:                wsServer,
+		Store:                    store,
+		MatchEngine:              matchEngine,
+		Publish:                  publishFn,
+		NodeType:                 cfg.Node.Type,
+		RewardWallet:             cfg.Node.RewardWallet,
+		WSServer:                 wsServer,
 		RateLimitOrdersPerMinute: cfg.API.RateLimitOrdersPerMinute,
 		BlockedTraders:           api.BuildTraderBlacklist(cfg.API.BlockedTraders),
 	}
@@ -296,12 +312,12 @@ func subscribeMatchRegistry(ctx context.Context, ps *pubsub.PubSub, registry *ma
 	if err != nil {
 		return err
 	}
-	
+
 	sub, err := topic.Subscribe()
 	if err != nil {
 		return err
 	}
-	
+
 	go func() {
 		defer sub.Cancel()
 		for {
@@ -319,7 +335,7 @@ func subscribeMatchRegistry(ctx context.Context, ps *pubsub.PubSub, registry *ma
 			}
 		}
 	}()
-	
+
 	log.Printf("[registry] 已订阅节点注册主题: %s", sync.TopicMatchRegister)
 	return nil
 }
@@ -333,12 +349,12 @@ func subscribeForwardedOrders(ctx context.Context, ps *pubsub.PubSub, handler *o
 	if err != nil {
 		return err
 	}
-	
+
 	sub, err := topic.Subscribe()
 	if err != nil {
 		return err
 	}
-	
+
 	go func() {
 		defer sub.Cancel()
 		for {
@@ -363,7 +379,7 @@ func subscribeForwardedOrders(ctx context.Context, ps *pubsub.PubSub, handler *o
 			}
 		}
 	}()
-	
+
 	log.Printf("[router] 已订阅转发订单主题: /p2p-exchange/match/order")
 	return nil
 }
@@ -406,7 +422,7 @@ func (h *orderMatchHandler) OnNewOrder(order *storage.Order) error {
 			return nil
 		}
 	}
-	
+
 	// 本地处理
 	return h.processOrderLocally(order)
 }

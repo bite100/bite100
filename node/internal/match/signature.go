@@ -22,12 +22,14 @@ import (
 //   - Order 结构含 nonce（签名者的链上结算 nonce），字段顺序即编码顺序
 //   - amountOut = amountIn * price / 1e18（price 为 1e18 定点缩放）
 //
-// 默认域为 Sepolia 已部署配置；本地链（如 anvil）启动时用 SetDomain 覆盖。
+// 默认域为 Sepolia 当前部署配置（2026-11-07 第五轮 Settlement）；节点启动时
+// cmd/node 会用配置文件 chain.chain_id / chain.settlement 调用 SetDomain 覆盖，
+// 本地链（如 anvil）与未来第二条链均走配置，不再写死在代码里。
 
 var (
 	domainMu         sync.RWMutex
 	domainChainID    = big.NewInt(11155111) // Sepolia
-	domainContract   = common.HexToAddress("0x493Da680973F6c222c89eeC02922E91F1D9404a0")
+	domainContract   = common.HexToAddress("0xee35587f3e3f500de9f9E1E97c340F801dc71078")
 	domainName       = "比特100"
 	domainVersionStr = "1"
 )

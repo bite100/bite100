@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "forge-std/Script.sol";
+import "./ChainGuard.sol";
 import "../src/Vault.sol";
 import "../src/Settlement.sol";
 
@@ -12,8 +12,9 @@ import "../src/Settlement.sol";
 /// 脚本 Deploy.runWithAmmAndMocks 中唯一的外部绑定（governance/relayer 均为零值，
 /// 与新实例默认值一致，无需复制）。
 /// 必需环境变量：PRIVATE_KEY（Vault/Settlement owner）、VAULT_ADDRESS、FEE_DISTRIBUTOR_ADDRESS（新 FD）
-contract DeploySettlementV2 is Script {
+contract DeploySettlementV2 is ChainGuard {
     function run() external {
+        _assertTargetChain();
         address vaultAddr = vm.envAddress("VAULT_ADDRESS");
         address feeDistributorAddr = vm.envAddress("FEE_DISTRIBUTOR_ADDRESS");
 

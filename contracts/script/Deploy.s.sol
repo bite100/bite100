@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "forge-std/Script.sol";
+import "./ChainGuard.sol";
 import "../src/Vault.sol";
 import "../src/FeeDistributor.sol";
 import "../src/Settlement.sol";
@@ -14,8 +14,11 @@ import "../src/NodeRegistry.sol";
 import "../src/mock/MockERC20.sol";
 
 /// @title 部署脚本：Vault → FeeDistributor → Settlement → (可选) AMM + Mock 代币
-contract Deploy is Script {
+/// @notice 链参数化（第七轮）：目标链由 --rpc-url 决定；设置 TARGET_CHAIN_ID 时
+///         各入口会先校验当前 chainId 与之相等，防误部署到错链（见 ChainGuard）。
+contract Deploy is ChainGuard {
     function run() external {
+        _assertTargetChain();
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
 
@@ -53,6 +56,7 @@ contract Deploy is Script {
 
     /// @notice 部署核心合约 + 测试用 Mock 代币与 AMM 池（仅测试网）
     function runWithAmmAndMocks() external {
+        _assertTargetChain();
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
 
@@ -91,22 +95,36 @@ contract Deploy is Script {
         _logDeployments(address(vault), address(feeDistributor), address(settlement), address(token0), address(token1), address(pool));
     }
 
-    /// @notice 更新 Sepolia 上已有 Settlement、AMMPool 的费率为 0.01%；需 owner 私钥；可选调用 setFeeCap(token, 1e6) 设置 1 USD 上限（6 位小数稳定币）
+    /// @notice 【已通用化】旧名保留为别名，避免旧文档（DEPLOY-SEPOLIA.md）失效；实现见 runSetFeeBps
     function runSetFeeBpsSepolia() external {
-        address settlementAddr = vm.envOr("SETTLEMENT_ADDRESS", address(0xDa9f738Cc8bF4a312473f1AAfF4929b367e22C85));
-        address ammPoolAddr = vm.envOr("AMMPOOL_ADDRESS", address(0x85F18604a8e3ca3C87A1373e4110Ed5C337677d4));
+        _setFeeBps();
+    }
+
+    /// @notice 更新任意链上已有 Settlement、AMMPool 的费率（链由 --rpc-url 决定）；需 owner 私钥
+    /// 必需环境变量：SETTLEMENT_ADDRESS、AMMPOOL_ADDRESS（旧版写死的默认地址指向最早部署、已作废，故改为必填）
+    /// 可选环境变量：FEE_BPS（默认 1 = 0.01%）
+    function runSetFeeBps() external {
+        _setFeeBps();
+    }
+
+    function _setFeeBps() internal {
+        _assertTargetChain();
+        address settlementAddr = vm.envAddress("SETTLEMENT_ADDRESS");
+        address ammPoolAddr = vm.envAddress("AMMPOOL_ADDRESS");
+        uint16 feeBps = uint16(vm.envOr("FEE_BPS", uint256(1)));
         uint256 pk = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(pk);
-        Settlement(settlementAddr).setFeeBps(1);
-        AMMPool(ammPoolAddr).setFeeBps(1);
+        Settlement(settlementAddr).setFeeBps(feeBps);
+        AMMPool(ammPoolAddr).setFeeBps(feeBps);
         vm.stopBroadcast();
-        console.log("Settlement feeBps set to 1 (0.01%)");
-        console.log("AMMPool feeBps set to 1 (0.01%)");
+        console.log("Settlement feeBps set to", feeBps);
+        console.log("AMMPool feeBps set to", feeBps);
     }
 
     /// @notice 部署 Governance 并绑定目标合约
     /// 可选环境变量：SETTLEMENT_ADDRESS, AMMPOOL_ADDRESS, CONTRIBUTOR_REWARD_ADDRESS, FEE_DISTRIBUTOR_ADDRESS
     function runGovernance() external {
+        _assertTargetChain();
         address settlementAddr = vm.envOr("SETTLEMENT_ADDRESS", address(0));
         address ammPoolAddr = vm.envOr("AMMPOOL_ADDRESS", address(0));
         address contributorRewardAddr = vm.envOr("CONTRIBUTOR_REWARD_ADDRESS", address(0));
@@ -140,6 +158,7 @@ contract Deploy is Script {
 
     /// @notice 部署 TokenRegistry 与 ChainConfig，并设置 Governance
     function runTokenRegistryAndChainConfig() external {
+        _assertTargetChain();
         address govAddr = vm.envOr("GOVERNANCE_ADDRESS", address(0));
         require(govAddr != address(0), "set GOVERNANCE_ADDRESS");
 
@@ -158,6 +177,7 @@ contract Deploy is Script {
 
     /// @notice 仅部署 ContributorReward（贡献证明与按周期分配奖励）
     function runContributorReward() external {
+        _assertTargetChain();
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
         ContributorReward contributorReward = new ContributorReward();
@@ -168,6 +188,7 @@ contract Deploy is Script {
 
     /// @notice 部署 NodeRegistry（节点钱包绑定，用于上线奖励分发）
     function runNodeRegistry() external {
+        _assertTargetChain();
         uint256 pk = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(pk);
         NodeRegistry registry = new NodeRegistry();
@@ -180,6 +201,7 @@ contract Deploy is Script {
     /// 依赖现有：VAULT_ADDRESS, FEE_DISTRIBUTOR_ADDRESS, TOKEN0_ADDRESS, TOKEN1_ADDRESS, GOVERNANCE_ADDRESS
     /// PRIVATE_KEY 需为 Vault owner（与 Settlement/AMMPool 部署者一致）
     function runRedeploySettlementAndAmmPool() external {
+        _assertTargetChain();
         address vaultAddr = vm.envAddress("VAULT_ADDRESS");
         address feeDistributorAddr = vm.envAddress("FEE_DISTRIBUTOR_ADDRESS");
         address token0Addr = vm.envAddress("TOKEN0_ADDRESS");
@@ -207,6 +229,7 @@ contract Deploy is Script {
     /// 需设置：PRIVATE_KEY, TOKEN0_ADDRESS, TOKEN1_ADDRESS（主网真实 ERC20，如 USDT/USDC）
     /// 可选：FEE_RECIPIENT, DEVELOPER_ADDRESS（开发者 1% 自动到账地址，默认同 deployer）, MAINNET_RPC_URL
     function runMainnetFull() external {
+        _assertTargetChain();
         address token0Addr = vm.envAddress("TOKEN0_ADDRESS");
         address token1Addr = vm.envAddress("TOKEN1_ADDRESS");
         uint256 pk = vm.envUint("PRIVATE_KEY");

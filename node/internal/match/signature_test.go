@@ -79,7 +79,7 @@ func TestVerifyOrderSignature_missingSig(t *testing.T) {
 // Go 侧计算必须逐字节一致，且 ethers 产生的签名必须能被 Go 验签通过
 func TestOrderDigestCrossLanguageVector(t *testing.T) {
 	SetDomain(big.NewInt(31337), common.HexToAddress("0x5FbDB2315678afecb367f032d93F642f64180aa3"))
-	defer SetDomain(big.NewInt(11155111), common.HexToAddress("0x493Da680973F6c222c89eeC02922E91F1D9404a0"))
+	defer SetDomain(big.NewInt(11155111), common.HexToAddress("0xee35587f3e3f500de9f9E1E97c340F801dc71078"))
 
 	so := &storage.SignedOrder{
 		OrderID:     "order_vector_1",

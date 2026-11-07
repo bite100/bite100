@@ -58,6 +58,7 @@ api:
 chain:               # 可选，从链上拉取历史成交时填
   rpc_url: ""
   chain_id: 11155111
+  settlement: ""     # Settlement 地址；启动时据此设置 EIP-712 签名域（多链时按链填写），空则用代码默认值
   amm_pool: ""
   token0: ""
   token1: ""

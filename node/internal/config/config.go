@@ -46,7 +46,7 @@ type PairTokens struct {
 // MetricsConfig 贡献指标与证明
 type MetricsConfig struct {
 	ProofPeriodDays int    `yaml:"proof_period_days"` // 证明周期（天），默认 7
-	ProofOutputDir  string `yaml:"proof_output_dir"`   // 证明落盘目录，默认 data_dir/proofs
+	ProofOutputDir  string `yaml:"proof_output_dir"`  // 证明落盘目录，默认 data_dir/proofs
 }
 
 // StorageConfig 仅存储节点
@@ -56,12 +56,15 @@ type StorageConfig struct {
 }
 
 // ChainConfig 链 RPC（可选，用于拉取历史成交）
+// 多链地基（第七轮）：节点仍是单链运行，但 chain_id 与 settlement 改为配置驱动——
+// 启动时据此设置 EIP-712 签名域（cmd/node 调用 match.SetDomain），换链只需改配置。
 type ChainConfig struct {
-	RPCURL          string   `yaml:"rpc_url"`
-	ChainID         int64    `yaml:"chain_id"`
-	AMMPool         string   `yaml:"amm_pool"`          // AMMPool 合约地址
-	Token0          string   `yaml:"token0"`            // token0 地址（用于 pair 标识）
-	Token1          string   `yaml:"token1"`            // token1 地址
+	RPCURL           string   `yaml:"rpc_url"`
+	ChainID          int64    `yaml:"chain_id"`
+	Settlement       string   `yaml:"settlement"`        // Settlement 合约地址（EIP-712 域 verifyingContract）；空则用签名域默认值
+	AMMPool          string   `yaml:"amm_pool"`          // AMMPool 合约地址
+	Token0           string   `yaml:"token0"`            // token0 地址（用于 pair 标识）
+	Token1           string   `yaml:"token1"`            // token1 地址
 	RelayerEndpoints []string `yaml:"relayer_endpoints"` // §12.3 多 Relayer：API 地址列表，按轮询选择
 }
 
@@ -73,10 +76,10 @@ type NodeConfig struct {
 }
 
 type NetworkConfig struct {
-	Bootstrap    []string `yaml:"bootstrap"`              // Bootstrap 节点 multiaddr
-	Topics       []string `yaml:"topics"`                 // 订阅的 GossipSub topic
-	UseTor       bool     `yaml:"use_tor"`                // 12.1：是否经 Tor SOCKS 代理出站，隐藏节点 IP
-	TorSocksAddr string   `yaml:"tor_socks_addr"`         // Tor SOCKS5 代理地址，默认 127.0.0.1:9050
+	Bootstrap    []string `yaml:"bootstrap"`      // Bootstrap 节点 multiaddr
+	Topics       []string `yaml:"topics"`         // 订阅的 GossipSub topic
+	UseTor       bool     `yaml:"use_tor"`        // 12.1：是否经 Tor SOCKS 代理出站，隐藏节点 IP
+	TorSocksAddr string   `yaml:"tor_socks_addr"` // Tor SOCKS5 代理地址，默认 127.0.0.1:9050
 }
 
 // Load 从 path 加载 YAML；若文件不存在返回默认配置
