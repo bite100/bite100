@@ -90,7 +90,8 @@ func NewHostWithOpts(listenAddrs []string, dataDir string, opts *HostOpts) (host
 
 // StartDHT 创建并启动 Kademlia DHT，连接 Bootstrap 节点（优化：重试、超时、DHT 发现）
 func StartDHT(ctx context.Context, h host.Host, bootstrapPeers []string) (*dht.IpfsDHT, error) {
-	kad, err := dht.New(ctx, h, dht.Mode(dht.ModeAutoServer))
+	// go-libp2p-kad-dht v0.43 起 dht.New 签名改为 New(host, ...Option)（去掉 ctx 参数）
+	kad, err := dht.New(h, dht.Mode(dht.ModeAutoServer))
 	if err != nil {
 		return nil, fmt.Errorf("new dht: %w", err)
 	}
