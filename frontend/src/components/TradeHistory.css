@@ -1,8 +1,9 @@
 .trade-history {
-  background: white;
-  border-radius: 12px;
+  background: var(--b100-surface, #ffffff);
+  border: 1px solid var(--b100-border, #ededf0);
+  border-radius: var(--b100-radius-card, 24px);
   padding: 1.5rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--b100-shadow-card, 0 2px 12px rgba(16, 16, 20, 0.05));
   height: 600px;
   display: flex;
   flex-direction: column;
@@ -11,18 +12,18 @@
 .trade-history h3 {
   margin: 0 0 1rem 0;
   font-size: 1.25rem;
-  color: #111827;
+  color: var(--b100-text, #191919);
 }
 
 .trade-header {
   display: grid;
   grid-template-columns: 80px 1fr 1fr 30px;
   padding: 0.5rem;
-  background: #f9fafb;
-  border-radius: 8px;
+  background: var(--b100-surface-2, #f7f7f8);
+  border-radius: 12px;
   font-weight: 600;
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--b100-text-2, #737378);
   margin-bottom: 0.5rem;
 }
 
@@ -41,20 +42,20 @@
 }
 
 .trade-item:hover {
-  background: #f9fafb;
+  background: var(--b100-surface-2, #f7f7f8);
 }
 
 .trade-item .time {
-  color: #6b7280;
+  color: var(--b100-text-2, #737378);
 }
 
 .trade-item .price {
-  color: #111827;
+  color: var(--b100-text, #191919);
   font-weight: 500;
 }
 
 .trade-item .amount {
-  color: #6b7280;
+  color: var(--b100-text-2, #737378);
 }
 
 .tx-link {
@@ -71,7 +72,7 @@
 .empty-message {
   text-align: center;
   padding: 2rem;
-  color: #9ca3af;
+  color: var(--b100-text-3, #a8a8ae);
   font-size: 0.875rem;
 }
 

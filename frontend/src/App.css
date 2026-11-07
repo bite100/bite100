@@ -1,132 +1,218 @@
+/*
+ * 比特100 全站样式（第十一轮重设计：现代极简风，对标 Uniswap）
+ * 设计 token 定义在 src/index.css 的 --b100-* 变量与 src/theme.ts，两处保持一致。
+ * 原则：浅色大留白、白卡片 + 大圆角 + 轻阴影；层级靠字号/字重/间距，不堆边框；
+ * 强调色仅主操作与选中态；涨跌色仅出现在价格/方向等数据语义处；数字等宽对齐。
+ */
+
 .app {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1.75rem;
   max-width: 1120px;
   margin: 0 auto;
-  padding: 1.5rem 0 2.5rem;
+  padding: 1rem 0 2.5rem;
   width: 100%;
 }
 @media (max-width: 640px) {
   .app {
-    gap: 1rem;
-    padding: 0.75rem 0 1.5rem;
+    gap: 1.25rem;
+    padding: 0.5rem 0 1.5rem;
   }
 }
+
+/* ---------- 顶栏：Logo / 链切换 / 钱包 ---------- */
 .app-header-top {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 1rem;
   flex-wrap: wrap;
 }
-@media (max-width: 640px) {
-  .app-header-top {
-    gap: 0.5rem;
-  }
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  flex-shrink: 0;
+  display: block;
 }
 .app h1 {
-  font-size: 1.5rem;
-  font-weight: 600;
+  font-size: 1.375rem;
+  font-weight: 700;
   margin: 0;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+}
+.subtitle {
+  color: var(--b100-text-2);
+  font-size: 0.8125rem;
+  margin: 0.125rem 0 0 0;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-wrap: wrap;
 }
 @media (max-width: 640px) {
   .app h1 {
-    font-size: 1.25rem;
+    font-size: 1.125rem;
   }
-}
-.subtitle {
-  color: #a1a1aa;
-  font-size: 0.875rem;
-  margin: -0.5rem 0 0 0;
-}
-@media (max-width: 640px) {
   .subtitle {
     font-size: 0.75rem;
   }
+  .brand-mark {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
 }
+
 .offline-banner {
-  background: rgba(180, 83, 9, 0.9);
-  color: #fff;
+  background: var(--b100-warning-bg);
+  color: var(--b100-warning);
+  border: 1px solid #fedf89;
   font-size: 0.875rem;
-  padding: 0.5rem 1rem;
-  border-radius: 8px;
+  font-weight: 500;
+  padding: 0.625rem 1rem;
+  border-radius: 16px;
   text-align: center;
 }
+
+/* ---------- 按钮 ---------- */
 .btn {
-  padding: 0.75rem 1.25rem;
-  border-radius: 8px;
+  padding: 0.75rem 1.5rem;
+  border-radius: 999px;
   font-size: 1rem;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  border: none;
-  transition: opacity 0.2s;
+  border: 1px solid transparent;
+  transition: background 0.15s, opacity 0.15s, border-color 0.15s;
 }
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 .btn.primary {
-  background: #f0b90b;
-  color: #111827;
-  box-shadow: 0 0 0 1px rgba(240, 185, 11, 0.25);
+  background: var(--b100-accent);
+  color: #fff;
 }
 .btn.primary:hover:not(:disabled) {
-  opacity: 0.95;
-  box-shadow: 0 0 0 1px rgba(240, 185, 11, 0.4);
+  background: var(--b100-accent-hover);
 }
 .btn.secondary {
-  background: #111827;
-  color: #e5e7eb;
-  border: 1px solid #374151;
+  background: var(--b100-surface);
+  color: var(--b100-text);
+  border-color: var(--b100-border-strong);
 }
 .btn.secondary:hover:not(:disabled) {
-  background: #1f2933;
+  background: var(--b100-surface-2);
 }
+
+/* ---------- 卡片 ---------- */
 .card {
-  background: radial-gradient(circle at top left, rgba(55, 65, 81, 0.35), #020617 52%);
-  border: 1px solid rgba(55, 65, 81, 0.8);
-  border-radius: 12px;
-  padding: 1.25rem;
+  background: var(--b100-surface);
+  border: 1px solid var(--b100-border);
+  border-radius: var(--b100-radius-card);
+  box-shadow: var(--b100-shadow-card);
+  padding: 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.875rem;
 }
 @media (max-width: 640px) {
   .card {
-    padding: 1rem;
-    border-radius: 10px;
+    padding: 1.125rem;
   }
 }
 .card .row {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.75rem;
 }
 .card .label {
-  color: #a1a1aa;
+  color: var(--b100-text-2);
   font-size: 0.875rem;
 }
 .card .value {
-  font-weight: 500;
+  font-weight: 600;
 }
 .card .value.mono {
-  font-family: ui-monospace, monospace;
+  font-family: var(--b100-font-num);
+  font-weight: 500;
   font-size: 0.8125rem;
 }
 .card-title {
   font-size: 1rem;
   font-weight: 600;
   margin: 0 0 0.5rem 0;
-  color: #e4e4e7;
+  color: var(--b100-text);
 }
+
+/* 未连接时的欢迎主卡 */
+.hero-connect {
+  align-items: flex-start;
+  padding: 2rem;
+}
+.hero-connect h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .hero-connect {
+    padding: 1.25rem;
+  }
+}
+
+/* 已连接账户信息条（顶栏下方的纤细信息卡） */
+.wallet-bar .row {
+  padding: 0.125rem 0;
+}
+
+/* 合约地址（验证用）：收纳到页面底部折叠区 */
+.contracts-details {
+  gap: 0.5rem;
+}
+.contracts-details summary {
+  cursor: pointer;
+  color: var(--b100-text-2);
+  font-size: 0.875rem;
+  font-weight: 500;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.contracts-details summary::before {
+  content: '›';
+  font-size: 1rem;
+  transition: transform 0.15s;
+}
+.contracts-details[open ] summary::before {
+  transform: rotate(90deg);
+}
+.contracts-details summary::-webkit-details-marker {
+  display: none;
+}
+.contracts-details .row {
+  padding-top: 0.375rem;
+}
+
+/* ---------- 公共数据区 ---------- */
 .public-data-hint {
   font-size: 0.75rem;
-  color: #71717a;
+  color: var(--b100-text-2);
   margin: 0.5rem 0 0 0;
 }
-.public-data-hint.muted { color: #52525b; }
+.public-data-hint.muted { color: var(--b100-text-3); }
 .public-data-section {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
@@ -138,27 +224,26 @@
     gap: 0.75rem;
   }
 }
-.fee-display-row.highlight .value { color: #22c55e; }
+.fee-display-row.highlight .value { color: var(--b100-up); }
 
-/* 统一奖励领取 - 手机友好 */
+/* ---------- 统一奖励领取 ---------- */
 .unified-reward-hint {
   font-size: 0.875rem;
-  color: #a1a1aa;
+  color: var(--b100-text-2);
   margin: 0 0 0.75rem 0;
 }
-.unified-reward-hint.muted { color: #71717a; }
+.unified-reward-hint.muted { color: var(--b100-text-3); }
 .unified-reward-periods { display: flex; flex-direction: column; gap: 1rem; }
 .unified-reward-period-card {
-  padding: 1rem;
-  background: #27272a;
-  border-radius: 10px;
-  border: 1px solid #3f3f46;
+  padding: 1rem 1.125rem;
+  background: var(--b100-surface-2);
+  border-radius: 16px;
 }
 .unified-reward-period-label {
   font-size: 0.75rem;
-  color: #71717a;
+  color: var(--b100-text-3);
   margin-bottom: 0.5rem;
-  font-family: ui-monospace, monospace;
+  font-family: var(--b100-font-num);
 }
 .unified-reward-period-row {
   display: flex;
@@ -167,8 +252,8 @@
   font-size: 0.875rem;
   margin-bottom: 0.35rem;
 }
-.unified-reward-period-row .label { color: #a1a1aa; }
-.unified-reward-period-row .value { font-weight: 500; color: #e4e4e7; }
+.unified-reward-period-row .label { color: var(--b100-text-2); }
+.unified-reward-period-row .value { font-weight: 600; color: var(--b100-text); }
 .claim-all-btn {
   width: 100%;
   min-height: 48px;
@@ -184,12 +269,12 @@
   font-size: 1rem;
   font-weight: 600;
   padding: 0.75rem 1rem;
-  border-radius: 10px;
+  border-radius: 999px;
   -webkit-tap-highlight-color: transparent;
 }
 .unified-reward-deadline {
   font-size: 0.8125rem;
-  color: #f59e0b;
+  color: var(--b100-warning);
   margin: 0.25rem 0 0.75rem 0;
 }
 .unified-reward-refresh {
@@ -199,66 +284,105 @@
 }
 .unified-reward-error {
   margin: 0.75rem 0 0;
-  padding: 0.5rem 0.75rem;
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid #ef4444;
-  border-radius: 8px;
-  color: #fca5a5;
+  padding: 0.625rem 0.875rem;
+  background: var(--b100-error-bg);
+  border: 1px solid var(--b100-error-border);
+  border-radius: 12px;
+  color: var(--b100-error-text);
   font-size: 0.875rem;
 }
 
 .add-network-wrap { margin-top: 0.5rem; }
 .add-network-wrap .add-network-btn { min-height: 44px; }
-.add-network-error { font-size: 0.8125rem; color: #f87171; margin: 0.25rem 0 0; }
+.add-network-error { font-size: 0.8125rem; color: var(--b100-down); margin: 0.25rem 0 0; }
 
 .vault-section h2 {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 1.0625rem;
+  font-weight: 700;
   margin: 0 0 0.25rem 0;
 }
 
-/* Vault / Swap 主流程布局：桌面端两列，手机端单列 */
+/* ---------- 存提 / Swap 布局 ---------- */
 .vault-layout {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
-
 .vault-actions-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1rem;
 }
 
-.swap-liq-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+/* Swap 页：居中主卡（兑换是视觉主角），流动性为次级卡同列收纳 */
+.swap-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 1rem;
 }
+.swap-page > .card {
+  width: 100%;
+  max-width: 480px;
+}
+.swap-hero {
+  padding: 1.75rem;
+  box-shadow: 0 8px 32px rgba(16, 16, 20, 0.07);
+}
+.swap-hero h2 {
+  font-size: 1.125rem;
+}
+.swap-out {
+  background: var(--b100-input-bg);
+  border-radius: 16px;
+  padding: 0.875rem 1rem;
+}
+.swap-out .value {
+  font-family: var(--b100-font-num);
+  font-size: 1.0625rem;
+}
+@media (max-width: 640px) {
+  .swap-hero {
+    padding: 1.25rem;
+  }
+}
+
 .hint {
-  color: #71717a;
+  color: var(--b100-text-2);
   font-size: 0.8125rem;
+  line-height: 1.55;
   margin: 0;
 }
 .node-type {
-  color: #71717a;
+  color: var(--b100-text-2);
   font-size: 0.75rem;
 }
 .cache-hint {
-  color: #a16207;
+  color: var(--b100-warning);
   font-size: 0.75rem;
 }
+
+/* ---------- 输入 ---------- */
 .input {
   width: 100%;
-  padding: 0.625rem 0.75rem;
-  border-radius: 8px;
-  border: 1px solid #1e293b;
-  background: #020617;
-  color: #e4e4e7;
-  font-size: 0.875rem;
+  padding: 0.75rem 1rem;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  background: var(--b100-input-bg);
+  color: var(--b100-text);
+  font-size: 0.9375rem;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
 }
 .input::placeholder {
-  color: #71717a;
+  color: var(--b100-text-3);
+}
+.input:focus {
+  border-color: var(--b100-accent);
+  background: var(--b100-surface);
+}
+select.input {
+  cursor: pointer;
 }
 .input-row {
   display: flex;
@@ -271,16 +395,16 @@
 .btn-max {
   padding: 0.5rem 0.75rem;
   font-size: 0.8125rem;
-  border-radius: 6px;
-  border: 1px solid #1f2933;
-  background: #020617;
-  color: #9ca3af;
+  font-weight: 600;
+  border-radius: 999px;
+  border: none;
+  background: var(--b100-accent-soft);
+  color: var(--b100-accent);
   cursor: pointer;
   white-space: nowrap;
 }
 .btn-max:hover {
-  background: #111827;
-  color: #e5e7eb;
+  background: #ffe0ef;
 }
 .quick-tokens {
   display: flex;
@@ -288,17 +412,18 @@
   flex-wrap: wrap;
 }
 .btn-quick {
-  padding: 0.4rem 0.65rem;
+  padding: 0.45rem 0.875rem;
   font-size: 0.8125rem;
-  border-radius: 6px;
-  border: 1px solid #1f2933;
-  background: #020617;
-  color: #9ca3af;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid var(--b100-border-strong);
+  background: var(--b100-surface);
+  color: var(--b100-text-2);
   cursor: pointer;
 }
 .btn-quick:hover {
-  background: #111827;
-  color: #e5e7eb;
+  background: var(--b100-surface-2);
+  color: var(--b100-text);
 }
 .balances {
   display: flex;
@@ -306,87 +431,343 @@
   gap: 0.25rem;
   margin-top: 0.5rem;
   padding-top: 0.75rem;
-  border-top: 1px solid #27272a;
+  border-top: 1px solid var(--b100-border);
+}
+.balances .value {
+  font-family: var(--b100-font-num);
+  font-weight: 600;
 }
 .result {
   padding: 0.25rem 0;
 }
+
+/* ---------- 错误 ---------- */
 .error {
-  color: #f87171;
+  color: var(--b100-down);
   font-size: 0.875rem;
   margin: 0;
 }
 .error .retry-btn {
   margin-left: 0.5rem;
-  padding: 0.2rem 0.5rem;
+  padding: 0.2rem 0.625rem;
   font-size: 0.8125rem;
+  font-weight: 600;
   min-height: 28px;
-  border: 1px solid rgba(248, 113, 113, 0.6);
-  border-radius: 4px;
-  background: transparent;
-  color: #f87171;
+  border: 1px solid var(--b100-error-border);
+  border-radius: 999px;
+  background: var(--b100-surface);
+  color: var(--b100-down);
   cursor: pointer;
 }
 .error .retry-btn:hover {
-  background: rgba(248, 113, 113, 0.15);
+  background: var(--b100-error-bg);
 }
 .error-below-nav {
   margin: 0.5rem 0 0.75rem;
 }
 
-/* 治理 */
+/* ---------- 治理 ---------- */
 .governance-section h3.gov-sub {
   font-size: 0.9375rem;
   font-weight: 600;
   margin: 0.75rem 0 0.5rem 0;
-  color: #a1a1aa;
+  color: var(--b100-text-2);
 }
 .governance-section h3.gov-sub:first-of-type { margin-top: 0; }
-.proposal-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.proposal-list { display: flex; flex-direction: column; gap: 0.625rem; }
 .proposal-item {
-  padding: 0.75rem;
-  background: #0f0f12;
-  border-radius: 8px;
-  border: 1px solid #27272a;
+  padding: 1rem 1.125rem;
+  background: var(--b100-surface-2);
+  border-radius: 16px;
 }
-.proof-input { font-family: ui-monospace, monospace; font-size: 0.8125rem; resize: vertical; }
-.vote-support { display: flex; align-items: center; gap: 0.5rem; color: #a1a1aa; font-size: 0.875rem; cursor: pointer; }
-/* 新手友好：投票大按钮 */
+.proof-input { font-family: var(--b100-font-num); font-size: 0.8125rem; resize: vertical; }
+.vote-support { display: flex; align-items: center; gap: 0.5rem; color: var(--b100-text-2); font-size: 0.875rem; cursor: pointer; }
 .vote-buttons-row .value { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .vote-btn {
   min-height: 44px;
-  min-width: 80px;
-  padding: 0.5rem 1rem;
+  min-width: 88px;
+  padding: 0.5rem 1.25rem;
   font-size: 1rem;
   font-weight: 600;
 }
-.vote-btn.vote-yes { background: #22c55e; color: #fff; }
-.vote-btn.vote-yes:hover:not(:disabled) { background: #16a34a; opacity: 0.95; }
-.vote-btn.vote-no { background: #374151; color: #e5e7eb; border: 1px solid #4b5563; }
-.vote-btn.vote-no:hover:not(:disabled) { background: #4b5563; opacity: 0.95; }
+.vote-btn.vote-yes { background: var(--b100-up); color: #fff; border-color: transparent; }
+.vote-btn.vote-yes:hover:not(:disabled) { background: #027a48; opacity: 1; }
+.vote-btn.vote-no { background: var(--b100-surface); color: var(--b100-text); border: 1px solid var(--b100-border-strong); }
+.vote-btn.vote-no:hover:not(:disabled) { background: var(--b100-surface-2); opacity: 1; }
 .vote-advanced { margin-top: 0.5rem; }
-.vote-advanced summary { cursor: pointer; color: #a1a1aa; font-size: 0.875rem; }
+.vote-advanced summary { cursor: pointer; color: var(--b100-text-2); font-size: 0.875rem; }
 .vote-advanced .proof-input,
 .vote-advanced .input-row { margin-top: 0.5rem; }
-/* 创建提案 新手友好 */
 .proposal-create-form { margin-top: 0.5rem; }
 .proposal-create-form .form-group { margin-bottom: 0.75rem; }
-.proposal-create-form .form-group label { display: block; margin-bottom: 0.25rem; color: #a1a1aa; font-size: 0.875rem; }
-.proposal-preview { margin: 0.5rem 0; padding: 0.5rem; background: rgba(34, 197, 94, 0.1); border-radius: 6px; font-size: 0.875rem; color: #22c55e; }
+.proposal-create-form .form-group label { display: block; margin-bottom: 0.25rem; color: var(--b100-text-2); font-size: 0.875rem; }
+.proposal-preview { margin: 0.5rem 0; padding: 0.625rem 0.875rem; background: #ecfdf3; border-radius: 12px; font-size: 0.875rem; color: var(--b100-up); }
 .proposal-create-advanced { margin-top: 0.75rem; }
-.proposal-create-advanced summary { cursor: pointer; color: #a1a1aa; font-size: 0.875rem; }
+.proposal-create-advanced summary { cursor: pointer; color: var(--b100-text-2); font-size: 0.875rem; }
 .proposal-create-advanced .input-row { margin-top: 0.5rem; }
 .proposal-create-form > .btn.primary { margin-top: 1rem; }
 
-/* 手机端适配：触控区域、字号、间距、安全区 */
+/* ---------- 市场参考价 ---------- */
+.market-ref-hint {
+  font-size: 0.875rem;
+  color: var(--b100-text-2);
+  margin: 0.25rem 0 0.5rem;
+}
+.market-ref-hint strong { color: var(--b100-text); font-family: var(--b100-font-num); }
+.market-ref-hint .positive { color: var(--b100-up); }
+.market-ref-hint .negative { color: var(--b100-down); }
+.market-ref-hint .muted { color: var(--b100-text-3); }
+
+/* ---------- 手续费展示 ---------- */
+.fee-display {
+  margin-top: 1rem;
+  padding: 1rem 1.125rem;
+  background: var(--b100-surface-2);
+  border-radius: 16px;
+}
+.fee-display-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  color: var(--b100-text);
+}
+.fee-display-subtitle {
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin: 0.5rem 0 0.25rem 0;
+  color: var(--b100-text-2);
+}
+.fee-display-rows { display: flex; flex-direction: column; gap: 0.25rem; }
+.fee-display-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8125rem;
+}
+.fee-display-row .label { color: var(--b100-text-2); }
+.fee-display-row .value { color: var(--b100-text); font-weight: 500; font-family: var(--b100-font-num); }
+.fee-display-row .value.muted { color: var(--b100-text-3); font-weight: normal; }
+.fee-display-row .gas-relayer { color: var(--b100-up); font-weight: normal; margin-left: 0.25rem; }
+.fee-display-row .gas-suggestion { color: var(--b100-warning); font-size: 0.8em; font-weight: normal; margin-left: 0.25rem; }
+.fee-display-split { border-top: 1px solid var(--b100-border-strong); margin-top: 0.5rem; padding-top: 0.5rem; }
+
+/* ---------- 订单簿 ---------- */
+.orderbook-section .orderbook-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.orderbook-section h2 {
+  font-size: 1.125rem;
+  letter-spacing: 0.01em;
+}
+.orderbook-panel h3,
+.place-order h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  color: var(--b100-text-2);
+}
+.place-order h3 {
+  color: var(--b100-text);
+  font-size: 0.9375rem;
+}
+.orderbook-bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 1rem;
+  align-items: flex-start;
+}
+.orderbook-bottom-grid .my-orders,
+.orderbook-bottom-grid .trades-panel {
+  margin-top: 1rem;
+}
+.orderbook-bottom-grid .my-orders h3,
+.orderbook-bottom-grid .trades-panel h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  color: var(--b100-text);
+}
+.trades-filter {
+  margin-left: 0.5rem;
+}
+.trades-filter button {
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--b100-text-2);
+  cursor: pointer;
+}
+.trades-filter button.active {
+  background: var(--b100-text);
+  color: #fff;
+}
+.orderbook-table-header {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--b100-text-3);
+  border-bottom: 1px solid var(--b100-border);
+}
+.orderbook-virtual {
+  font-size: 0.8125rem;
+  font-family: var(--b100-font-num);
+}
+.orderbook-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 0 0.5rem;
+  align-items: center;
+  min-height: 28px;
+  border-bottom: 1px solid var(--b100-border);
+}
+.orderbook-row .bid-price { color: var(--b100-up); }
+.orderbook-row .ask-price { color: var(--b100-down); }
+
+@keyframes priceUp {
+  0% { background-color: rgba(3, 152, 83, 0.12); }
+  100% { background-color: transparent; }
+}
+@keyframes priceDown {
+  0% { background-color: rgba(217, 45, 32, 0.1); }
+  100% { background-color: transparent; }
+}
+.orderbook-row.price-updated-up {
+  animation: priceUp 0.6s ease-out;
+}
+.orderbook-row.price-updated-down {
+  animation: priceDown 0.6s ease-out;
+}
+.orderbook-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  font-family: var(--b100-font-num);
+}
+.orderbook-table th,
+.orderbook-table td {
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid var(--b100-border);
+}
+.orderbook-table th {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", system-ui, sans-serif;
+  color: var(--b100-text-3);
+  font-weight: 500;
+}
+.orderbook-table .bid-price {
+  color: var(--b100-up);
+}
+.orderbook-table .ask-price {
+  color: var(--b100-down);
+}
+.orderbook-table .settled {
+  color: var(--b100-up);
+  font-size: 0.75rem;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", system-ui, sans-serif;
+}
+.place-order .row {
+  margin-bottom: 0.25rem;
+}
+.place-order .row button {
+  margin-right: 0.5rem;
+}
+.my-orders,
+.trades-panel {
+  margin-top: 1rem;
+}
+.my-orders .orderbook-table,
+.trades-panel .orderbook-table {
+  margin-top: 0.5rem;
+}
+
+/* ---------- Dashboard 网格 ---------- */
+@media (min-width: 769px) {
+  .layout .drag-handle {
+    min-height: 48px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 0;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+}
+@media (max-width: 768px) {
+  .layout.layout-mobile {
+    padding: 0;
+  }
+  .layout-mobile .react-grid-item {
+    touch-action: pan-y;
+  }
+  .layout-mobile .drag-handle {
+    cursor: default;
+  }
+  .layout-mobile [class*="Paper"] {
+    padding: 0.75rem !important;
+  }
+  .layout-mobile .kline-chart-wrap {
+    min-height: 280px;
+  }
+  .layout-mobile .kline-chart-wrap > div:last-child {
+    min-height: 280px;
+  }
+}
+.dashboard-orderform .btn-primary-action {
+  font-weight: 600;
+}
+.dashboard-orderform .mantine-NumberInput-input {
+  font-size: 1rem;
+  font-weight: 500;
+  font-family: var(--b100-font-num);
+}
+.ob-number {
+  font-size: 0.9375rem !important;
+  font-weight: 500;
+  font-family: var(--b100-font-num);
+}
+@media (max-width: 640px) {
+  .dashboard-orderform .mantine-Button-root,
+  .dashboard-orderform button {
+    min-height: 48px;
+    padding: 0.75rem 1rem;
+  }
+  .dashboard-orderform .mantine-NumberInput-input,
+  .dashboard-orderform .mantine-Select-input {
+    min-height: 48px;
+  }
+  .ob-number {
+    font-size: 1rem !important;
+  }
+}
+@media (max-width: 640px) {
+  .layout-mobile .mantine-Table-tbody td {
+    padding: 0.5rem 0.375rem;
+    min-height: 40px;
+  }
+}
+
+/* ---------- 触控 ---------- */
+.btn, .input, input[type="text"], input[type="number"], textarea, select {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(255, 0, 122, 0.12);
+  min-height: 44px;
+}
+.input, input[type="text"], input[type="number"], textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* ---------- 手机端 ---------- */
 @media (max-width: 480px) {
   .app {
     gap: 1.25rem;
     padding: 1rem 0.75rem 2rem;
-  }
-  .app h1 {
-    font-size: 1.25rem;
-    line-height: 1.3;
   }
   .subtitle {
     font-size: 0.8125rem;
@@ -397,13 +778,8 @@
     font-size: 1rem;
     -webkit-tap-highlight-color: transparent;
   }
-  .card {
-    padding: 1rem;
-  }
-
   .public-data-section,
-  .vault-actions-grid,
-  .swap-liq-grid {
+  .vault-actions-grid {
     grid-template-columns: minmax(0, 1fr);
   }
   .card .row {
@@ -450,279 +826,11 @@
     font-size: 0.8125rem;
   }
 }
-
-/* Phase 3.5 订单簿 */
-.market-ref-hint {
-  font-size: 0.875rem;
-  color: #a1a1aa;
-  margin: 0.25rem 0 0.5rem;
-}
-.market-ref-hint .positive { color: #22c55e; }
-.market-ref-hint .negative { color: #ef4444; }
-.market-ref-hint .muted { color: #71717a; }
-
-.fee-display {
-  margin-top: 1rem;
-  padding: 0.75rem 1rem;
-  background: #27272a;
-  border-radius: 8px;
-  border: 1px solid #3f3f46;
-}
-.fee-display-title {
-  font-size: 0.875rem;
-  font-weight: 600;
-  margin: 0 0 0.5rem 0;
-  color: #e4e4e7;
-}
-.fee-display-subtitle {
-  font-size: 0.75rem;
-  font-weight: 600;
-  margin: 0.5rem 0 0.25rem 0;
-  color: #a1a1aa;
-}
-.fee-display-rows { display: flex; flex-direction: column; gap: 0.25rem; }
-.fee-display-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.8125rem;
-}
-.fee-display-row .label { color: #a1a1aa; }
-.fee-display-row .value { color: #e4e4e7; font-weight: 500; }
-.fee-display-row .value.muted { color: #71717a; font-weight: normal; }
-.fee-display-row .gas-relayer { color: #22c55e; font-weight: normal; margin-left: 0.25rem; }
-.fee-display-row .gas-suggestion { color: #f59e0b; font-size: 0.8em; font-weight: normal; margin-left: 0.25rem; }
-.fee-display-split { border-top: 1px solid #3f3f46; margin-top: 0.5rem; padding-top: 0.5rem; }
-
-.orderbook-section .orderbook-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-
-/* 让订单簿主交易区比周边信息更突出一些 */
-.orderbook-section {
-  border-color: rgba(240, 185, 11, 0.35);
-  box-shadow:
-    0 0 0 1px rgba(15, 23, 42, 0.9),
-    0 0 0 1px rgba(240, 185, 11, 0.18);
-}
-.orderbook-section h2 {
-  font-size: 1.1rem;
-  letter-spacing: 0.01em;
-}
-.place-order h3 {
-  font-size: 0.9375rem;
-  color: #e5e7eb;
-}
-/* 底部「我的订单 / 最近成交」分栏：桌面端两列，手机端单列 */
-.orderbook-bottom-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-  gap: 1rem;
-  align-items: flex-start;
-}
-.orderbook-bottom-grid .my-orders,
-.orderbook-bottom-grid .trades-panel {
-  margin-top: 1rem;
-}
-.orderbook-bottom-grid .my-orders h3,
-.orderbook-bottom-grid .trades-panel h3 {
-  font-size: 0.875rem;
-  font-weight: 600;
-  margin: 0 0 0.5rem 0;
-  color: #e5e7eb;
-}
-/* 移动端触控优化：按钮和输入框 */
-.btn, .input, input[type="text"], input[type="number"], textarea, select {
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: rgba(240, 185, 11, 0.2);
-  min-height: 44px; /* iOS 推荐的最小触控区域 */
-}
-
-/* 输入框允许选择文本 */
-.input, input[type="text"], input[type="number"], textarea {
-  user-select: text;
-  -webkit-user-select: text;
-}
-
 @media (max-width: 640px) {
   .orderbook-section .orderbook-grid {
     grid-template-columns: 1fr;
   }
   .orderbook-bottom-grid {
     grid-template-columns: 1fr;
-  }
-}
-.orderbook-panel h3,
-.place-order h3 {
-  font-size: 0.875rem;
-  font-weight: 600;
-  margin: 0 0 0.5rem 0;
-  color: #a1a1aa;
-}
-.trades-filter {
-  margin-left: 0.5rem;
-}
-.trades-filter button {
-  padding: 0.2rem 0.5rem;
-  font-size: 0.75rem;
-  border-radius: 4px;
-  border: 1px solid #3f3f46;
-  background: transparent;
-  color: #a1a1aa;
-  cursor: pointer;
-}
-.trades-filter button.active {
-  background: #3b82f6;
-  color: #fff;
-  border-color: #3b82f6;
-}
-.orderbook-table-header {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  padding: 0.35rem 0.5rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: #71717a;
-  border-bottom: 1px solid #27272a;
-}
-.orderbook-virtual {
-  font-size: 0.8125rem;
-}
-.orderbook-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  padding: 0 0.5rem;
-  align-items: center;
-  min-height: 28px;
-  border-bottom: 1px solid #27272a;
-}
-.orderbook-row .bid-price { color: #22c55e; }
-.orderbook-row .ask-price { color: #ef4444; }
-
-/* 价格变化动画 */
-@keyframes priceUp {
-  0% { background-color: rgba(34, 197, 94, 0.2); }
-  100% { background-color: transparent; }
-}
-
-@keyframes priceDown {
-  0% { background-color: rgba(239, 68, 68, 0.2); }
-  100% { background-color: transparent; }
-}
-
-.orderbook-row.price-updated-up {
-  animation: priceUp 0.6s ease-out;
-}
-
-.orderbook-row.price-updated-down {
-  animation: priceDown 0.6s ease-out;
-}
-.orderbook-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.8125rem;
-}
-.orderbook-table th,
-.orderbook-table td {
-  padding: 0.35rem 0.5rem;
-  text-align: left;
-  border-bottom: 1px solid #27272a;
-}
-.orderbook-table .bid-price {
-  color: #22c55e;
-}
-.orderbook-table .ask-price {
-  color: #ef4444;
-}
-.orderbook-table .settled {
-  color: #22c55e;
-  font-size: 0.75rem;
-}
-.place-order .row {
-  margin-bottom: 0.25rem;
-}
-.place-order .row button {
-  margin-right: 0.5rem;
-}
-.my-orders,
-.trades-panel {
-  margin-top: 1rem;
-}
-.my-orders .orderbook-table,
-.trades-panel .orderbook-table {
-  margin-top: 0.5rem;
-}
-
-/* Dashboard 可拖拽网格：桌面端拖拽手柄触控区 */
-@media (min-width: 769px) {
-  .layout .drag-handle {
-    min-height: 48px;
-    display: inline-flex;
-    align-items: center;
-    padding: 0.5rem 0;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-  }
-}
-
-/* Dashboard 手机端：单列堆叠、不拖拽不缩放，紧凑间距 */
-@media (max-width: 768px) {
-  .layout.layout-mobile {
-    padding: 0;
-  }
-  .layout-mobile .react-grid-item {
-    touch-action: pan-y;
-  }
-  .layout-mobile .drag-handle {
-    cursor: default;
-  }
-  .layout-mobile [class*="Paper"] {
-    padding: 0.75rem !important;
-  }
-  .layout-mobile .kline-chart-wrap {
-    min-height: 280px;
-  }
-  .layout-mobile .kline-chart-wrap > div:last-child {
-    min-height: 280px;
-  }
-}
-
-/* 挂单区：主按钮突出、价格/数量易扫读（实践建议 62-67） */
-.dashboard-orderform .btn-primary-action {
-  font-weight: 600;
-  box-shadow: 0 0 0 1px rgba(240, 185, 11, 0.4);
-}
-.dashboard-orderform .mantine-NumberInput-input {
-  font-size: 1rem;
-  font-weight: 500;
-}
-/* 订单簿关键数字略大、易扫读 */
-.ob-number {
-  font-size: 0.9375rem !important;
-  font-weight: 600;
-}
-/* 挂单/表单区：手机端按钮与输入 ≥48px */
-@media (max-width: 640px) {
-  .dashboard-orderform .mantine-Button-root,
-  .dashboard-orderform button {
-    min-height: 48px;
-    padding: 0.75rem 1rem;
-  }
-  .dashboard-orderform .mantine-NumberInput-input,
-  .dashboard-orderform .mantine-Select-input {
-    min-height: 48px;
-  }
-  .ob-number {
-    font-size: 1rem !important;
-  }
-}
-
-/* 订单簿 widget 表格行：手机端略高便于扫视 */
-@media (max-width: 640px) {
-  .layout-mobile .mantine-Table-tbody td {
-    padding: 0.5rem 0.375rem;
-    min-height: 40px;
   }
 }

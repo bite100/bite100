@@ -1,14 +1,15 @@
 .order-form {
-  background: white;
-  border-radius: 12px;
+  background: var(--b100-surface, #ffffff);
+  border: 1px solid var(--b100-border, #ededf0);
+  border-radius: var(--b100-radius-card, 24px);
   padding: 1.5rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--b100-shadow-card, 0 2px 12px rgba(16, 16, 20, 0.05));
 }
 
 .order-form h3 {
   margin: 0 0 1rem 0;
   font-size: 1.25rem;
-  color: #111827;
+  color: var(--b100-text, #191919);
 }
 
 .side-selector {
@@ -20,27 +21,27 @@
 
 .side-btn {
   padding: 0.75rem;
-  border: 2px solid #e5e7eb;
+  border: 1px solid var(--b100-border-strong, #e2e2e7);
   background: white;
-  border-radius: 8px;
+  border-radius: 14px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .side-btn:hover {
-  border-color: #d1d5db;
+  border-color: var(--b100-text-3, #a8a8ae);
 }
 
 .side-btn.active.buy {
-  background: #10b981;
-  border-color: #10b981;
+  background: var(--b100-up, #039855);
+  border-color: var(--b100-up, #039855);
   color: white;
 }
 
 .side-btn.active.sell {
-  background: #ef4444;
-  border-color: #ef4444;
+  background: var(--b100-down, #d92d20);
+  border-color: var(--b100-down, #d92d20);
   color: white;
 }
 
@@ -52,28 +53,30 @@
   display: block;
   margin-bottom: 0.5rem;
   font-weight: 500;
-  color: #374151;
+  color: var(--b100-text-2, #737378);
 }
 
 .form-group input {
   width: 100%;
   padding: 0.75rem;
-  border: 2px solid #e5e7eb;
-  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--b100-input-bg, #f5f5f7);
+  border-radius: 14px;
   font-size: 1rem;
   transition: border-color 0.2s;
 }
 
 .form-group input:focus {
   outline: none;
-  border-color: #3b82f6;
+  border-color: var(--b100-accent, #ff007a);
+  background: #ffffff;
 }
 
 .submit-btn {
   width: 100%;
   padding: 1rem;
   border: none;
-  border-radius: 8px;
+  border-radius: 999px;
   font-size: 1rem;
   font-weight: 600;
   color: white;
@@ -82,19 +85,19 @@
 }
 
 .submit-btn.buy {
-  background: #10b981;
+  background: var(--b100-up, #039855);
 }
 
 .submit-btn.buy:hover:not(:disabled) {
-  background: #059669;
+  background: #027a48;
 }
 
 .submit-btn.sell {
-  background: #ef4444;
+  background: var(--b100-down, #d92d20);
 }
 
 .submit-btn.sell:hover:not(:disabled) {
-  background: #dc2626;
+  background: #b42318;
 }
 
 .submit-btn:disabled {
@@ -124,9 +127,9 @@
 .order-form-market-hint {
   margin: 0.5rem 0 0;
   font-size: 0.8125rem;
-  color: #6b7280;
+  color: var(--b100-text-2, #737378);
 }
-.order-form-market-hint .text-muted { color: #9ca3af; }
+.order-form-market-hint .text-muted { color: var(--b100-text-3, #a8a8ae); }
 .order-form-market-hint .text-green { color: #059669; }
 .order-form-market-hint .text-red { color: #dc2626; }
 
@@ -172,12 +175,12 @@
 }
 
 .submit-btn.success {
-  background: #10b981 !important;
+  background: var(--b100-up, #039855) !important;
   animation: pulse 0.5s ease-out;
 }
 
 .submit-btn.failed {
-  background: #ef4444 !important;
+  background: var(--b100-down, #d92d20) !important;
 }
 
 @keyframes pulse {

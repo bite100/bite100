@@ -16,8 +16,8 @@
 }
 
 .loading-spinner {
-  border: 3px solid #3f3f46;
-  border-top: 3px solid #3b82f6;
+  border: 3px solid var(--b100-border-strong, #e2e2e7);
+  border-top: 3px solid var(--b100-accent, #ff007a);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -41,7 +41,7 @@
 }
 
 .loading-text {
-  color: #a1a1aa;
+  color: var(--b100-text-2, #737378);
   font-size: 0.875rem;
   margin: 0;
 }

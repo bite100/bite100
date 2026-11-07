@@ -3,8 +3,8 @@
   align-items: center;
   gap: 1rem;
   padding: 0.5rem 1rem;
-  background: rgba(0, 0, 0, 0.05);
-  border-radius: 8px;
+  background: var(--b100-surface-2, #f7f7f8);
+  border-radius: 16px;
   font-size: 0.875rem;
 }
 
@@ -22,11 +22,11 @@
 }
 
 .status-indicator.connected .status-dot {
-  background: #10b981;
+  background: var(--b100-up, #039855);
 }
 
 .status-indicator.disconnected .status-dot {
-  background: #ef4444;
+  background: var(--b100-down, #d92d20);
   animation: none;
 }
 
@@ -46,11 +46,11 @@
 }
 
 .label {
-  color: #6b7280;
+  color: var(--b100-text-2, #737378);
 }
 
 .value {
-  color: #111827;
+  color: var(--b100-text, #191919);
   font-weight: 500;
 }
 

@@ -1,25 +1,27 @@
+/* 跨链桥：白卡片 + 浅灰输入面（token 与 index.css --b100-* 对齐） */
 .cross-chain-bridge {
-  background: var(--bg-secondary, #18181b);
-  border: 1px solid var(--border-color, #27272a);
-  border-radius: 12px;
-  padding: 1.25rem;
+  background: var(--b100-surface, #ffffff);
+  border: 1px solid var(--b100-border, #ededf0);
+  border-radius: var(--b100-radius-card, 24px);
+  box-shadow: var(--b100-shadow-card, 0 2px 12px rgba(16, 16, 20, 0.05));
+  padding: 1.5rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
 .cross-chain-bridge h2 {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 1.0625rem;
+  font-weight: 700;
   margin: 0;
 }
 
 .bridge-error {
-  padding: 0.75rem;
-  background: rgba(248, 113, 113, 0.1);
-  border: 1px solid rgba(248, 113, 113, 0.3);
-  border-radius: 8px;
-  color: #f87171;
+  padding: 0.75rem 1rem;
+  background: var(--b100-error-bg, #fef3f2);
+  border: 1px solid var(--b100-error-border, #fecdca);
+  border-radius: 12px;
+  color: var(--b100-error-text, #b42318);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -29,7 +31,7 @@
 .bridge-error button {
   background: none;
   border: none;
-  color: #f87171;
+  color: var(--b100-error-text, #b42318);
   font-size: 1.25rem;
   cursor: pointer;
   padding: 0;
@@ -54,18 +56,26 @@
 
 .bridge-field label {
   font-size: 0.875rem;
-  color: var(--text-secondary, #a1a1aa);
+  color: var(--b100-text-2, #737378);
   font-weight: 500;
 }
 
 .bridge-field select,
 .bridge-field input {
-  padding: 0.625rem 0.75rem;
-  border-radius: 8px;
-  border: 1px solid var(--border-color, #3f3f46);
-  background: var(--bg-primary, #0f0f12);
-  color: var(--text-primary, #e4e4e7);
-  font-size: 0.875rem;
+  padding: 0.75rem 1rem;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  background: var(--b100-input-bg, #f5f5f7);
+  color: var(--b100-text, #191919);
+  font-size: 0.9375rem;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.bridge-field select:focus,
+.bridge-field input:focus {
+  border-color: var(--b100-accent, #ff007a);
+  background: var(--b100-surface, #ffffff);
 }
 
 .bridge-field select:disabled,
@@ -84,38 +94,17 @@
   flex: 1;
 }
 
-.btn-max {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8125rem;
-  border-radius: 6px;
-  border: 1px solid var(--border-color, #3f3f46);
-  background: var(--bg-secondary, #27272a);
-  color: var(--text-secondary, #a1a1aa);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.btn-max:hover:not(:disabled) {
-  background: var(--bg-hover, #3f3f46);
-  color: var(--text-primary, #e4e4e7);
-}
-
-.btn-max:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
 .bridge-info {
   margin-top: 1rem;
   padding-top: 1rem;
-  border-top: 1px solid var(--border-color, #27272a);
+  border-top: 1px solid var(--b100-border, #ededf0);
 }
 
 .bridge-info h3 {
   font-size: 0.875rem;
   font-weight: 600;
   margin: 0 0 0.5rem 0;
-  color: var(--text-secondary, #a1a1aa);
+  color: var(--b100-text-2, #737378);
 }
 
 .info-row {
@@ -127,14 +116,14 @@
 }
 
 .info-row .mono {
-  font-family: ui-monospace, monospace;
+  font-family: var(--b100-font-num, ui-monospace, monospace);
   font-size: 0.75rem;
   word-break: break-all;
 }
 
 @media (max-width: 768px) {
   .cross-chain-bridge {
-    padding: 1rem;
+    padding: 1.125rem;
   }
 
   .bridge-field select,

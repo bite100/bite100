@@ -176,7 +176,7 @@ export function StandardConnect() {
             {isConnecting ? '连接中…' : mobilePickerOpen ? '收起钱包列表' : '连接钱包'}
           </button>
           {mobilePickerOpen && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '0.4rem', width: '100%', padding: '0.5rem 0', borderTop: '1px solid #333' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '0.4rem', width: '100%', padding: '0.5rem 0', borderTop: '1px solid #EDEDEF' }}>
               <div style={{ fontSize: '0.85rem', color: '#a1a1aa', marginBottom: '0.25rem' }}>
                 {detectedWallets.length > 0 && !showAllWallets
                   ? '选择已安装的钱包（点击后跳转至该 App 打开本页）'

@@ -1,3 +1,4 @@
+/* 链切换：白色胶囊按钮 + 大圆角浮层菜单（token 与 index.css --b100-* 对齐） */
 .chain-switcher {
   position: relative;
   display: inline-block;
@@ -7,18 +8,20 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
-  background: var(--bg-secondary, #f5f5f5);
-  border: 1px solid var(--border-color, #ddd);
-  border-radius: 8px;
+  padding: 9px 16px;
+  background: var(--b100-surface, #ffffff);
+  border: 1px solid var(--b100-border-strong, #e2e2e7);
+  border-radius: 999px;
   cursor: pointer;
   font-size: 14px;
-  transition: all 0.2s;
+  font-weight: 600;
+  color: var(--b100-text, #191919);
+  transition: background 0.15s, border-color 0.15s;
+  min-height: 40px;
 }
 
 .chain-switcher-button:hover:not(:disabled) {
-  background: var(--bg-hover, #e8e8e8);
-  border-color: var(--border-hover, #bbb);
+  background: var(--b100-surface-2, #f7f7f8);
 }
 
 .chain-switcher-button:disabled {
@@ -27,12 +30,12 @@
 }
 
 .chain-name {
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .chain-indicator {
   font-size: 10px;
-  opacity: 0.6;
+  opacity: 0.55;
 }
 
 .chain-switcher-overlay {
@@ -41,7 +44,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(16, 16, 20, 0.28);
   z-index: 999;
 }
 
@@ -50,10 +53,10 @@
   top: calc(100% + 8px);
   right: 0;
   min-width: 280px;
-  background: var(--bg-primary, #fff);
-  border: 1px solid var(--border-color, #ddd);
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  background: var(--b100-surface, #ffffff);
+  border: 1px solid var(--b100-border, #ededf0);
+  border-radius: 20px;
+  box-shadow: var(--b100-shadow-pop, 0 16px 40px rgba(16, 16, 20, 0.12));
   z-index: 1000;
   overflow: hidden;
 }
@@ -62,63 +65,63 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid var(--border-color, #ddd);
+  padding: 16px 18px 10px;
 }
 
 .chain-switcher-header h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
+  color: var(--b100-text, #191919);
 }
 
 .chain-switcher-close {
   background: none;
   border: none;
-  font-size: 24px;
+  font-size: 22px;
   cursor: pointer;
-  color: var(--text-secondary, #666);
+  color: var(--b100-text-2, #737378);
   padding: 0;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
 }
 
 .chain-switcher-close:hover {
-  color: var(--text-primary, #000);
+  color: var(--b100-text, #191919);
+  background: var(--b100-surface-2, #f7f7f8);
 }
 
 .chain-switcher-list {
   max-height: 400px;
   overflow-y: auto;
+  padding: 6px;
 }
 
 .chain-switcher-item {
   width: 100%;
-  padding: 12px 16px;
+  padding: 11px 12px;
   background: none;
   border: none;
-  border-bottom: 1px solid var(--border-color, #eee);
+  border-radius: 14px;
   cursor: pointer;
   text-align: left;
-  transition: background 0.2s;
+  transition: background 0.15s;
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-.chain-switcher-item:last-child {
-  border-bottom: none;
+  color: var(--b100-text, #191919);
 }
 
 .chain-switcher-item:hover:not(:disabled) {
-  background: var(--bg-hover, #f5f5f5);
+  background: var(--b100-surface-2, #f7f7f8);
 }
 
 .chain-switcher-item.active {
-  background: var(--bg-active, #e8f4f8);
+  background: var(--b100-accent-soft, #fff0f7);
   cursor: default;
 }
 
@@ -144,22 +147,22 @@
 
 .chain-item-badge {
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 999px;
   font-size: 11px;
-  font-weight: 500;
-  background: var(--bg-secondary, #f0f0f0);
-  color: var(--text-secondary, #666);
+  font-weight: 600;
+  background: var(--b100-surface-2, #f7f7f8);
+  color: var(--b100-text-2, #737378);
 }
 
 .chain-item-badge.warning {
-  background: #fff3cd;
-  color: #856404;
+  background: var(--b100-warning-bg, #fffaeb);
+  color: var(--b100-warning, #b54708);
 }
 
 .chain-item-explorer {
-  color: var(--text-secondary, #666);
+  color: var(--b100-text-2, #737378);
   text-decoration: none;
-  font-size: 16px;
+  font-size: 15px;
   opacity: 0.6;
   transition: opacity 0.2s;
 }
