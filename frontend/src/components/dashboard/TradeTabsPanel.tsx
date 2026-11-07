@@ -164,7 +164,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
 
   const renderOrdersTable = (orders: Order[], withCancel: boolean) => {
     if (!account) return <Text size="sm" c="dimmed" py="sm">连接钱包后查看订单</Text>
-    if (nodeError) return <Text size="sm" c="dimmed" py="sm">节点未连接，订单暂不可用（需配置节点 API）</Text>
+    if (nodeError) return <Text size="sm" c="dimmed" py="sm">节点服务暂时不可用，订单无法加载（资产与跨链不受影响）</Text>
     if (orders.length === 0) return <Text size="sm" c="dimmed" py="sm">暂无订单</Text>
     return (
       <div className="trade-table-wrap">
@@ -243,7 +243,7 @@ export function TradeTabsPanel({ account, getSigner, refreshSignal = 0 }: TradeT
         <Tabs.Panel value="trades" pt="sm">
           {sortedTrades.length === 0 ? (
             <Text size="sm" c="dimmed" py="sm">
-              {tradesError ? '节点未连接，成交记录暂不可用（需配置节点 API）' : '暂无成交'}
+              {tradesError ? '节点服务暂时不可用，成交记录无法加载（资产与跨链不受影响）' : '暂无成交'}
             </Text>
           ) : (
             <div className="trade-table-wrap">

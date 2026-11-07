@@ -420,7 +420,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       <div className="card vault-section">
         <h2>完整订单簿</h2>
         <p className="hint">
-          尚未配置节点 API，订单簿暂不可用。请设置节点 API 地址（VITE_NODE_API_URL 或 .env 中 NODE_API_URL），并确保节点已开启 <code>api.listen</code>（如 :8080）。多个节点地址以逗号分隔，系统将依次尝试连接。
+          节点服务暂时不可用，订单簿无法加载。行情、订单簿与下单都由节点提供，节点恢复后刷新页面即可继续交易；你的链上资产与跨链桥不受影响。
         </p>
       </div>
     )

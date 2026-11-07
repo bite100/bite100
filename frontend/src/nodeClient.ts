@@ -16,7 +16,7 @@ export async function tryNodes<T>(
   request: (baseUrl: string) => Promise<T>
 ): Promise<{ data: T; baseUrl: string }> {
   const urls = getNodeUrls()
-  if (urls.length === 0) throw new Error('未配置节点 API（VITE_NODE_API_URL）')
+  if (urls.length === 0) throw new Error('节点服务暂不可用：行情与订单簿由节点提供，请稍后再试；你的链上资产与跨链功能不受影响')
   let lastErr: unknown
   for (const baseUrl of urls) {
     try {

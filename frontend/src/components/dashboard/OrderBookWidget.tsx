@@ -129,7 +129,7 @@ export function OrderBookWidget({ onBookUpdate, onPriceClick }: OrderBookWidgetP
         <Text size="xs" c="dimmed" py="sm">加载中…</Text>
       ) : failed && bids.length === 0 && asks.length === 0 ? (
         <Text size="xs" c="dimmed" py="sm">
-          节点未连接，盘口暂不可用（需配置节点 API）
+          节点服务暂时不可用，盘口无法加载（资产与跨链不受影响）
         </Text>
       ) : (
         <>

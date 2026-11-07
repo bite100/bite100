@@ -25,6 +25,7 @@ jobs:
         working-directory: frontend
         env:
           VITE_BASE: '/${{ github.event.repository.name }}/'
+          VITE_NODE_API_URL: ${{ secrets.VITE_NODE_API_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
