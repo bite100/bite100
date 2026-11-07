@@ -30,8 +30,8 @@ contract ContributorReward {
     uint256 private constant WEIGHT_STORAGE = 25;
     uint256 private constant WEIGHT_LIQUIDITY = 20;
     uint256 private constant WEIGHT_RELAY = 15;
-    /// 原设计：周期结束超过此时长（秒）后禁止领取；当前实现已取消截止时间限制，常量保留仅为兼容
-    uint256 public constant CLAIM_DEADLINE_SECONDS = 14 days;
+    /// 领取期限（方案 A 定案，2026-11-07）：周期结束后此时长（秒）内可领取，逾期禁止领取
+    uint256 public constant CLAIM_DEADLINE_SECONDS = 90 days;
 
     /// 是否启用按信誉分分配（true：按信誉分加权分配；false：仅用信誉阈值作为门槛）
     bool public useReputationWeighting = false;
@@ -40,8 +40,13 @@ contract ContributorReward {
     /// account => 信誉分数（基于转发量、违规次数等计算，范围 0-10000）
     mapping(address => uint256) public reputationScore;
 
-    /// periodId => 该周期结束时间（Unix 秒，UTC 周期结束日 23:59:59）；当前实现不再据此限制领取，仅作为元数据存储
+    /// periodId => 该周期结束时间（Unix 秒，UTC 周期结束日 23:59:59）；领取截止 = 该时间 + CLAIM_DEADLINE_SECONDS。
+    /// 未设置（0）时不启用截止（视为窗口未开始计时），owner 应在周期结束后及时设置
     mapping(bytes32 => uint256) public periodEndTimestamp;
+    /// periodId => token => 该周期已领取总额（用于回流时计算未领余额）
+    mapping(bytes32 => mapping(address => uint256)) public periodTotalClaimed;
+    /// periodId => token => 逾期未领部分是否已回流到下一期（每个周期每代币只可回流一次）
+    mapping(bytes32 => mapping(address => bool)) public unclaimedRolledOver;
 
     /// periodId => 该周期总贡献分
     mapping(bytes32 => uint256) public periodTotalScore;
@@ -58,6 +63,7 @@ contract ContributorReward {
     event PeriodRewardSet(bytes32 indexed periodId, address indexed token, uint256 amount);
     event PeriodEndTimestampSet(bytes32 indexed periodId, uint256 endTimestamp);
     event RewardClaimed(bytes32 indexed periodId, address indexed account, address indexed token, uint256 amount);
+    event UnclaimedRolledOver(bytes32 indexed fromPeriodId, bytes32 indexed toPeriodId, address indexed token, uint256 amount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event ReserveBpsSet(uint16 oldBps, uint16 newBps);
     event FreeFlowBpsSet(uint16 oldBps, uint16 newBps);
@@ -238,18 +244,51 @@ contract ContributorReward {
         emit PeriodRewardSet(pid, token, amount);
     }
 
-    /// @notice 设置某周期结束时间（Unix 秒）；当前实现不再据此限制领取，仅作为元数据存储
+    /// @notice 设置某周期结束时间（Unix 秒）；领取截止 = 结束时间 + CLAIM_DEADLINE_SECONDS（90 天）
     function setPeriodEndTimestamp(bytes32 periodId, uint256 endTimestamp) external onlyOwner {
         periodEndTimestamp[periodId] = endTimestamp;
         emit PeriodEndTimestampSet(periodId, endTimestamp);
     }
 
-    /// @notice 领取某周期某代币的应得奖励；当前实现不再设置领取截止时间
+    /// @notice 内部：该周期是否已过领取截止（未设置结束时间时不启用截止）
+    function _claimDeadlinePassed(bytes32 pid) internal view returns (bool) {
+        uint256 endTs = periodEndTimestamp[pid];
+        return endTs != 0 && block.timestamp > endTs + CLAIM_DEADLINE_SECONDS;
+    }
+
+    /// @notice 内部：某账户在某周期某代币的待领总额（未封顶、未扣单次上限；过期或已回流返回 0）
+    function _remainingEntitlement(bytes32 pid, address token, address account) internal view returns (uint256) {
+        if (_claimDeadlinePassed(pid) || unclaimedRolledOver[pid][token]) return 0;
+
+        uint256 myScore = contributionScore[pid][account];
+        if (myScore == 0) return 0;
+
+        uint256 pool = periodReward[pid][token];
+        if (pool == 0) return 0;
+        uint256 distributable = (pool * (10000 - reserveBps)) / 10000;
+
+        if (useReputationWeighting) {
+            uint256 myReputation = reputationScore[account];
+            if (myReputation == 0) return 0;
+            uint256 myWeightedScore = (myScore * myReputation) / 10000;
+            uint256 totalWeightedScore = periodTotalWeightedScore[pid];
+            if (totalWeightedScore == 0) return 0;
+            return (distributable * myWeightedScore) / totalWeightedScore - claimed[pid][token][account];
+        }
+        uint256 total = periodTotalScore[pid];
+        if (total == 0) return 0;
+        return (distributable * myScore) / total - claimed[pid][token][account];
+    }
+
+    /// @notice 领取某周期某代币的应得奖励（方案 A）：周期结束后 90 天内可领，逾期禁止
     /// @notice 每次领取不超过该周期奖励池的 10%，可多次领取直到领完应得部分
     /// @notice 如果启用信誉加权分配（useReputationWeighting=true），奖励按（贡献分 * 信誉分数/10000）分配
     function claimReward(string calldata period, address token) external {
         bytes32 pid = _periodId(period);
-        
+
+        require(!_claimDeadlinePassed(pid), "ContributorReward: claim deadline passed");
+        require(!unclaimedRolledOver[pid][token], "ContributorReward: claim deadline passed");
+
         // 检查信誉阈值（如果启用）
         if (reputationThreshold > 0) {
             require(reputationScore[msg.sender] >= reputationThreshold, "ContributorReward: reputation too low");
@@ -257,68 +296,58 @@ contract ContributorReward {
         
         uint256 myScore = contributionScore[pid][msg.sender];
         require(myScore > 0, "ContributorReward: no score");
-        
+
         uint256 pool = periodReward[pid][token];
         require(pool > 0, "ContributorReward: no reward pool");
-        uint256 distributable = (pool * (10000 - reserveBps)) / 10000;
-        
-        uint256 totalClaimable;
-        if (useReputationWeighting) {
-            // 按信誉分加权分配：计算加权后的总贡献分和我的加权贡献分
-            uint256 myReputation = reputationScore[msg.sender];
-            if (myReputation == 0) {
-                // 无信誉分数的节点无法领取（如果启用加权分配）
-                require(false, "ContributorReward: no reputation score");
-            }
-            uint256 myWeightedScore = (myScore * myReputation) / 10000;
-            uint256 totalWeightedScore = periodTotalWeightedScore[pid];
-            require(totalWeightedScore > 0, "ContributorReward: no total weighted score");
-            totalClaimable = (distributable * myWeightedScore) / totalWeightedScore - claimed[pid][token][msg.sender];
-        } else {
-            // 传统分配：仅按贡献分分配
-            uint256 total = periodTotalScore[pid];
-            require(total > 0, "ContributorReward: no total score");
-            totalClaimable = (distributable * myScore) / total - claimed[pid][token][msg.sender];
-        }
-        
+
+        uint256 totalClaimable = _remainingEntitlement(pid, token, msg.sender);
         require(totalClaimable > 0, "ContributorReward: nothing to claim");
-        
-        // 每次领取不超过奖励池的 10%
+
+        // 每次领取不超过奖励池的 10%（方案 A 保留）
         uint256 maxPerClaim = pool / 10;
         uint256 amount = totalClaimable > maxPerClaim ? maxPerClaim : totalClaimable;
-        
+
         claimed[pid][token][msg.sender] += amount;
+        periodTotalClaimed[pid][token] += amount;
         require(IERC20(token).transfer(msg.sender, amount), "ContributorReward: transfer failed");
         emit RewardClaimed(pid, msg.sender, token, amount);
     }
+
+    /// @notice 回流（方案 A）：某周期领取窗结束后，把逾期未领部分（可分配额 − 已领总额）划入下一期奖池。
+    /// 仅 owner 可调用；每个周期每代币只可回流一次；回流后原周期不可再领取（claimable 归零）。
+    /// @return amount 实际回流金额
+    function rolloverUnclaimed(string calldata fromPeriod, string calldata toPeriod, address token) external onlyOwner returns (uint256 amount) {
+        require(token != address(0), "ContributorReward: zero token");
+        bytes32 fromPid = _periodId(fromPeriod);
+        bytes32 toPid = _periodId(toPeriod);
+        require(fromPid != toPid, "ContributorReward: same period");
+        require(_claimDeadlinePassed(fromPid), "ContributorReward: claim window not ended");
+        require(!unclaimedRolledOver[fromPid][token], "ContributorReward: already rolled over");
+
+        uint256 pool = periodReward[fromPid][token];
+        uint256 distributable = (pool * (10000 - reserveBps)) / 10000;
+        amount = distributable - periodTotalClaimed[fromPid][token];
+
+        unclaimedRolledOver[fromPid][token] = true;
+        periodReward[fromPid][token] = pool - amount;
+        periodReward[toPid][token] += amount;
+        emit UnclaimedRolledOver(fromPid, toPid, token, amount);
+    }
     
 
-    /// @notice 查询某账户在某周期某代币上可领取金额；当前实现不再设置领取截止时间
+    /// @notice 查询某账户在某周期某代币上【单次可领】金额：与 claimReward 实际发放一致，
+    /// 即待领总额与奖池 10% 上限取小；已过领取截止或已回流返回 0（前端按此展示，勿再按全额）
     function claimable(string calldata period, address token, address account) external view returns (uint256) {
         bytes32 pid = _periodId(period);
-        
-        uint256 myScore = contributionScore[pid][account];
-        if (myScore == 0) return 0;
-        
-        uint256 pool = periodReward[pid][token];
-        if (pool == 0) return 0;
-        uint256 distributable = (pool * (10000 - reserveBps)) / 10000;
-        
-        uint256 amount;
-        if (useReputationWeighting) {
-            uint256 myReputation = reputationScore[account];
-            if (myReputation == 0) return 0;
-            uint256 myWeightedScore = (myScore * myReputation) / 10000;
-            uint256 totalWeightedScore = periodTotalWeightedScore[pid];
-            if (totalWeightedScore == 0) return 0;
-            amount = (distributable * myWeightedScore) / totalWeightedScore - claimed[pid][token][account];
-        } else {
-            uint256 total = periodTotalScore[pid];
-            if (total == 0) return 0;
-            amount = (distributable * myScore) / total - claimed[pid][token][account];
-        }
-        
-        return amount;
+        uint256 remaining = _remainingEntitlement(pid, token, account);
+        if (remaining == 0) return 0;
+        uint256 maxPerClaim = periodReward[pid][token] / 10;
+        return remaining > maxPerClaim ? maxPerClaim : remaining;
+    }
+
+    /// @notice 查询某账户在某周期某代币上的【待领总额】（未封顶）；已过领取截止或已回流返回 0
+    function claimableTotal(string calldata period, address token, address account) external view returns (uint256) {
+        return _remainingEntitlement(_periodId(period), token, account);
     }
 
     function setReserveBps(uint16 _reserveBps) external onlyGovernance {
