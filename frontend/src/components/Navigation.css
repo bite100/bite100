@@ -43,6 +43,16 @@
   box-shadow: 0 1px 4px rgba(16, 16, 20, 0.1);
 }
 
+/* 二级页签（如「治理与贡献」内的 治理 / 贡献奖励）：同款胶囊，尺寸略小 */
+.main-nav.sub-nav {
+  margin-bottom: 0.25rem;
+  padding: 0.1875rem;
+}
+.main-nav.sub-nav .nav-tab {
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+}
+
 @media (max-width: 640px) {
   .main-nav {
     gap: 0.25rem;

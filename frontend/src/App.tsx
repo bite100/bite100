@@ -83,6 +83,30 @@ async function runWithLoading(
   }
 }
 
+/** 统一页面骨架页头（第十三轮重构）：各一级分区共用「标题 + 一句说明」的页头规范 */
+function PageHead({ title, desc }: { title: string; desc?: string }) {
+  return (
+    <div className="page-head">
+      <h2>{title}</h2>
+      {desc && <p className="hint">{desc}</p>}
+    </div>
+  )
+}
+
+/** 需要钱包的分区在未连接时的页面级空态：说明 + 连接入口，不报错、不白屏 */
+function ConnectGate({ title, desc }: { title: string; desc: string }) {
+  return (
+    <div className="card connect-gate">
+      <h2>{title}</h2>
+      <p className="hint">{desc}</p>
+      <div className="connect-gate-actions">
+        <StandardConnect />
+        <MobileConnectHint />
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const connection = useConnection()
   const account = connection.address ?? null
@@ -125,10 +149,24 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const isOnline = useOnlineStatus()
   const [activeTab, setActiveTab] = useState<Tab>(() => {
-    if (typeof window === 'undefined') return 'orderbook'
+    if (typeof window === 'undefined') return 'trade'
     const t = new URLSearchParams(window.location.search).get('tab')
-    const valid: Tab[] = ['vault', 'orderbook', 'swap', 'data', 'bridge', 'governance', 'contribution']
-    return valid.includes(t as Tab) ? (t as Tab) : 'orderbook'
+    // 旧链接兼容（第十三轮导航重构前的页签值）：orderbook→trade、vault→assets、
+    // governance/contribution→govern（并由 governSub 区分落点）
+    const legacy: Record<string, Tab> = {
+      orderbook: 'trade',
+      vault: 'assets',
+      governance: 'govern',
+      contribution: 'govern',
+    }
+    if (t && legacy[t]) return legacy[t]
+    const valid: Tab[] = ['trade', 'swap', 'assets', 'bridge', 'govern', 'data']
+    return valid.includes(t as Tab) ? (t as Tab) : 'trade'
+  })
+  const [governSub, setGovernSub] = useState<'governance' | 'contribution'>(() => {
+    if (typeof window === 'undefined') return 'governance'
+    const t = new URLSearchParams(window.location.search).get('tab')
+    return t === 'contribution' ? 'contribution' : 'governance'
   })
   const [showFullOrderbook, setShowFullOrderbook] = useState(false)
 
@@ -416,6 +454,17 @@ function App() {
     provider.getBalance(account).then((b) => setEthBalance(formatTokenAmount(b)))
   }, [account])
 
+  /** 交易屏与完整订单簿共用的 signer 获取（未连接/无注入钱包时返回 null，由调用方走空态） */
+  const getSigner = useCallback(async () => {
+    try {
+      const p = getProvider()
+      if (!p) return null
+      return await p.getSigner()
+    } catch {
+      return null
+    }
+  }, [])
+
   return (
     <div className="app">
       {!isOnline && (
@@ -441,29 +490,18 @@ function App() {
         </div>
       </header>
 
-      <ContributionSection account={account} />
-
       {!account ? (
-        <>
-          <div className="card hero-connect">
-            <h2>欢迎来到比特100</h2>
-            <p className="hint" style={{ margin: 0 }}>连接钱包，即可存提、兑换与下单交易。</p>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
-              <StandardConnect />
-              <MobileConnectHint />
-            </div>
+        <div className="card connect-strip">
+          <div className="connect-strip-text">
+            <h2>连接钱包，开始交易</h2>
+            <p className="hint">行情、盘口与公开数据无需连接即可浏览；下单、存提与领取奖励需要连接钱包。</p>
+          </div>
+          <div className="connect-strip-actions">
+            <StandardConnect />
+            <MobileConnectHint />
             <AddNetworkButton chainId={currentChainId ?? undefined} className="add-network-below-connect" />
           </div>
-          <div className="public-data-section" style={{ marginTop: '1rem' }}>
-            <LiquidityPoolInfo />
-            <RewardPoolInfo />
-          </div>
-          <ErrorDisplay
-            error={error}
-            onRetry={() => { setError(null); fetchReserves() }}
-            onDismiss={() => setError(null)}
-          />
-        </>
+        </div>
       ) : (
           <div className="card wallet-bar">
             <div className="row">
@@ -484,21 +522,22 @@ function App() {
           </div>
       )}
 
-      {account && (
-        <>
-          <Navigation activeTab={activeTab} onTabChange={setActiveTab} account={account} />
-          <ErrorDisplay
-            error={error}
-            onRetry={() => {
-              setError(null)
-              if (account && isValidAddress(tokenAddr)) fetchBalances()
-              fetchReserves()
-            }}
-            onDismiss={() => setError(null)}
-            className="error-below-nav"
-          />
+      <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
+      <ErrorDisplay
+        error={error}
+        onRetry={() => {
+          setError(null)
+          if (account && isValidAddress(tokenAddr)) fetchBalances()
+          fetchReserves()
+        }}
+        onDismiss={() => setError(null)}
+        className="error-below-nav"
+      />
 
-          {(activeTab === 'vault' || activeTab === 'swap') && (
+          {activeTab === 'assets' && (
+            <>
+              <PageHead title="资产" desc="向 Vault 存入或提取代币，并查询钱包与 Vault 余额（下单交易使用 Vault 余额）。" />
+              {account ? (
             <div className="vault-layout">
               <div className="card vault-section">
                 <h2>代币与 Vault 余额</h2>
@@ -583,46 +622,40 @@ function App() {
                 </div>
               </div>
             </div>
+              ) : (
+                <ConnectGate title="连接钱包后管理资产" desc="存入、提取与余额查询需要连接钱包；行情与公开数据可直接在「交易」「数据」分区浏览。" />
+              )}
+            </>
           )}
 
           {activeTab === 'data' && (
-            <div className="public-data-section">
-              <LiquidityPoolInfo />
-              <RewardPoolInfo />
-            </div>
+            <>
+              <PageHead title="数据" desc="AMM 池与奖励池的公开链上数据，无需连接钱包即可查看。" />
+              <div className="public-data-section">
+                <LiquidityPoolInfo />
+                <RewardPoolInfo />
+              </div>
+            </>
           )}
 
-          {activeTab === 'orderbook' && (showFullOrderbook ? (
+          {activeTab === 'trade' && (showFullOrderbook ? (
             <OrderBookSection
               account={account}
-              getSigner={async () => {
-                try {
-                  const p = getProvider()
-                  if (!p) return null
-                  return await p.getSigner()
-                } catch {
-                  return null
-                }
-              }}
+              getSigner={getSigner}
               onBackToDashboard={() => setShowFullOrderbook(false)}
             />
           ) : (
             <Dashboard
               account={account}
-              getSigner={async () => {
-                try {
-                  const p = getProvider()
-                  if (!p) return null
-                  return await p.getSigner()
-                } catch {
-                  return null
-                }
-              }}
+              getSigner={getSigner}
               onShowFullOrderbook={() => setShowFullOrderbook(true)}
             />
           ))}
 
           {activeTab === 'swap' && (
+            <>
+              <PageHead title="兑换" desc="通过 AMM 池即时兑换 Token A 与 Token B，或向池子添加流动性。" />
+              {account ? (
             <div className="swap-page">
               <div className="card vault-section swap-hero">
                 <h2>兑换</h2>
@@ -696,30 +729,51 @@ function App() {
                 </button>
               </div>
             </div>
+              ) : (
+                <ConnectGate title="连接钱包后即可兑换" desc="兑换与添加流动性需要用钱包签名；池子储备等公开数据可在「数据」分区查看。" />
+              )}
+            </>
           )}
 
-          {activeTab === 'governance' && (
-            <GovernanceErrorBoundary account={account}>
-              <GovernanceSection account={account} />
-            </GovernanceErrorBoundary>
-          )}
-
-          {activeTab === 'contribution' && (
+          {activeTab === 'govern' && (
             <>
-              <UnifiedRewardClaim account={account} />
-              <MerkleAirdropClaim account={account} />
-              <ContributionSection account={account} />
+              <PageHead title="治理与贡献" desc="参与协议治理投票，或查询并领取你的贡献奖励。" />
+              <nav className="main-nav sub-nav" aria-label="治理与贡献分区">
+                <button
+                  type="button"
+                  className={`nav-tab ${governSub === 'governance' ? 'active' : ''}`}
+                  onClick={() => setGovernSub('governance')}
+                >
+                  治理
+                </button>
+                <button
+                  type="button"
+                  className={`nav-tab ${governSub === 'contribution' ? 'active' : ''}`}
+                  onClick={() => setGovernSub('contribution')}
+                >
+                  贡献奖励
+                </button>
+              </nav>
+              {governSub === 'governance' ? (
+                <GovernanceErrorBoundary account={account}>
+                  <GovernanceSection account={account} />
+                </GovernanceErrorBoundary>
+              ) : (
+                <>
+                  <ContributionSection account={account} />
+                  <UnifiedRewardClaim account={account} />
+                  <MerkleAirdropClaim account={account} />
+                </>
+              )}
             </>
           )}
 
           {activeTab === 'bridge' && (
-            <CrossChainBridge account={account} currentChainId={currentChainId} />
+            <>
+              <PageHead title="跨链桥" desc="通过 LayerZero 在链之间转移代币；跨链操作需要连接钱包。" />
+              <CrossChainBridge account={account} currentChainId={currentChainId} />
+            </>
           )}
-
-          {/* 添加流动性在 Swap 标签下作为次级卡，位于兑换主卡下方 */}
-
-        </>
-      )}
 
       <details className="card contracts-details">
         <summary>合约地址（验证用）</summary>

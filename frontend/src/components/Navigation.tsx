@@ -1,60 +1,39 @@
 import './Navigation.css'
 
-export type Tab = 'vault' | 'orderbook' | 'swap' | 'data' | 'bridge' | 'governance' | 'contribution'
+export type Tab = 'trade' | 'swap' | 'assets' | 'bridge' | 'govern' | 'data'
 
 interface NavigationProps {
   activeTab: Tab
   onTabChange: (tab: Tab) => void
-  account: string | null
 }
 
-export function Navigation({ activeTab, onTabChange, account }: NavigationProps) {
-  if (!account) return null
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'trade', label: '交易' },
+  { key: 'swap', label: '兑换' },
+  { key: 'assets', label: '资产' },
+  { key: 'bridge', label: '跨链桥' },
+  { key: 'govern', label: '治理与贡献' },
+  { key: 'data', label: '数据' },
+]
 
+/**
+ * 全站主导航（第十三轮信息架构重构）：六个一级分区。
+ * 未连接钱包时同样可见——交易行情与公开数据可直接浏览（对标 Hyperliquid 公开行情模式），
+ * 需要钱包的分区在页内给出连接空态，而不是把整站挡在连接之后。
+ */
+export function Navigation({ activeTab, onTabChange }: NavigationProps) {
   return (
-    <nav className="main-nav">
-      <button
-        className={`nav-tab ${activeTab === 'orderbook' ? 'active' : ''}`}
-        onClick={() => onTabChange('orderbook')}
-      >
-        买卖
-      </button>
-      <button
-        className={`nav-tab ${activeTab === 'vault' ? 'active' : ''}`}
-        onClick={() => onTabChange('vault')}
-      >
-        存提
-      </button>
-      <button
-        className={`nav-tab ${activeTab === 'swap' ? 'active' : ''}`}
-        onClick={() => onTabChange('swap')}
-      >
-        Swap
-      </button>
-      <button
-        className={`nav-tab ${activeTab === 'data' ? 'active' : ''}`}
-        onClick={() => onTabChange('data')}
-      >
-        数据
-      </button>
-      <button
-        className={`nav-tab ${activeTab === 'bridge' ? 'active' : ''}`}
-        onClick={() => onTabChange('bridge')}
-      >
-        跨链桥
-      </button>
-      <button
-        className={`nav-tab ${activeTab === 'governance' ? 'active' : ''}`}
-        onClick={() => onTabChange('governance')}
-      >
-        治理
-      </button>
-      <button
-        className={`nav-tab ${activeTab === 'contribution' ? 'active' : ''}`}
-        onClick={() => onTabChange('contribution')}
-      >
-        贡献
-      </button>
+    <nav className="main-nav" aria-label="主导航">
+      {TABS.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          className={`nav-tab ${activeTab === t.key ? 'active' : ''}`}
+          onClick={() => onTabChange(t.key)}
+        >
+          {t.label}
+        </button>
+      ))}
     </nav>
   )
 }

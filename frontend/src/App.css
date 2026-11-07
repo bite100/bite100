@@ -156,18 +156,63 @@
   color: var(--b100-text);
 }
 
-/* 未连接时的欢迎主卡 */
-.hero-connect {
-  align-items: flex-start;
-  padding: 2rem;
+/* 未连接时的连接条（第十三轮：欢迎主卡降级为纤细连接条，不再挡在行情之前） */
+.connect-strip {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  flex-wrap: wrap;
 }
-.hero-connect h2 {
+.connect-strip-text h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 0.25rem 0;
+}
+.connect-strip-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+@media (max-width: 640px) {
+  .connect-strip {
+    padding: 1rem;
+  }
+}
+
+/* 统一页头骨架（第十三轮）：一级分区共用 */
+.page-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.page-head h2 {
   font-size: 1.25rem;
   font-weight: 700;
   margin: 0;
+  letter-spacing: 0.01em;
+}
+
+/* 需要钱包的分区在未连接时的页面级空态 */
+.connect-gate {
+  align-items: flex-start;
+  padding: 2rem;
+}
+.connect-gate h2 {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin: 0;
+}
+.connect-gate-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
 }
 @media (max-width: 640px) {
-  .hero-connect {
+  .connect-gate {
     padding: 1.25rem;
   }
 }
