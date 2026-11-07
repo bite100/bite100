@@ -20,6 +20,7 @@ package settlement
 //   BIT100_SEPOLIA_TAKER_KEY  taker 私钥（新账户）
 //   BIT100_SEPOLIA_VAULT / BIT100_SEPOLIA_FEEDIST / BIT100_SEPOLIA_SETTLEMENT
 //   BIT100_SEPOLIA_TOKENA / BIT100_SEPOLIA_TOKENB
+// 可选：BIT100_E2E_CHAIN_ID 期望链 ID（默认 11155111；多链同构验证时传目标链，如 84532）
 
 import (
 	"context"
@@ -88,8 +89,17 @@ func TestSepoliaE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if chainID.Int64() != 11155111 {
-		t.Fatalf("expected sepolia chain id 11155111, got %s", chainID)
+	// 期望链可由 BIT100_E2E_CHAIN_ID 覆盖（多链同构验证用，如 Base Sepolia 84532）；
+	// 未设置时默认 Sepolia 11155111，行为与此前一致。
+	expectedChainID := int64(11155111)
+	if v := os.Getenv("BIT100_E2E_CHAIN_ID"); v != "" {
+		n, err := fmt.Sscanf(v, "%d", &expectedChainID)
+		if err != nil || n != 1 {
+			t.Fatalf("bad BIT100_E2E_CHAIN_ID %q", v)
+		}
+	}
+	if chainID.Int64() != expectedChainID {
+		t.Fatalf("expected chain id %d, got %s", expectedChainID, chainID)
 	}
 
 	owner := crypto.PubkeyToAddress(ownerKey.PublicKey)
