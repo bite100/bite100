@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Paper, Text, Select, NumberInput, Button, Stack, Slider } from '@mantine/core'
+import { Paper, Text, Select, NumberInput, Button, Stack, Slider, SegmentedControl } from '@mantine/core'
 import { ethers, Contract } from 'ethers'
 import { formatError, formatTokenAmount, getProvider } from '../../utils'
 import { nodePost } from '../../nodeClient'
@@ -378,14 +378,18 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
       )}
       <Stack gap="sm">
         {ticket ? (
-          <div className="seg buy-sell" role="group" aria-label="买卖方向">
-            <button type="button" className={side === 'buy' ? 'on buy' : undefined} onClick={() => pickSide('buy')}>
-              买入
-            </button>
-            <button type="button" className={side === 'sell' ? 'on sell' : undefined} onClick={() => pickSide('sell')}>
-              卖出
-            </button>
-          </div>
+          <SegmentedControl
+            value={side}
+            onChange={(v) => pickSide(v === 'sell' ? 'sell' : 'buy')}
+            data={[
+              { value: 'buy', label: '买入' },
+              { value: 'sell', label: '卖出' },
+            ]}
+            color={side === 'buy' ? 'up' : 'down'}
+            fullWidth
+            radius="xl"
+            aria-label="买卖方向"
+          />
         ) : (
           <div className="side-toggle" role="group" aria-label="买卖方向">
             <Button

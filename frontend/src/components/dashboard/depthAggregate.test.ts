@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { aggregateLevels, depthSeries, powerBarPct, stepOptionsFor } from './depthAggregate'
+import { aggregateLevels, depthChartData, depthSeries, powerBarPct, stepOptionsFor } from './depthAggregate'
 
 describe('stepOptionsFor', () => {
   it('scales steps with price magnitude', () => {
@@ -81,5 +81,43 @@ describe('depthSeries', () => {
     const s = depthSeries([{ price: 99, amount: 1 }], [], 100)
     expect(s!.mid).toBe(100)
     expect(s!.asks).toEqual([])
+  })
+})
+
+describe('depthChartData', () => {
+  it('maps prices to proportional synthetic times and extends flat to mid', () => {
+    const s = depthSeries(
+      [
+        { price: 99, amount: 1 },
+        { price: 98, amount: 2 },
+      ],
+      [
+        { price: 101, amount: 4 },
+        { price: 102, amount: 1 },
+      ],
+      100,
+    )!
+    const { bids, asks } = depthChartData(s)
+    // 买盘：价格升序，末点在中间价（100→10000）取全量累计 3
+    expect(bids[bids.length - 1]).toEqual({ time: 10000, value: 3 })
+    expect(bids[0]).toEqual({ time: 9800, value: 3 })
+    // 卖盘：首点在中间价取全量累计 5
+    expect(asks[0]).toEqual({ time: 10000, value: 5 })
+    expect(asks[asks.length - 1]).toEqual({ time: 10200, value: 5 })
+    for (const arr of [bids, asks]) {
+      for (let i = 1; i < arr.length; i++) expect(arr[i].time).toBeGreaterThan(arr[i - 1].time)
+    }
+  })
+  it('forces monotonic times when prices are denser than 0.01', () => {
+    const s = depthSeries(
+      [
+        { price: 0.501, amount: 1 },
+        { price: 0.502, amount: 1 },
+      ],
+      [{ price: 0.509, amount: 1 }],
+      0.505,
+    )!
+    const { bids } = depthChartData(s)
+    for (let i = 1; i < bids.length; i++) expect(bids[i].time).toBeGreaterThan(bids[i - 1].time)
   })
 })

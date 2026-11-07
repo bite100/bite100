@@ -1,9 +1,23 @@
 /**
  * 深度图（第 31 轮 §12.5）：与紧凑盘口同一份快照聚合出的累计阶梯图——
- * 买盘从中间价向左累计、卖盘向右累计，中间价虚线。空盘显示空状态，不画假曲线。
+ * 买盘从中间价向左累计、卖盘向右累计。渲染骑项目已引入的 lightweight-charts
+ * （与 K 线同一引擎）：两条 AreaSeries（WithSteps 阶梯线）。
+ * 注意：lightweight-charts 的横轴是时间轴，深度图横轴是价格——这里按
+ * depthAggregate.depthChartData 的口径把价格按比例映射为合成时间承载刻度，
+ * 时间轴隐藏，价格标签（低/中/高）由本组件按比例在图下另行渲染。
+ * 空盘显示空状态，不画假曲线。
  */
-import { useMemo } from 'react'
-import { depthSeries, type BookLevelIn } from './depthAggregate'
+import { useEffect, useMemo, useRef } from 'react'
+import {
+  createChart,
+  AreaSeries,
+  LineType,
+  CrosshairMode,
+  type IChartApi,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from 'lightweight-charts'
+import { depthChartData, depthSeries, type BookLevelIn } from './depthAggregate'
 import { fmtPrice } from './tradeFormat'
 import './DepthChart.css'
 
@@ -14,27 +28,89 @@ interface DepthChartProps {
   base: string
 }
 
-const W = 340
-const H = 190
-const PAD_L = 6
-const PAD_R = 6
-const PAD_T = 10
-const PAD_B = 20
-
-/** 累计点 → SVG 阶梯路径（先水平后垂直） */
-function stepPath(points: { x: number; y: number }[]): string {
-  if (points.length === 0) return ''
-  let d = `M ${points[0].x} ${points[0].y}`
-  for (let i = 1; i < points.length; i++) {
-    d += ` H ${points[i].x} V ${points[i].y}`
-  }
-  return d
-}
+const CHART_HEIGHT = 190
 
 export function DepthChart({ bids, asks, lastPrice, base }: DepthChartProps) {
   const series = useMemo(() => depthSeries(bids, asks, lastPrice), [bids, asks, lastPrice])
+  const chartData = useMemo(() => (series ? depthChartData(series) : null), [series])
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const bidSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
+  const askSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
 
-  if (!series) {
+  // 建图（一次）：浅色主题与 K 线一致；横轴（合成时间）隐藏，纵轴为累计数量
+  useEffect(() => {
+    if (!containerRef.current || !series) return
+    const chart = createChart(containerRef.current, {
+      width: containerRef.current.offsetWidth,
+      height: CHART_HEIGHT,
+      layout: {
+        background: { color: '#FFFFFF' },
+        textColor: '#737378',
+        fontSize: 11,
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: '#F1F1F4' },
+        horzLines: { color: '#F1F1F4' },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#E2E2E7' },
+      timeScale: { visible: false },
+      handleScroll: false,
+      handleScale: false,
+    })
+    const bidSeries = chart.addSeries(AreaSeries, {
+      lineColor: '#039855',
+      topColor: 'rgba(3, 152, 85, 0.22)',
+      bottomColor: 'rgba(3, 152, 85, 0.02)',
+      lineWidth: 2,
+      lineType: LineType.WithSteps,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    })
+    const askSeries = chart.addSeries(AreaSeries, {
+      lineColor: '#d92d20',
+      topColor: 'rgba(217, 45, 32, 0.20)',
+      bottomColor: 'rgba(217, 45, 32, 0.02)',
+      lineWidth: 2,
+      lineType: LineType.WithSteps,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    })
+    chartRef.current = chart
+    bidSeriesRef.current = bidSeries
+    askSeriesRef.current = askSeries
+
+    const handleResize = () => {
+      if (!containerRef.current || !chartRef.current) return
+      chartRef.current.applyOptions({ width: containerRef.current.offsetWidth })
+    }
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      chart.remove()
+      chartRef.current = null
+      bidSeriesRef.current = null
+      askSeriesRef.current = null
+    }
+    // 只建一次；series 为空时组件走空状态分支不会挂载容器
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [series === null])
+
+  // 数据写入
+  useEffect(() => {
+    if (!chartData) return
+    const asTime = (t: number) => t as unknown as UTCTimestamp
+    bidSeriesRef.current?.setData(chartData.bids.map((p) => ({ time: asTime(p.time), value: p.value })))
+    askSeriesRef.current?.setData(chartData.asks.map((p) => ({ time: asTime(p.time), value: p.value })))
+    chartRef.current?.timeScale().fitContent()
+  }, [chartData])
+
+  if (!series || !chartData) {
     return (
       <div className="depth-chart depth-empty">
         <p>暂无盘口数据，深度图无法绘制。</p>
@@ -43,35 +119,13 @@ export function DepthChart({ bids, asks, lastPrice, base }: DepthChartProps) {
     )
   }
 
-  // X 轴：以中间价为中心，两侧取相同价格跨度（较大一侧为准），保证中线居中
-  const minBid = series.bids.length ? series.bids[0].price : series.mid
-  const maxAsk = series.asks.length ? series.asks[series.asks.length - 1].price : series.mid
-  const span = Math.max(series.mid - minBid, maxAsk - series.mid, series.mid * 0.001)
-  const x0 = series.mid - span
-  const x1 = series.mid + span
+  const minPrice = series.bids.length ? series.bids[0].price : series.mid
+  const maxPrice = series.asks.length ? series.asks[series.asks.length - 1].price : series.mid
+  const midPct = maxPrice > minPrice ? ((series.mid - minPrice) / (maxPrice - minPrice)) * 100 : 50
   const maxCum = Math.max(
-    series.bids.length ? series.bids[series.bids.length - 1].cum : 0,
-    series.asks.length ? series.asks[series.asks.length - 1].cum : 0,
-    0,
+    series.bids.reduce((m, p) => Math.max(m, p.cum), 0),
+    series.asks.reduce((m, p) => Math.max(m, p.cum), 0),
   )
-  const px = (price: number) => PAD_L + ((price - x0) / (x1 - x0)) * (W - PAD_L - PAD_R)
-  const py = (cum: number) => PAD_T + (1 - cum / (maxCum || 1)) * (H - PAD_T - PAD_B)
-  const midX = px(series.mid)
-  const baseY = H - PAD_B
-
-  const bidPts = series.bids.map((p) => ({ x: px(p.price), y: py(p.cum) }))
-  const askPts = series.asks.map((p) => ({ x: px(p.price), y: py(p.cum) }))
-  // 阶梯线从中间价基线起步：买盘在中线处从最高累计开始（最优档累计在最右）
-  const bidLine = bidPts.length
-    ? stepPath([...bidPts, { x: midX, y: bidPts[bidPts.length - 1].y }])
-    : ''
-  const askLine = askPts.length
-    ? stepPath([{ x: midX, y: askPts[0].y }, ...askPts])
-    : ''
-  const bidArea = bidLine ? `${bidLine} L ${midX} ${baseY} L ${bidPts[0].x} ${baseY} Z` : ''
-  const askArea = askLine
-    ? `${askLine} L ${askPts[askPts.length - 1].x} ${baseY} L ${midX} ${baseY} Z`
-    : ''
 
   return (
     <div className="depth-chart">
@@ -86,26 +140,18 @@ export function DepthChart({ bids, asks, lastPrice, base }: DepthChartProps) {
         </span>
         <span className="num">中间价 {fmtPrice(series.mid)}</span>
         <span className="num">价差 {series.spreadPct.toFixed(2)}%</span>
+        <span className="num">
+          累计上限 {maxCum.toFixed(2)} {base}
+        </span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="depth-svg" role="img" aria-label={`${base} 深度图`}>
-        {bidArea && <path d={bidArea} fill="rgba(3,152,85,0.12)" />}
-        {askArea && <path d={askArea} fill="rgba(217,45,32,0.10)" />}
-        {bidLine && <path d={bidLine} fill="none" stroke="var(--b100-up)" strokeWidth="1.6" />}
-        {askLine && <path d={askLine} fill="none" stroke="var(--b100-down)" strokeWidth="1.6" />}
-        <line x1={midX} x2={midX} y1={PAD_T} y2={baseY} stroke="#c9c9cf" strokeDasharray="4 3" />
-        <text x={PAD_L} y={H - 6} fontSize="9" fill="var(--b100-text-3)" className="num">
-          {fmtPrice(x0)}
-        </text>
-        <text x={midX} y={H - 6} fontSize="9" fill="var(--b100-text-3)" textAnchor="middle" className="num">
+      <div ref={containerRef} className="depth-canvas" />
+      <div className="depth-prices num" aria-hidden="true">
+        <span className="depth-price-min">{fmtPrice(minPrice)}</span>
+        <span className="depth-price-mid" style={{ left: `${midPct}%` }}>
           {fmtPrice(series.mid)}
-        </text>
-        <text x={W - PAD_R} y={H - 6} fontSize="9" fill="var(--b100-text-3)" textAnchor="end" className="num">
-          {fmtPrice(x1)}
-        </text>
-        <text x={W - PAD_R} y={PAD_T + 2} fontSize="9" fill="var(--b100-text-3)" textAnchor="end" className="num">
-          累计 {maxCum.toFixed(2)} {base}
-        </text>
-      </svg>
+        </span>
+        <span className="depth-price-max">{fmtPrice(maxPrice)}</span>
+      </div>
     </div>
   )
 }

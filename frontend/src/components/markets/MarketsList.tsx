@@ -8,6 +8,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Contract, JsonRpcProvider } from 'ethers'
+import { useLocalStorage } from '@mantine/hooks'
 import { TRADE_PAIRS } from '../../config/pairs'
 import { getChainConfig } from '../../config/chains'
 import { VAULT_ABI } from '../../config'
@@ -17,8 +18,6 @@ import {
   filterMarketRows,
   fmtCompactAmount,
   fmtMarketPrice,
-  loadFavorites,
-  saveFavorites,
   sortMarketRows,
   tokenMeta,
   toggleFavorite,
@@ -42,7 +41,11 @@ interface MarketsListProps {
 export function MarketsList({ chainId, account, mode, onSelectPair, onBack }: MarketsListProps) {
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState<MarketTabFilter>('all')
-  const [favorites, setFavorites] = useState<string[]>(() => loadFavorites())
+  // 自选收藏：骑 @mantine/hooks 的 useLocalStorage（键 b100.favPairs）
+  const [favorites, setFavorites] = useLocalStorage<string[]>({
+    key: 'b100.favPairs',
+    defaultValue: [],
+  })
   const [sortKey, setSortKey] = useState<MarketSortKey>('volume')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [vaultBalances, setVaultBalances] = useState<Record<string, bigint> | null>(null)
@@ -94,11 +97,7 @@ export function MarketsList({ chainId, account, mode, onSelectPair, onBack }: Ma
   const favSet = useMemo(() => new Set(favorites), [favorites])
 
   const handleToggleFav = (pair: string) => {
-    setFavorites((prev) => {
-      const next = toggleFavorite(prev, pair)
-      saveFavorites(next)
-      return next
-    })
+    setFavorites((prev) => toggleFavorite(prev, pair))
   }
 
   const handleSort = (key: MarketSortKey) => {

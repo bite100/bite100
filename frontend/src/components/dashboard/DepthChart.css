@@ -18,10 +18,26 @@
   border-radius: 2px;
   margin-right: 5px;
 }
-.depth-svg {
+.depth-canvas {
   width: 100%;
-  height: auto;
-  display: block;
+}
+.depth-prices {
+  position: relative;
+  height: 14px;
+  font-size: 9.5px;
+  color: var(--b100-text-3);
+}
+.depth-price-min {
+  position: absolute;
+  left: 0;
+}
+.depth-price-max {
+  position: absolute;
+  right: 0;
+}
+.depth-price-mid {
+  position: absolute;
+  transform: translateX(-50%);
 }
 .depth-empty {
   padding: 26px 10px;

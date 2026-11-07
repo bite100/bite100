@@ -113,8 +113,8 @@ export function recordSnapshot(
 
 export interface Change24h {
   pct: number
-  /** 迷你走势线数据（截至当前的快照序列） */
-  spark: number[]
+  /** 迷你走势线数据（截至当前的快照序列，带真实时间戳） */
+  spark: { t: number; v: number }[]
 }
 
 /** 与约 24h 前的快照比较；没有至少 23h 前的快照时返回 null（界面显示「记录中」） */
@@ -130,7 +130,7 @@ export function changeVs24h(
   const base = past[past.length - 1] // 最接近 24h 前的一张
   void cutoff
   if (base.total <= 0) return null
-  const spark = [...snaps.map((s) => s.total), currentTotal]
+  const spark = [...snaps.map((s) => ({ t: s.t, v: s.total })), { t: now, v: currentTotal }]
   return { pct: ((currentTotal - base.total) / base.total) * 100, spark }
 }
 

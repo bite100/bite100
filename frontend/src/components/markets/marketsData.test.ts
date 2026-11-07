@@ -3,8 +3,6 @@ import {
   filterMarketRows,
   sortMarketRows,
   toggleFavorite,
-  loadFavorites,
-  saveFavorites,
   fmtCompactAmount,
   type MarketRowData,
 } from './marketsData'
@@ -21,24 +19,11 @@ const row = (patch: Partial<MarketRowData>): MarketRowData => ({
   ...patch,
 })
 
-describe('favorites storage', () => {
-  it('round-trips favorites and tolerates corrupt data', () => {
-    const store = new Map<string, string>()
-    const storage = {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => void store.set(k, v),
-    }
-    saveFavorites(['BTC/USDT', 'ETH/USDT'], storage)
-    expect(loadFavorites(storage)).toEqual(['BTC/USDT', 'ETH/USDT'])
-    store.set('b100.favPairs', '{broken')
-    expect(loadFavorites(storage)).toEqual([])
-    store.set('b100.favPairs', JSON.stringify([1, 'SOL/USDT']))
-    expect(loadFavorites(storage)).toEqual(['SOL/USDT'])
-  })
-
+describe('toggleFavorite', () => {
   it('toggles membership without duplicating', () => {
     expect(toggleFavorite([], 'BTC/USDT')).toEqual(['BTC/USDT'])
     expect(toggleFavorite(['BTC/USDT'], 'BTC/USDT')).toEqual([])
+    expect(toggleFavorite(['BTC/USDT'], 'ETH/USDT')).toEqual(['BTC/USDT', 'ETH/USDT'])
   })
 })
 

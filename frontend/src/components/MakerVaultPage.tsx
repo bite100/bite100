@@ -16,6 +16,7 @@ import {
   type MakerVaultData,
   type NavSample,
 } from './assets/makerVaultData'
+import { SparklineChart } from './SparklineChart'
 import { estimateQuoteForShares, estimateSharesForDeposit } from './assets/makerVaultMath'
 import { ensureAllowance, parseAmountInput } from './assets/tokenOps'
 import './MakerVaultPage.css'
@@ -342,16 +343,11 @@ export function MakerVaultPage({ chainConfig, account, data, loading, failed, on
 }
 
 function NavSparkline({ samples }: { samples: NavSample[] }) {
-  const values = samples.map((s) => s.nav)
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const range = max - min || 1
-  const pts = values
-    .map((v, i) => `${((i / (values.length - 1)) * 300).toFixed(1)},${(34 - ((v - min) / range) * 30).toFixed(1)}`)
-    .join(' ')
+  // 走势线骑 lightweight-charts（SparklineChart）：采样是真时间序列
+  const up = samples.length < 2 || samples[samples.length - 1].nav >= samples[0].nav
   return (
-    <svg className="mv-spark" viewBox="0 0 300 38" preserveAspectRatio="none" aria-hidden="true">
-      <polyline points={pts} fill="none" stroke="var(--b100-accent)" strokeWidth="1.8" />
-    </svg>
+    <div className="mv-spark">
+      <SparklineChart points={samples.map((s) => ({ t: s.t, v: s.nav }))} up={up} height={38} />
+    </div>
   )
 }

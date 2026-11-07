@@ -64,6 +64,10 @@
   align-items: center;
   gap: 8px;
 }
+.assets-spark {
+  width: 64px;
+  flex: none;
+}
 .assets-up {
   color: var(--b100-up);
 }
@@ -261,17 +265,6 @@
   display: flex;
   align-items: center;
   gap: 10px;
-}
-.assets-tokenrow select {
-  flex: 1;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  padding: 9px 10px;
-  border: 1px solid var(--b100-border);
-  border-radius: 12px;
-  background: #fff;
-  color: var(--b100-text);
 }
 .assets-amountrow {
   display: flex;

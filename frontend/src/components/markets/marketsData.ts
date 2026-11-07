@@ -1,5 +1,6 @@
 /**
- * 行情列表的纯逻辑（第 31 轮）：本地收藏、筛选、排序。
+ * 行情列表的纯逻辑（第 31 轮）：收藏切换、筛选、排序（收藏的本地持久化骑
+ * @mantine/hooks 的 useLocalStorage，见 MarketsList）。
  * 价格口径（设计 §3.3，写死）：最新价只用本所成交，无成交 → null（界面显示「暂无成交」）；
  * $ 小字只用 Chainlink 参考价；24h 数据与交易页同源（usePairStats）。
  */
@@ -24,45 +25,10 @@ export type MarketTabFilter = 'all' | 'fav' | 'held'
 export type MarketSortKey = 'volume' | 'price' | 'change'
 export type SortDir = 'asc' | 'desc'
 
-const FAVORITES_KEY = 'b100.favPairs'
-
-export function loadFavorites(storage: Pick<Storage, 'getItem'> | undefined = safeStorage()): string[] {
-  if (!storage) return []
-  try {
-    const raw = storage.getItem(FAVORITES_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((x): x is string => typeof x === 'string')
-  } catch {
-    return []
-  }
-}
-
-export function saveFavorites(
-  favorites: readonly string[],
-  storage: Pick<Storage, 'setItem'> | undefined = safeStorage(),
-): void {
-  if (!storage) return
-  try {
-    storage.setItem(FAVORITES_KEY, JSON.stringify([...favorites]))
-  } catch {
-    // 本地存储不可用时收藏仅保存在内存里，不阻断行情浏览
-  }
-}
-
 export function toggleFavorite(favorites: readonly string[], pair: string): string[] {
   return favorites.includes(pair)
     ? favorites.filter((p) => p !== pair)
     : [...favorites, pair]
-}
-
-function safeStorage(): Storage | undefined {
-  try {
-    return typeof localStorage !== 'undefined' ? localStorage : undefined
-  } catch {
-    return undefined
-  }
 }
 
 export function filterMarketRows(

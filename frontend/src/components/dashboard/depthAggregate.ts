@@ -116,3 +116,42 @@ export function depthSeries(
     bestBid != null && bestAsk != null && mid > 0 ? ((bestAsk - bestBid) / mid) * 100 : 0
   return { bids: bidPoints, asks: askPoints, mid, spreadPct }
 }
+
+/* ---------- lightweight-charts 数据映射（深度图用） ---------- */
+
+export interface DepthChartPoint {
+  /** 合成时间戳（秒）：价格 ×100 取整——深度图的横轴是价格而非时间，
+   *  借 lightweight-charts 的时间轴承载价格刻度（时间轴本身隐藏，价格标签由组件按比例另行渲染） */
+  time: number
+  value: number
+}
+
+/**
+ * 把深度序列映射成两条 Area/Line series 的数据：
+ * - 横轴按价格比例间距（time = round(price × 100)），重复/过密时强制单调递增；
+ * - 买盘在「最优买价 → 中间价」之间补一段平台（= 全部买盘累计），卖盘在「中间价 → 最优卖价」同理，
+ *   与深度图的累计语义一致（中间价处两侧深度都取全量）。
+ */
+export function depthChartData(series: DepthSeries): { bids: DepthChartPoint[]; asks: DepthChartPoint[] } {
+  const toTime = (price: number) => Math.max(1, Math.round(price * 100))
+  const monotonic = (pts: DepthChartPoint[]): DepthChartPoint[] => {
+    const out: DepthChartPoint[] = []
+    for (const p of pts) {
+      const last = out[out.length - 1]
+      if (last && p.time <= last.time) out.push({ time: last.time + 1, value: p.value })
+      else out.push(p)
+    }
+    return out
+  }
+  const totalBid = series.bids.reduce((m, p) => Math.max(m, p.cum), 0)
+  const totalAsk = series.asks.reduce((m, p) => Math.max(m, p.cum), 0)
+  const bids = monotonic([
+    ...series.bids.map((p) => ({ time: toTime(p.price), value: p.cum })),
+    ...(series.bids.length ? [{ time: toTime(series.mid), value: totalBid }] : []),
+  ])
+  const asks = monotonic([
+    ...(series.asks.length ? [{ time: toTime(series.mid), value: totalAsk }] : []),
+    ...series.asks.map((p) => ({ time: toTime(p.price), value: p.cum })),
+  ])
+  return { bids, asks }
+}

@@ -6,6 +6,7 @@
  * （Vault deposit/withdraw + 授权口径不变），只是搬进子视图。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Select } from '@mantine/core'
 import { Contract, JsonRpcProvider, formatUnits } from 'ethers'
 import type { ChainConfig } from '../config/chains'
 import { VAULT_ABI, ERC20_ABI } from '../config'
@@ -24,6 +25,7 @@ import {
   type TokenBalance,
 } from './assets/valuation'
 import { useMakerVaultData } from './assets/makerVaultData'
+import { SparklineChart } from './SparklineChart'
 import { MakerVaultPage } from './MakerVaultPage'
 import { ensureAllowance, parseAmountInput } from './assets/tokenOps'
 import { evaluateFeedReading, getFeedConfig, readChainlinkFeed } from '../services/referencePrice'
@@ -251,7 +253,9 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
                 {change24.pct >= 0 ? '+' : ''}
                 {change24.pct.toFixed(2)}%
               </b>
-              <Sparkline values={change24.spark} up={change24.pct >= 0} />
+              <span className="assets-spark">
+                <SparklineChart points={change24.spark} up={change24.pct >= 0} height={20} />
+              </span>
             </span>
           ) : (
             <span className="assets-dim">暂无 24 小时前的快照，记录中</span>
@@ -439,21 +443,6 @@ function AssetsTabs({ view, setView }: { view: AssetsView; setView: (v: AssetsVi
   )
 }
 
-function Sparkline({ values, up }: { values: number[]; up: boolean }) {
-  if (values.length < 2) return null
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const range = max - min || 1
-  const pts = values
-    .map((v, i) => `${((i / (values.length - 1)) * 54).toFixed(1)},${(16 - ((v - min) / range) * 14).toFixed(1)}`)
-    .join(' ')
-  return (
-    <svg width="56" height="18" viewBox="0 0 56 18" aria-hidden="true">
-      <polyline points={pts} fill="none" stroke={up ? 'var(--b100-up)' : 'var(--b100-down)'} strokeWidth="1.6" />
-    </svg>
-  )
-}
-
 /* ---------------- 存入 / 提取子视图（逻辑与文案沿用原资产页） ---------------- */
 
 function TransferView({
@@ -548,13 +537,13 @@ function TransferView({
           <span className="markets-ico" style={{ background: tokenMeta(sym).bg, color: tokenMeta(sym).fg }} aria-hidden="true">
             {tokenMeta(sym).glyph}
           </span>
-          <select value={sym} onChange={(e) => setSym(e.target.value)} aria-label="选择代币">
-            {symbols.map((s) => (
-              <option key={s} value={s}>
-                {s} · {tokenMeta(s).name}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={sym}
+            onChange={(v) => v && setSym(v)}
+            data={symbols.map((s) => ({ value: s, label: `${s} · ${tokenMeta(s).name}` }))}
+            aria-label="选择代币"
+            style={{ flex: 1 }}
+          />
         </div>
         <label className="assets-field-label" htmlFor="transfer-amount">
           数量

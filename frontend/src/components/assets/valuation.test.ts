@@ -62,7 +62,8 @@ describe('valuation snapshots', () => {
       now,
     )
     expect(ch?.pct).toBeCloseTo(10)
-    expect(ch?.spark[ch!.spark.length - 1]).toBe(110)
+    expect(ch?.spark[ch!.spark.length - 1].v).toBe(110)
+    expect(ch?.spark[ch!.spark.length - 1].t).toBe(now)
   })
 })
 
