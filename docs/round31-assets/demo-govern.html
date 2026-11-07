@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390, initial-scale=1">
+<title>比特100 · 治理与贡献（第31轮设计演示）</title>
+<link rel="stylesheet" href="demo.css">
+</head>
+<body>
+<div class="phone">
+
+  <div class="topbar">
+    <div class="mark">B</div>
+    <div class="title">治理与贡献</div>
+    <span class="demo-flag">设计演示 · 示意数据</span>
+    <div class="spacer"></div>
+    <div class="chain-chip"><span class="dot"></span>Sepolia</div>
+    <div class="wallet-chip">0x4B3f…a93e</div>
+  </div>
+
+  <div class="page">
+    <div class="page-head">
+      <h2>治理与贡献</h2>
+      <p>参与协议治理投票，或查询并领取你的贡献奖励。投票期 7 天、通过后有 2 天时锁才执行，规则写在治理合约里。</p>
+    </div>
+
+    <!-- 子栏目：文字页签（现有 governSub 逻辑不变，只换骨架呈现） -->
+    <div class="text-tabs">
+      <button class="on">治理</button><button>贡献奖励</button>
+    </div>
+
+    <!-- 治理：提案列表行 -->
+    <div class="card" style="padding-top:6px">
+      <div class="order-row">
+        <div class="l1">#3 将结算提交者加入白名单 <span class="pill amber">投票中</span></div>
+        <div class="l2"><span>赞成 <span class="num">62.4%</span></span><span>反对 <span class="num">8.1%</span></span><span>剩余 <span class="num">3 天 04:12</span></span></div>
+      </div>
+      <div class="order-row">
+        <div class="l1">#2 调整做市商角色名单 <span class="pill gray">已通过 · 时锁中</span></div>
+        <div class="l2"><span>赞成 <span class="num">81.0%</span></span><span>反对 <span class="num">3.2%</span></span><span>可执行 <span class="num">11-09 14:00</span></span></div>
+      </div>
+      <div class="order-row">
+        <div class="l1">#1 初始参数设定 <span class="pill up">已执行</span></div>
+        <div class="l2"><span>赞成 <span class="num">90.5%</span></span><span>反对 <span class="num">1.0%</span></span><span>执行于 <span class="num">11-02</span></span></div>
+      </div>
+      <p class="hint" style="margin-top:8px">点任一提案进入详情投票。投票权重来自活跃节点 Merkle 集合快照，投票与执行都是链上交易，在钱包中确认。</p>
+    </div>
+
+    <!-- 贡献奖励（第二子栏目示意，同页签切换后显示） -->
+    <div class="card">
+      <h3>我的贡献奖励</h3>
+      <p class="hint">奖励按两周一期结算，权重：撮合 40 / 存储 25 / 流动性 20 / 中继 15。贡献以签名证明提交、按信誉分加权，期结后生成 Merkle 树，凭证明领取。</p>
+      <div class="rows" style="margin-top:6px">
+        <div class="rowline"><span class="k">本期我的贡献分</span><span class="v num">128.50</span></div>
+        <div class="rowline"><span class="k">待领取（已结算期次）</span><span class="v num">42.75 TKA</span></div>
+        <div class="rowline"><span class="k">历史累计领取</span><span class="v num">310.00 TKA</span></div>
+      </div>
+      <div style="height:12px"></div>
+      <button class="btn primary">领取奖励</button>
+      <div class="link-row" style="margin-top:12px"><span>Merkle 空投领取</span><span class="chev">›</span></div>
+    </div>
+
+  </div>
+
+  <nav class="tabbar">
+    <a href="demo-trade.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 3v3M7 15v6M5 6h4v9H5zM17 2v4M17 14v8M15 6h4v8h-4z"/></svg>交易</a>
+    <a href="demo-assets.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16.5 15h.01"/></svg>资产</a>
+    <a href="demo-bridge.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg>跨链桥</a>
+    <a class="active" href="demo-govern.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>治理与贡献</a>
+    <a href="demo-data.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3"/></svg>数据</a>
+  </nav>
+
+</div>
+</body>
+</html>

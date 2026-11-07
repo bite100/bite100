@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390, initial-scale=1">
+<title>比特100 · 跨链桥（第31轮设计演示）</title>
+<link rel="stylesheet" href="demo.css">
+</head>
+<body>
+<div class="phone">
+
+  <div class="topbar">
+    <div class="mark">B</div>
+    <div class="title">跨链桥</div>
+    <span class="demo-flag">设计演示 · 示意数据</span>
+    <div class="spacer"></div>
+    <div class="chain-chip"><span class="dot"></span>Sepolia</div>
+    <div class="wallet-chip">0x4B3f…a93e</div>
+  </div>
+
+  <div class="page has-sticky">
+    <div class="page-head">
+      <h2>跨链桥</h2>
+      <p>把代币从一条链转移到另一条链，到达后可在目标链继续交易。本站接了四条跨链通道，费用、时效和安全模型各不相同，<b>由你自己选，没有默认选项</b>。</p>
+    </div>
+
+    <!-- ① 源链 / 目标链 + 数量 -->
+    <div class="card">
+      <div class="swap-tile">
+        <div class="k">从</div>
+        <div class="chain">Sepolia 测试网 <span class="chev">▾</span></div>
+      </div>
+      <div class="swap-mid"><div class="circ">⇅</div></div>
+      <div class="swap-tile">
+        <div class="k">到</div>
+        <div class="chain">Base Sepolia 测试网 <span class="chev">▾</span></div>
+      </div>
+      <div class="field">
+        <label>转移数量（TKA）</label>
+        <div class="inputbox">
+          <input class="num" value="10.00" readonly>
+          <span class="unit">TKA</span>
+          <button class="maxbtn">最大</button>
+        </div>
+      </div>
+      <div class="avail"><span>源链 Vault 可用</span><span class="num">320.00 TKA</span></div>
+    </div>
+
+    <!-- ② 通道选择（知情选择：费用 / 时效 / 安全模型并排展示，不预选） -->
+    <div class="card">
+      <h3>选择跨链通道</h3>
+      <p class="hint">怎么选：① 在意验证层厚实、费用先锁定 → Chainlink CCIP；② 在意费用低、能接受等久一点和偶尔手动收尾 → Wormhole；③ LayerZero 到账较快，但请先看清它标出的 1-of-1 验证方风险再决定；④ 赶时间、在主网之间转主流资产 → 极速到账（仅主网，测试网不可用）。</p>
+
+      <div class="method-row">
+        <div class="radio"></div>
+        <div style="flex:1;min-width:0">
+          <div class="mn">LayerZero</div>
+          <div class="md">验证方：LayerZero 网络的 DVN 验证——<b style="color:var(--b100-down)">⚠ 当前只有 1 个验证方（1-of-1 配置）</b>。预计 10–20 分钟到账（预估，视源链确认速度而定）。</div>
+        </div>
+        <div class="mf num">0.12 TKA<small>桥费（演示值）</small></div>
+      </div>
+
+      <div class="method-row">
+        <div class="radio"></div>
+        <div style="flex:1;min-width:0">
+          <div class="mn">Chainlink CCIP</div>
+          <div class="md">验证方：Chainlink 去中心化预言机网络（DON）提交，另有独立的风险管理网络（RMN）监控，异常时可自动熔断。预计 10–20 分钟到账（预估，含源链最终性等待）。</div>
+        </div>
+        <div class="mf num">0.00023 ETH<small>费用先锁定（演示值）</small></div>
+      </div>
+
+      <div class="method-row">
+        <div class="radio"></div>
+        <div style="flex:1;min-width:0">
+          <div class="mn">Wormhole</div>
+          <div class="md">验证方：Guardian 守护者网络签名（VAA）。预计 15–25 分钟到账（预估，要等源链完全确认 + Guardian 签名）；测试网没有自动中继，偶尔需要手动收尾。</div>
+        </div>
+        <div class="mf num">0.10 TKA<small>桥费（演示值）</small></div>
+      </div>
+
+      <div class="method-row">
+        <div class="radio"></div>
+        <div style="flex:1;min-width:0">
+          <div class="mn">极速到账（做市商垫付）<span class="pill gray">主网功能 · 测试网不可用</span></div>
+          <div class="md">安全模型：没有跨链消息验证环节——做市商用自有资金在目的链先付给你，事后自行过桥平账；你面对的是报价与履约风险，不是验证方作恶风险。主网预计约 1–5 分钟到账，费用从到账里扣。</div>
+        </div>
+        <div class="mf num">—<small>测试网不报价</small></div>
+      </div>
+
+      <p class="hint" style="margin-top:10px">尚未选择通道：请对比四条通道的费用、时效与风险后点选一条，再继续。点「发起跨链转移」后会再弹确认框，复述费用与风险，确认后在钱包里依次批准。</p>
+    </div>
+
+    <!-- ③ 风险提示（与第 19/20 轮确认文案同口径，不弱化） -->
+    <div class="risk-note">
+      跨链转账<b>不可撤销</b>。以 LayerZero 通道为例的主要风险：当前验证方是 1-of-1——跨链消息只由一个验证方（LayerZero Labs 的 DVN）签字确认，没有第二个独立验证方复核；这个验证方若被攻破或作恶，假消息也可能被放行。本站已定硬门禁：主网开放此桥之前，必须先升级为多验证方配置并读回核实。第一次使用任一通道，请先小额试走。
+    </div>
+
+  </div>
+
+  <!-- 固定操作条（位于底部标签栏之上）：费用摘要 + 主按钮；未选通道时为禁用态 -->
+  <div class="sticky-cta">
+    <div class="sum"><span>桥费</span><span class="num">待选择通道</span><span>预计到账</span><span class="num">—</span></div>
+    <button class="btn primary" style="opacity:.45">先选择通道，再发起转移</button>
+  </div>
+
+  <nav class="tabbar">
+    <a href="demo-trade.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 3v3M7 15v6M5 6h4v9H5zM17 2v4M17 14v8M15 6h4v8h-4z"/></svg>交易</a>
+    <a href="demo-assets.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16.5 15h.01"/></svg>资产</a>
+    <a class="active" href="demo-bridge.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg>跨链桥</a>
+    <a href="demo-govern.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>治理与贡献</a>
+    <a href="demo-data.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3"/></svg>数据</a>
+  </nav>
+
+</div>
+</body>
+</html>
