@@ -1,5 +1,12 @@
 # 比特100（Bit100）与 Hyperliquid 差距分析与改进路线图
 
+> **第十七轮更新（2026-11-07，Ren 拍板）**：§2.4 / §6-3 的「AMM 是否保留」
+> 决策已落定——**砍掉 AMM，走纯订单簿 + 做市金库**。AMM 已下线（源码/前端/
+> 部署脚本，见 `docs/round17-amm-removal-market-orders-2026-11-07.md` 引用地图）；订单类型缺口（§2.1）已补
+> **市价单（IOC + 签名保护价）**，见 `docs/market-orders.md`；做市金库设计
+> 已出（`docs/market-maker-vault-design.md`），待 Ren 选托管档位后落地。
+> 下文差距表为编写时点的快照，相关条目以本注记为准。
+
 > 编写：2026-11-07（代码审计 + 构建验证 + Hyperliquid 公开资料研究后产出）
 > 范围：本仓库 `contracts/`（Foundry/Solidity）、`node/`（Go + libp2p）、`frontend/`（React + wagmi），已部署 Sepolia 测试网。
 > Hyperliquid 资料来源：其核心撮合引擎**闭源**，本文所有关于 Hyperliquid 的描述均来自公开来源——官方文档 docs.hyperliquid.xyz（HyperCore Overview / Order Book / Fees / Oracle / Liquidations / Protocol Vaults / Nonces and API Wallets 等页面，2026-11-07 查阅）与官方 GitHub 组织 github.com/hyperliquid-dex（`node` 仓库仅含部署指南与 GPG 签名的预编译二进制、无节点源码；`contracts` 仓库仅 Bridge2 等桥合约；Python SDK 为 MIT 开源）。不声称读过其核心源码。

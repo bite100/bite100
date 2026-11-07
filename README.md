@@ -10,16 +10,16 @@
 
 | 层级 | 技术栈 | 功能 |
 |------|--------|------|
-| **前端** | React + TypeScript + wagmi + Mantine | 钱包连接、订单簿、K 线、挂单、存提款、Swap、治理、跨链桥 |
-| **合约** | Solidity (Foundry) | Vault、Settlement、AMMPool、Governance、FeeDistributor、ContributorReward |
+| **前端** | React + TypeScript + wagmi + Mantine | 钱包连接、订单簿、K 线、挂单、存提款、治理、跨链桥 |
+| **合约** | Solidity (Foundry) | Vault、Settlement、Governance、FeeDistributor、ContributorReward |
 | **节点** | Go + libp2p + GossipSub | 链下订单簿、撮合、中继、存储、贡献证明 |
 
 ---
 
 ## 功能
 
-- **交易**：链下订单簿、限价单、AMM Swap、链上 Settlement 结算（0.01% 手续费）
-- **资金**：Vault 存提 ERC20、AMM 流动性
+- **交易**：链下订单簿、限价单 + 市价单（IOC，带签名保护价）、链上 Settlement 结算（0.01% 手续费）；无自有 AMM，流动性走订单簿 + 做市金库（设计中）
+- **资金**：Vault 存提 ERC20；下单时 Vault 可用不足可在下单面板内一键补存差额
 - **治理**：提案与投票、手续费分配
 - **贡献奖励**：节点贡献证明、链上领取、Merkle 空投
 - **跨链**：LayerZero OApp 跨链桥接
