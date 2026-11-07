@@ -1,5 +1,7 @@
 # Bit100 Base Sepolia 测试网同构部署记录（2026-11-07，第八轮 / 多链 M1 收尾）
 
+> **后续（2026-11-07 第十五轮）**：本链十合约已因挂单余额锁定重新部署，Base Sepolia 现行地址以 `docs/round15-deployment-2026-11-07.md` 为准；本文件保留为历史部署记录。
+
 第二条链选定 **Base Sepolia（chainId 84532）**（Ren 按 gas 成本拍板：Base 在三条候选链中
 gas 最低且仓库配置预置最全；桥路线已定为修复现有 LayerZero 桥，属 M2）。本轮用与
 Sepolia 相同的一套脚本（第七轮已链参数化，全程带 `TARGET_CHAIN_ID=84532` 护栏）把

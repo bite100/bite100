@@ -259,6 +259,14 @@ Go 节点侧（`node/`，均为机械性腐坏，不改行为）：
   - 未做（等拍板）：不部署第二条链（§6-5）、不改桥路线（§6-6）、不引入新依赖。
 - 基线保持：合约 forge test **74/74**、Go 节点 `go build`（除既有 `cmd/reputation-updater` 示例 stub）与 `go test ./internal/...` 全绿；本轮未动前端（77/77 基线不受影响）。
 
+## 8. 第十五轮进展（2026-11-07）：挂单余额锁定
+
+- **缺陷修复**：第十四轮文案核查发现挂单不冻结 Vault 余额（可挂单后提空、成交时结算失败）。Ren 拍板对齐主流交易所：挂单即锁定。设计见 `docs/order-balance-locking.md`。
+- **合约**：Vault 新增锁定账本（按订单 EIP-712 摘要记账；义务按方向从签名订单派生——卖锁 (tokenIn, amountIn)、买锁 (tokenOut, amountOut)）；withdraw 改可用额闸门；Settlement 结算记账同一步消费锁定，无锁不结算（全入口共用）。forge test 100/100（新增 16 例锁定生命周期/不变量）。
+- **节点**：订单接受时校验可用余额并驱动落锁、撤单释放（`chain.vault` + `VAULT_LOCKER_PRIVATE_KEY` 启用，未启用行为不变）；anvil 与双链真实 E2E 全闭环通过（落锁读回 → 超额提取被拒 → 释放 → 结算分账 99%/1% → 重放被拒）。
+- **前端**：资产/面板/余额页拆「可用 / 锁定中」，下单口径改 Vault 可用额，第十四轮三处「提空导致结算失败」警告改写为锁定口径。
+- **部署**：双链十合约重新部署并读回（FD 开发者仍为 Ren、份额 100），记录见 `docs/round15-deployment-2026-11-07.md`。注意：LayerZero 桥仍绑定上一代 TKA，桥接需单独一轮迁移；Sepolia 部署者测试币余额已低（该链 gas 计量约标准 7 倍，见部署记录）。
+
 ## 附：Hyperliquid 公开来源清单（2026-11-07 查阅）
 
 - 官方文档 docs.hyperliquid.xyz（经官方 GitBook 镜像读取）：HyperCore Overview、Order Book、Fees、Oracle、Liquidations、Protocol Vaults、Nonces and API Wallets 各页面。
