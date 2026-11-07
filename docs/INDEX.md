@@ -1,0 +1,66 @@
+# Bit100 文档索引（INDEX）
+
+> **项目底线：集成优先，不重复造轮子**——本项目的底层就是集成现成的开源项目、协议、标准与服务，自研只写胶水与差异化核心。全文见仓库根目录 `README.md` 的「项目底线」一节，所有轮次的设计与实现均以此为准。
+
+> 本索引于 2026-11-08 全面清理时新增，只做导航，不改动任何既有文档正文。
+>
+> **状态口径**：`已上线` = 内容已合入 main 并在双测试网/线上生效；`历史记录` = 当轮留痕，其中合约地址等已被后续轮次取代（文档头部多有取代横幅）；`设计定版待实现` = 设计已拍板、实现代码未动。
+>
+> **现行合约地址只看第 30 轮两篇文档**（round30-nodeless-stage1 / round30-l2-legb）。部署类文档存在取代链：第 3/8 轮 → 第 15 轮 → 第 27 轮 → 第 30 轮，旧文档地址均已过时。
+
+## 一、现行规范与长期设计
+
+| 文档 | 内容 | 状态 |
+|---|---|---|
+| [eip712-order-spec.md](eip712-order-spec.md) | EIP-712 订单签名规范，全项目唯一规范（域、字段、逐字节口径） | 已上线（现行规范） |
+| [order-balance-locking.md](order-balance-locking.md) | 挂单余额锁定设计：按订单摘要落锁、Vault 验签推导金额（第 15 轮设计） | 已上线 |
+| [market-orders.md](market-orders.md) | 市价单设计：签名限价保护 + 无签名市价标记、未成交余量自动取消（第 17 轮 Part B） | 已上线 |
+| [market-maker-vault-design.md](market-maker-vault-design.md) | 做市金库设计（第 17 轮 Part C），第 27 轮按此实现 Tier 2 合约金库 | 已上线（设计原件） |
+| [bridge-abstraction.md](bridge-abstraction.md) | 桥抽象层设计：多桥统一接口与选桥口径，第 19/20 轮实现的依据 | 已上线（设计原件） |
+| [nodeless-design-2026-11-07.md](nodeless-design-2026-11-07.md) | 无节点化架构设计（第 24 轮）：中继/落锁/撮合/索引四职能替代与五阶段迁移 | 设计定版，分阶段实施中（阶段 1 已上线） |
+| [hyperliquid-gap-roadmap.md](hyperliquid-gap-roadmap.md) | 与 Hyperliquid 的差距分析与改进路线图（第 7 轮），后续多轮的排期母本 | 历史记录（路线图，部分条目已被后续轮次改向） |
+
+## 二、轮次记录（按轮次）
+
+| 轮次 | 文档 | 内容 | 状态 |
+|---|---|---|---|
+| 1–2 | [anvil-e2e-verification.md](anvil-e2e-verification.md) | 本地 anvil 端到端验证记录（P0-3） | 历史记录 |
+| 3 | [sepolia-deployment-2026-11-07.md](sepolia-deployment-2026-11-07.md) | Sepolia 十合约首部署与结算验证；地址已被第 15 轮取代 | 历史记录 |
+| 7 | [hyperliquid-gap-roadmap.md](hyperliquid-gap-roadmap.md) | 差距分析与路线图（见上表） | 历史记录 |
+| 8 | [base-sepolia-deployment-2026-11-07.md](base-sepolia-deployment-2026-11-07.md) | Base Sepolia 同构部署（多链 M1 收尾）；地址已被第 15 轮取代 | 历史记录 |
+| 9 | [bridge-deployment-2026-11-07.md](bridge-deployment-2026-11-07.md) | LayerZero 桥部署（M2a）；桥地址已被第 16 轮取代，§4 DVN 1-of-1 现状与主网门禁结论仍有效 | 历史记录 |
+| 10 | [dependency-upgrade-2026-11-07.md](dependency-upgrade-2026-11-07.md) | 依赖升级记录（OZ/forge-std/libp2p/React 等） | 历史记录 |
+| 11 | [frontend-redesign-2026-11-07.md](frontend-redesign-2026-11-07.md) | 前端重设计说明（现代极简风定版） | 历史记录 |
+| 12 | [trade-layout-hyperliquid-benchmark.md](trade-layout-hyperliquid-benchmark.md) | 交易主屏布局对标记录 | 历史记录 |
+| 13 | [site-restructure-2026-11-07.md](site-restructure-2026-11-07.md) | 全站界面重构（五分区信息架构） | 历史记录 |
+| 14 | [copy-rewrite-2026-11-07.md](copy-rewrite-2026-11-07.md) | 全站文案重写：~130 条文案 + 16 处说明块 | 历史记录 |
+| 15 | [round15-deployment-2026-11-07.md](round15-deployment-2026-11-07.md) | 挂单余额锁定版双链重新部署记录 | 历史记录（地址已被第 30 轮取代） |
+| 16 | [round16-bridge-migration-2026-11-07.md](round16-bridge-migration-2026-11-07.md) | LayerZero 桥迁移到第 15 轮新 TKA，含真实跨链到账 E2E | 历史记录 |
+| 17 | [round17-amm-removal-market-orders-2026-11-07.md](round17-amm-removal-market-orders-2026-11-07.md) | 砍掉 AMM + 市价单落地 + 做市金库设计 + 下单一键补存 | 已上线 |
+| 19 | [round19-three-bridges-2026-11-07.md](round19-three-bridges-2026-11-07.md) | 三桥选择上线：LayerZero + CCIP + Wormhole，桥页知情选择 | 已上线 |
+| 20 | [round20-fastlane-2026-11-07.md](round20-fastlane-2026-11-07.md) | 垫资快线（LI.FI 求解器）接入为第四通道，主网功能、测试网硬阻断 | 已上线（主网待 key） |
+| 21 | [round21-gas-rules-2026-11-07.md](round21-gas-rules-2026-11-07.md) | gas 规则落进结算层：双方对半分摊、失败归发起者 | 已上线 |
+| 22 | [round22-node-deployment-2026-11-07.md](round22-node-deployment-2026-11-07.md) | 双链节点部署上线（VM systemd + 隧道公网入口） | 已上线 |
+| 23 | [round23-oracle-reference-price-2026-11-07.md](round23-oracle-reference-price-2026-11-07.md) | Chainlink 预言机参考价层接入 | 已上线 |
+| 24 | [nodeless-design-2026-11-07.md](nodeless-design-2026-11-07.md) | 无节点化架构设计（见上表） | 设计定版，分阶段实施中 |
+| 25 | [round25-mainstream-pairs-2026-11-07.md](round25-mainstream-pairs-2026-11-07.md) | 主流交易对上架：8 个 MockERC20 × 双链 + 交易对切换器 | 已上线 |
+| 26 | [round26-settlement-wiring-2026-11-07.md](round26-settlement-wiring-2026-11-07.md) | 节点结算接线：守护进程内提交器、待结算成交回补 | 已上线 |
+| 27 | [round27-maker-vault-2026-11-08.md](round27-maker-vault-2026-11-08.md) | 做市金库（Tier 2）ERC-4626 上线双链；合约栈后被第 30 轮重部署 | 历史记录（地址已被第 30 轮取代） |
+| 28 | [round28-chart-orderbook-ui-2026-11-08.md](round28-chart-orderbook-ui-2026-11-08.md) | K 线与订单显示视觉重做（含 1e18 显示缩放修复）；截图在 [round28-assets/](round28-assets/) | 已上线 |
+| 29 | [round29-node-fixes-2026-11-08.md](round29-node-fixes-2026-11-08.md) | 节点六项问题修复（陈旧挂单、amountOut、/api/trades、提交器对账等） | 已上线 |
+| 30 | [round30-nodeless-stage1-2026-11-08.md](round30-nodeless-stage1-2026-11-08.md) | 无节点化阶段 1：订单公告栏中继（Worker+D1+Nostr 镜像）+ 前端双发 | 已上线（中继代码完成，待 Cloudflare 部署） |
+| 30 | [round30-l2-legb-2026-11-08.md](round30-l2-legb-2026-11-08.md) | 第 30 轮腿 B：L2 无权限落锁 + 双链全栈重部署（**现行合约地址在此**） | 已上线 |
+
+## 三、分支上的设计文档（未合入 main）
+
+| 文档 | 所在分支 / worktree | 内容 | 状态 |
+|---|---|---|---|
+| round31-mobile-skeleton-2026-11-08.md | 分支 `round31-mobile-skeleton` / `~/workspace/bite100-r31` | 第 31 轮移动端四栏骨架设计定版 + 演示图（docs/round31-assets/） | 设计定版待实现（Ren 已批准，暂停中） |
+| cross-chain-default-bridge-design-2026-11-08.md | 分支 `crosschain-default-bridge-design` / `~/workspace/bite100-xchain` | 跨链默认桥交易设计：预选默认桥、成交后自动交付、四项拍板已定版 | 设计定版待排期 |
+
+## 四、docs 之外的关键文档
+
+| 路径 | 内容 |
+|---|---|
+| `relay/README.md`（仓库根目录 relay/） | 第 30 轮中继（Cloudflare Worker + D1）的部署与运维说明，含上线 runbook |
+| `~/workspace/research_notes/cross-chain-default-trade-20261108/report.md`（仓库外） | 跨链默认桥设计所依据的外部调研报告 |
