@@ -114,6 +114,7 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         address gasRecipient
     );
     event FeeBpsSet(uint16 oldBps, uint16 newBps);
+    event FeeDistributorSet(address indexed oldDistributor, address indexed newDistributor);
     event FeeTokenSet(address indexed token);
     event FeeCapSet(address indexed token, uint256 cap);
     event RelayerSet(address indexed relayer);
@@ -152,6 +153,16 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         uint16 old = feeBps;
         feeBps = _feeBps;
         emit FeeBpsSet(old, _feeBps);
+    }
+
+    /// @notice 设置手续费分配合约（结算手续费的落地地址）；owner 或 governance 可调用，零地址拒绝。
+    /// 此前 feeDistributor 仅能在构造函数中设定，切换手续费落地（如 FeeDistributor 升级）必须
+    /// 重部署 Settlement；提供 setter 后切换只需一笔交易。
+    function setFeeDistributor(address _feeDistributor) external onlyOwnerOrGovernance {
+        require(_feeDistributor != address(0), "Settlement: zero address");
+        address old = address(feeDistributor);
+        feeDistributor = FeeDistributor(_feeDistributor);
+        emit FeeDistributorSet(old, _feeDistributor);
     }
 
     /// @notice 设置某代币手续费上限（该代币最小单位），0 表示不设上限；如 USDC 6 位小数下 1e6 = 1 USD

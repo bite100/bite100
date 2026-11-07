@@ -18,6 +18,9 @@
 | Vault | [0xb4945C5E0208803FF11d0f86173B55489aE87d2A](https://sepolia.etherscan.io/address/0xb4945C5E0208803FF11d0f86173B55489aE87d2A) | [0xe3c252e9…b873e](https://sepolia.etherscan.io/tx/0xe3c252e91a815cda54fa0b995112395e8340e62fd083577d37b657c7b04b873e) |
 | FeeDistributor | [0xfb458224973c91ddBa3Fb5B55DAD337038768b21](https://sepolia.etherscan.io/address/0xfb458224973c91ddBa3Fb5B55DAD337038768b21) | [0xc1410a73…eca2](https://sepolia.etherscan.io/tx/0xc1410a735bd0f2e5ee56bbf314288d9e3def2b31bb39ad60b31cae54fd97eca2) |
 | Settlement | [0xA4Eaa449360239e1F719608236d087c23379d5A6](https://sepolia.etherscan.io/address/0xA4Eaa449360239e1F719608236d087c23379d5A6) | [0xffa3c817…c111](https://sepolia.etherscan.io/tx/0xffa3c81758b454a2dbfefdba3f8381b241243af5bee2083d8c24c12bab5bc111) |
+
+> 注：上表 Settlement 已在第五轮被新地址替代（见文末第五轮小节），Vault 的 settlement 登记已切换；
+> 旧 Settlement 合约仍在链上，但不再被 Vault 认可，不能再结算。
 | MockERC20 TKA (Token0) | [0x903cdDF52963D9DEA0BDF8be9159E08706683654](https://sepolia.etherscan.io/address/0x903cdDF52963D9DEA0BDF8be9159E08706683654) | [0x26cbb76a…9347](https://sepolia.etherscan.io/tx/0x26cbb76a0537451c7c906469d3edc226cb8c3b6c2f80142aeda0489504eb9347) |
 | MockERC20 TKB (Token1) | [0x1Ee28c1c490727e49939C95032C749ea5b58b45f](https://sepolia.etherscan.io/address/0x1Ee28c1c490727e49939C95032C749ea5b58b45f) | [0xed94418ae…4dec](https://sepolia.etherscan.io/tx/0xed94418ae2d238ce42d3c62733da0d4c199891858a9bf5129b48b6de7bc64dec) |
 | AMMPool | [0x20a78bCb39Ff510AdBa3D3AEC9229a9583C5BDB3](https://sepolia.etherscan.io/address/0x20a78bCb39Ff510AdBa3D3AEC9229a9583C5BDB3) | [0x62300dd2…ea19](https://sepolia.etherscan.io/tx/0x62300dd2ca6fd4a513593c03ec25ce54c153e78067199559d1da3e516284ea19) |
@@ -120,3 +123,62 @@ developer = Ren 地址、developerShareBps = 100（默认 1%）、totalShareBps 
   因此本轮没有重跑 Settlement 的 e2e 结算来验证新 FD（跑了也只会进旧 FD）；新 FD 的分账改用
   上面的 `receiveFee` 直调完成等效验证。若要全量切换，需 Ren 批准重部署 Settlement
   （并连带处理 Vault/节点对 Settlement 地址的引用）。
+
+## 第五轮追加（2026-11-07）：Settlement 方案 B——加 setFeeDistributor 并重部署，全量切换新 FD
+
+Ren 拍板方案 B：不直接重部署了事，而是先给 Settlement 补上 `setFeeDistributor` setter
+（消除「手续费落地写死在构造函数」的设计缺陷，以后换 FD 只需一笔交易），再重部署
+Settlement 指向第四轮的新 FeeDistributor，使订单簿路径手续费全量切换到新 FD。
+
+### 合约改动（contracts/src/Settlement.sol）
+
+- 新增事件 `FeeDistributorSet(oldDistributor, newDistributor)`（均 indexed）。
+- 新增 `setFeeDistributor(address)`：仅 owner 或 governance（沿用既有
+  `onlyOwnerOrGovernance` 风格，与 `setFeeBps` 一致），零地址 revert
+  （`Settlement: zero address`），变更发事件。
+- 测试：Settlement.t.sol 新增 5 个用例（owner 可设且事件正确、governance 可设、
+  未授权 revert、零地址 revert、切换后一笔结算的手续费落入新 FD 而旧 FD 为 0），
+  forge test **74/74 全绿**（此前基线 69/69）。
+
+### 新 Settlement 部署与绑定补齐
+
+部署脚本：`contracts/script/DeploySettlementV2.s.sol`（构造参数：沿用共用 Vault +
+新 FD），一次 broadcast 完成部署与 Vault 绑定。
+
+| 项目 | 值 / tx |
+|---|---|
+| 新 Settlement | [0xee35587f3e3f500de9f9E1E97c340F801dc71078](https://sepolia.etherscan.io/address/0xee35587f3e3f500de9f9E1E97c340F801dc71078) |
+| 部署 tx | [0xf96b9e61…f2d2](https://sepolia.etherscan.io/tx/0xf96b9e611475f38cf6cdde3ffee73140e41b8c6dd75a034d37f678cc45f4f2d2) |
+| `Vault.setSettlement(新 Settlement)` tx | [0x76351f64…7952](https://sepolia.etherscan.io/tx/0x76351f64fbf380e366454b8a7d376bedbb046fae2df7291ec16122d4fcf57952) |
+| 旧 Settlement（已被替代） | [0xA4Eaa449360239e1F719608236d087c23379d5A6](https://sepolia.etherscan.io/address/0xA4Eaa449360239e1F719608236d087c23379d5A6) |
+
+绑定补齐清单（逐项核对旧实例链上状态后确认）：旧实例在 Deploy.runWithAmmAndMocks 中的
+外部绑定只有 `Vault.setSettlement` 一项；governance、relayer、nodeRewards、founder、
+usdtToken、feeToken 均为零值，feeBps = 1、feeCapPerToken(TKA/TKB) = 0、
+minRelayerReputation = 5000、maxGasReimbursePerTrade = 0 均为合约默认值——新实例
+默认值与之一致，无需复制，也未动 Vault 的任何其他配置。链上读回确认：新
+Settlement 的 feeDistributor = 新 FD、vault = 共用 Vault、owner = 部署钱包、
+feeBps = 1；Vault.settlement = 新 Settlement。
+
+### setter 链上往返证明（新实例的 setFeeDistributor 可用）
+
+| 步骤 | tx | 读回 |
+|---|---|---|
+| owner 设 feeDistributor → 旧 FD `0xfb458224…768b21` | [0x9debcab6…99f2](https://sepolia.etherscan.io/tx/0x9debcab653195c175085e12862bd0a10f06298395f917f3d0d7ce193c76999f2) | 旧 FD ✓ |
+| owner 设回 → 新 FD `0xB63a3D85…6e3A` | [0x0490f767…7915](https://sepolia.etherscan.io/tx/0x0490f7676adf9c138080d25a37ab785682a842f1353272fa6c1c87c2527b7915) | 新 FD ✓（最终状态） |
+
+### 结算再验证（对新 Settlement 重跑 e2e_sepolia_test.go）
+
+测试改动：断言的开发者地址改为从 FeeDistributor 合约 `developerAddress()` 读回
+（自动跟随新 FD 的 Ren 地址），其余流程与第三轮一致。结果 **PASS（首轮断言即收敛）**：
+
+- 结算 tx：[0xcab918af…0d35](https://sepolia.etherscan.io/tx/0xcab918af5b0105b1d1f16dd282c6e3163e136eb4114530c1cbcd4ff4d8540d35)
+- maker / taker 结算 nonce（新 Settlement 上从 0 起算）：0 → 1 ✓
+- maker Vault：TKA −100、TKB +199.98 ✓；taker Vault：TKB −200、TKA +99.99 ✓
+- 手续费进**新 FD**：TKA +0.0099、TKB +0.0198（名义手续费 99%）✓
+- 开发者分成 1% 落 **Ren 地址 `0x047df18e…354d9`**：TKA +0.0001、TKB +0.0002 ✓
+  （第三轮时该项落部署钱包，本轮起改落 Ren 地址）
+- 同一成交重放：链上拒绝（`Settlement: fill exceeds signed order`）✓
+
+仓库内引用核查：旧 Settlement 地址在源码/配置中无其他默认引用（仅本文件历史记录），
+无需连带更新；前端仍指向更早的旧线上地址，未在本轮范围内切换（待 Ren 决定）。

@@ -4,9 +4,14 @@ package settlement
 // 仅当环境变量 BIT100_SEPOLIA_RPC 等齐全时运行；默认 go test 不触发。
 // 断言口径与 anvil 版基本一致：maker 卖 100 TKA、价 2 TKB/TKA，taker 全额吃单；费率 1bp 双边：
 // maker 得 199.98 TKB，taker 得 99.99 TKA，双方 nonce 各 +1；同一成交再次提交必须被链上拒绝。
-// 与 anvil 版的差别：本测试对接 forge 部署脚本的 FeeDistributor 配置（developer=deployer），
-// 手续费先按合约设计自动转 1% 给开发者、99% 留在 FeeDistributor（anvil 版未设开发者地址，
-// FD 留存 100%）。断言全部采用结算前后增量口径，本测试可重复运行。
+// 与 anvil 版的差别：手续费先按合约设计自动转 1% 给开发者、99% 留在 FeeDistributor
+// （anvil 版未设开发者地址，FD 留存 100%）。开发者地址从 FeeDistributor 合约的
+// developerAddress() 读回（第三轮部署时为部署者；第四轮起新 FD 的开发者为 Ren 的钱包
+// 0x047df18eF5484945D33fBddB8D58D382597354d9，断言自动跟随）。断言全部采用结算前后
+// 增量口径，本测试可重复运行。
+// 第五轮起：Settlement 已重部署（新增 setFeeDistributor 并指向新 FD），
+// BIT100_SEPOLIA_SETTLEMENT / BIT100_SEPOLIA_FEEDIST 传入新地址即可；新 Settlement 上
+// 双方 nonce 从 0 起算，测试按 getCurrentNonce 读数，无需改动。
 //
 // 必需环境变量：
 //   BIT100_SEPOLIA_RPC        Sepolia RPC URL
@@ -97,10 +102,12 @@ func TestSepoliaE2E(t *testing.T) {
 	tokenArt := loadArtifact(t, "MockERC20")
 	vaultArt := loadArtifact(t, "Vault")
 	settlementArt := loadArtifact(t, "Settlement")
+	feeDistArt := loadArtifact(t, "FeeDistributor")
 	tokenAContract := bind.NewBoundContract(tokenAAddr, tokenArt.ABI, client, client, client)
 	tokenBContract := bind.NewBoundContract(tokenBAddr, tokenArt.ABI, client, client, client)
 	vault := bind.NewBoundContract(vaultAddr, vaultArt.ABI, client, client, client)
 	settlement := bind.NewBoundContract(settlementAddr, settlementArt.ABI, client, client, client)
+	feeDist := bind.NewBoundContract(feeDistAddr, feeDistArt.ABI, client, client, client)
 
 	call := func(contract *bind.BoundContract, method string, args ...interface{}) []interface{} {
 		var out []interface{}
@@ -255,7 +262,10 @@ func TestSepoliaE2E(t *testing.T) {
 	preMakerTKA, preMakerTKB := bal(tokenAAddr, maker), bal(tokenBAddr, maker)
 	preTakerTKA, preTakerTKB := bal(tokenAAddr, taker), bal(tokenBAddr, taker)
 	preFDA, preFDB := wallet(tokenAContract, feeDistAddr), wallet(tokenBContract, feeDistAddr)
-	preOwnerA, preOwnerB := wallet(tokenAContract, owner), wallet(tokenBContract, owner)
+	// 开发者地址以 FeeDistributor 合约读数为准（第四轮起为 Ren 的钱包，不再是部署者）
+	developer := call(feeDist, "developerAddress")[0].(common.Address)
+	t.Logf("feeDistributor developer: %s", developer)
+	preDevA, preDevB := wallet(tokenAContract, developer), wallet(tokenBContract, developer)
 
 	// ---- 真实上链结算（部署者作为 owner 提交；合约侧验签） ----
 	ownerPrivHex := os.Getenv("BIT100_SEPOLIA_OWNER_KEY")
@@ -266,8 +276,8 @@ func TestSepoliaE2E(t *testing.T) {
 	t.Logf("settle tx: %s", txHash)
 
 	// ---- 链上状态断言（增量） ----
-	// 手续费口径：FeeDistributor.receiveFee 按合约设计先把 1% 自动转给开发者
-	// （DEVELOPER_SHARE_BPS=100，部署脚本中 developer=deployer），其余 99% 留在
+	// 手续费口径：FeeDistributor.receiveFee 按合约设计先把 developerShareBps（默认
+	// 100 = 1%，第四轮起治理可调）自动转给 developerAddress，其余 99% 留在
 	// FeeDistributor 分配池。故 FD 增量 = 名义手续费 × 99%，开发者钱包增量 = × 1%。
 	// 注意：公共 RPC 为多后端负载均衡，结算 tx 回执可见后，个别 eth_call 仍可能
 	// 读到未应用该区块的旧状态（实测出现过单项读数滞后一个区块）。故断言轮询至
@@ -288,8 +298,8 @@ func TestSepoliaE2E(t *testing.T) {
 		delta("taker TKA in vault", bal(tokenAAddr, taker), preTakerTKA, wei("99990000000000000000"))
 		delta("feeDistributor TKA", wallet(tokenAContract, feeDistAddr), preFDA, wei("9900000000000000"))
 		delta("feeDistributor TKB", wallet(tokenBContract, feeDistAddr), preFDB, wei("19800000000000000"))
-		delta("developer(owner) TKA cut", wallet(tokenAContract, owner), preOwnerA, wei("100000000000000"))
-		delta("developer(owner) TKB cut", wallet(tokenBContract, owner), preOwnerB, wei("200000000000000"))
+		delta("developer TKA cut", wallet(tokenAContract, developer), preDevA, wei("100000000000000"))
+		delta("developer TKB cut", wallet(tokenBContract, developer), preDevB, wei("200000000000000"))
 		eq("maker nonce", call(settlement, "getCurrentNonce", maker)[0].(*big.Int), big.NewInt(makerNonce+1))
 		eq("taker nonce", call(settlement, "getCurrentNonce", taker)[0].(*big.Int), big.NewInt(takerNonce+1))
 		return bad

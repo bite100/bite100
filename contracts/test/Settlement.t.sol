@@ -8,6 +8,9 @@ import "../src/FeeDistributor.sol";
 import "../src/mock/MockERC20.sol";
 
 contract SettlementTest is Test {
+    // 与 Settlement.FeeDistributorSet 同签名的本地事件声明（供 expectEmit 比对日志）
+    event FeeDistributorSet(address indexed oldDistributor, address indexed newDistributor);
+
     Vault vault;
     Settlement settlement;
     FeeDistributor feeDistributor;
@@ -359,5 +362,53 @@ contract SettlementTest is Test {
         fills[0] = fill;
         vm.expectRevert("Settlement: fill exceeds signed order");
         settlement.settleTradesBatch(fills);
+    }
+
+    // ---------- setFeeDistributor（第五轮新增：手续费落地可切换） ----------
+
+    /// @notice owner 可设置 feeDistributor 并发出事件
+    function test_SetFeeDistributor_OwnerCanSet() public {
+        FeeDistributor fd2 = new FeeDistributor();
+        vm.expectEmit(true, true, false, false, address(settlement));
+        emit FeeDistributorSet(address(feeDistributor), address(fd2));
+        settlement.setFeeDistributor(address(fd2));
+        assertEq(address(settlement.feeDistributor()), address(fd2));
+    }
+
+    /// @notice governance 可设置 feeDistributor
+    function test_SetFeeDistributor_GovernanceCanSet() public {
+        address gov = makeAddr("gov");
+        settlement.setGovernance(gov);
+        FeeDistributor fd2 = new FeeDistributor();
+        vm.prank(gov);
+        settlement.setFeeDistributor(address(fd2));
+        assertEq(address(settlement.feeDistributor()), address(fd2));
+    }
+
+    /// @notice 未授权账户（普通用户）设置 feeDistributor 被拒
+    function test_SetFeeDistributor_UnauthorizedReverts() public {
+        FeeDistributor fd2 = new FeeDistributor();
+        vm.prank(maker);
+        vm.expectRevert("Settlement: not auth");
+        settlement.setFeeDistributor(address(fd2));
+    }
+
+    /// @notice 零地址被拒
+    function test_SetFeeDistributor_ZeroAddressReverts() public {
+        vm.expectRevert("Settlement: zero address");
+        settlement.setFeeDistributor(address(0));
+    }
+
+    /// @notice 切换后结算：手续费落入新 FD，旧 FD 分文未得
+    function test_SetFeeDistributor_SettleLandsInNewDistributor() public {
+        FeeDistributor fd2 = new FeeDistributor();
+        settlement.setFeeDistributor(address(fd2));
+
+        settlement.settleTrade(_stdFill(100e18, 100e18, 0, 0));
+
+        assertEq(tokenA.balanceOf(address(fd2)), 0.01e18);
+        assertEq(tokenB.balanceOf(address(fd2)), 0.01e18);
+        assertEq(tokenA.balanceOf(address(feeDistributor)), 0);
+        assertEq(tokenB.balanceOf(address(feeDistributor)), 0);
     }
 }
