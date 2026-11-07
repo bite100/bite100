@@ -42,6 +42,5 @@ metrics:
 chain:
   rpc_url: ""
   chain_id: 11155111
-  amm_pool: ""
   token0: ""
   token1: ""

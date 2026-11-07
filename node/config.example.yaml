@@ -60,7 +60,6 @@ chain:               # 可选，从链上拉取历史成交时填
   chain_id: 11155111
   settlement: ""     # Settlement 地址；启动时据此设置 EIP-712 签名域（多链时按链填写），空则用代码默认值
   vault: ""  # Vault 合约地址（挂单锁定，第十五轮）；填了还需环境变量 VAULT_LOCKER_PRIVATE_KEY 才启用落锁
-  amm_pool: ""
   token0: ""
   token1: ""
   # §12.3 多 Relayer：多个 relayer API 地址，按轮询选择，避免单点
