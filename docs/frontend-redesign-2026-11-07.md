@@ -1,5 +1,7 @@
 # 前端重设计说明（第十一轮，2026-11-07）
 
+> **第十二轮修订（2026-11-07）**：交易主屏（Dashboard）布局已按 Ren 指令改为对标 Hyperliquid 的固定网格，本文件下方「视觉取舍点」第 3 条（拖拽网格保留）自第十二轮起失效——拖拽引擎已让位，详见 [trade-layout-hyperliquid-benchmark.md](./trade-layout-hyperliquid-benchmark.md)。本文件的设计系统（token、配色、圆角）继续有效且未变更。
+
 ## 风格定调
 
 **B 现代极简风，对标 Uniswap**（Ren 拍板）：
