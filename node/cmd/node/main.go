@@ -501,31 +501,50 @@ func (h *orderMatchHandler) OnNewOrder(order *storage.Order) error {
 	return h.processOrderLocally(order)
 }
 
+// lockRemainder 计算市价单结算后应释放的锁定余量（锁定代币口径）：
+// 锁定义务（买 = 签名 amountOut、按保护价；卖 = amountIn）减去全部成交将
+// 消费的锁定量。taker 在每笔 Fill 中恒付出 AmountOut（TradeToFill 口径），
+// 故消费量 = Σ fill.AmountOut。余量有两种来源：未成交数量，以及买单价格
+// 改善（按保护价落锁、按实际价消费）——全额成交的买单同样可能有余量。
+// 返回 nil 表示无余量可释放（结算将全额消费）或换算失败。
+func (l *vaultLocker) lockRemainder(order *storage.Order, exec *match.MarketExecution) *big.Int {
+	if exec == nil || len(exec.Trades) == 0 {
+		return nil
+	}
+	so, err := l.signedOrder(order)
+	if err != nil || so == nil {
+		return nil
+	}
+	obligationStr := so.AmountIn
+	if order.Side == "buy" {
+		obligationStr = so.AmountOut
+	}
+	obligation, ok := new(big.Int).SetString(obligationStr, 10)
+	if !ok {
+		return nil
+	}
+	consumed := new(big.Int)
+	for _, tr := range exec.Trades {
+		fill, err := settlement.TradeToFill(tr)
+		if err != nil {
+			return nil
+		}
+		consumed.Add(consumed, fill.AmountOut)
+	}
+	rem := new(big.Int).Sub(obligation, consumed)
+	if rem.Sign() <= 0 {
+		return nil
+	}
+	return rem
+}
+
 // releaseRemainderAsync 市价单余量锁定的异步精确释放（docs/market-orders.md
-// §2.5）：先按未成交余量换算「结算消费完全部成交后应剩的锁定量」（买单按
-// 保护价折 amountOut、卖单即余量本身），再等链上剩余量降至该值时释放。
+// §2.5）：等链上剩余量降至 expectedUnused（结算已消费完全部成交）时释放。
 // 失败只记日志：订单到期后 releaseExpiredOrderLock 是硬兜底。
-func (l *vaultLocker) releaseRemainderAsync(order *storage.Order, exec *match.MarketExecution) {
+func (l *vaultLocker) releaseRemainderAsync(order *storage.Order, expectedUnused *big.Int) {
 	so, err := l.signedOrder(order)
 	if err != nil {
 		log.Printf("[lock] 市价单 %s 余量释放准备失败: %v", order.OrderID, err)
-		return
-	}
-	remainderWei, err := settlement.EngineDecimalToWei(exec.Remainder)
-	if err != nil {
-		log.Printf("[lock] 市价单 %s 余量换算失败: %v", order.OrderID, err)
-		return
-	}
-	expectedUnused := remainderWei
-	if order.Side == "buy" {
-		priceWei, err := settlement.EngineDecimalToWei(order.Price)
-		if err != nil {
-			log.Printf("[lock] 市价单 %s 保护价换算失败: %v", order.OrderID, err)
-			return
-		}
-		expectedUnused = match.DeriveAmountOut(remainderWei, priceWei)
-	}
-	if expectedUnused.Sign() <= 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
@@ -590,10 +609,12 @@ func (h *orderMatchHandler) processMarketOrderLocally(order *storage.Order) erro
 			if err := h.locker.releaseForOrder(order); err != nil {
 				log.Printf("[lock] 市价单 %s 零成交释放锁定未成: %v", order.OrderID, err)
 			}
-		case exec.FullyFilled:
-			// 全额成交：锁定由结算全额消费，无余量可释放
 		default:
-			go h.locker.releaseRemainderAsync(order, exec)
+			// 有成交：余量 = 锁定义务 − 结算将消费量（含未成交余量与买单
+			// 价格改善差额）；为 0 时结算全额消费、无需释放
+			if rem := h.locker.lockRemainder(order, exec); rem != nil {
+				go h.locker.releaseRemainderAsync(order, rem)
+			}
 		}
 	}
 	return nil
