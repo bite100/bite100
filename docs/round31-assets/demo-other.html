@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390, initial-scale=1">
+<title>比特100 · 其他（第31轮设计演示）</title>
+<link rel="stylesheet" href="demo.css">
+</head>
+<body>
+<div class="phone">
+
+  <div class="topbar">
+    <div class="mark">B</div>
+    <div class="title">其他</div>
+    <span class="demo-flag">设计演示 · 示意数据</span>
+    <div class="spacer"></div>
+    <div class="chain-chip"><span class="dot"></span>Sepolia</div>
+    <div class="wallet-chip">连接钱包</div>
+  </div>
+
+  <div class="page">
+    <div class="page-head">
+      <h2>其他</h2>
+      <p>跨链桥、治理与贡献，以及原「数据」页的公开数据都收在这里，从下面进入。</p>
+    </div>
+
+    <!-- 功能组：原底部栏的跨链桥、治理与贡献两个栏目收进本页 -->
+    <div class="card menu-card">
+      <h3>功能</h3>
+      <a class="menu-row" href="demo-bridge.html">
+        <span class="menu-ic" style="background:var(--b100-accent-soft);color:var(--b100-accent)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg></span>
+        <span class="menu-main"><span class="menu-name">跨链桥</span><span class="menu-desc">在 Sepolia 与 Base Sepolia 之间转移代币，四条通道自己选</span></span>
+        <span class="menu-chev">›</span>
+      </a>
+      <a class="menu-row" href="demo-govern.html">
+        <span class="menu-ic" style="background:#e8ecfd;color:#4a5fc1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></span>
+        <span class="menu-main"><span class="menu-name">治理与贡献</span><span class="menu-desc">提案投票（7 天表决 + 2 天时锁）与贡献奖励领取</span></span>
+        <span class="menu-chev">›</span>
+      </a>
+    </div>
+
+    <!-- 数据组：原「数据」页解散，四块内容成为本页数据组的入口（目标页内容不变） -->
+    <div class="card menu-card">
+      <h3>数据</h3>
+      <a class="menu-row" href="demo-data.html">
+        <span class="menu-ic" style="background:#fdf0dd;color:#c77400"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5.5"/><path d="M8.8 13.7L7 21l5-2.7L17 21l-1.8-7.3"/></svg></span>
+        <span class="menu-main"><span class="menu-name">奖励与权重</span><span class="menu-desc">当前奖励池余额，与撮合 / 存储 / 流动性 / 中继四类贡献的权重构成</span></span>
+        <span class="menu-chev">›</span>
+      </a>
+      <a class="menu-row" href="demo-data.html">
+        <span class="menu-ic" style="background:#e6f7f2;color:#0e9384"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg></span>
+        <span class="menu-main"><span class="menu-name">期次记录</span><span class="menu-desc">每期奖励的结算金额、贡献者数与 Merkle 根，都在链上</span></span>
+        <span class="menu-chev">›</span>
+      </a>
+      <a class="menu-row" href="demo-data.html">
+        <span class="menu-ic" style="background:var(--b100-surface-2);color:var(--b100-text-2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4 4V21.5H6z"/><path d="M13.5 2.5v4.5H18"/><path d="M9 12h6M9 15.5h6"/></svg></span>
+        <span class="menu-main"><span class="menu-name">合约地址</span><span class="menu-desc">当前网络的治理、结算等合约地址，可在区块浏览器验证</span></span>
+        <span class="menu-chev">›</span>
+      </a>
+      <a class="menu-row" href="demo-data.html">
+        <span class="menu-ic" style="background:var(--b100-down-bg);color:var(--b100-down)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6.5 4 13L16 12h5"/></svg></span>
+        <span class="menu-main"><span class="menu-name">中继状态</span><span class="menu-desc">主中继 / Nostr 镜像 / 链上索引三项连通状态</span></span>
+        <span class="menu-chev">›</span>
+      </a>
+    </div>
+
+    <!-- 关于：只留一行，指向站内现有说明，不设客服/设置等本站没有的入口 -->
+    <div class="card menu-card">
+      <h3>关于</h3>
+      <a class="menu-row" href="demo-trade-v2.html">
+        <span class="menu-ic" style="background:var(--b100-surface-2);color:var(--b100-text-2)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 7.8h.01"/></svg></span>
+        <span class="menu-main"><span class="menu-name">关于本站</span><span class="menu-desc">比特100 是什么、怎么用：各页的功能与规则说明</span></span>
+        <span class="menu-chev">›</span>
+      </a>
+    </div>
+
+    <p class="hint" style="font-size:11.5px;color:var(--b100-text-2);line-height:1.65;padding:0 4px">本页为底部第四栏「其他」的首屏：原底部栏的「跨链桥」「治理与贡献」与原「数据」页内容都收进本页；数据组四行进入同一个数据内容页并定位到对应区块，内容与原数据页一致。</p>
+
+  </div>
+
+  <!-- 底部四栏（定版）：交易 / 行情 / 资产 / 其他 -->
+  <nav class="tabbar">
+    <a href="demo-trade-v2.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 3v3M7 15v6M5 6h4v9H5zM17 2v4M17 14v8M15 6h4v8h-4z"/></svg>交易</a>
+    <a href="demo-markets.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3"/></svg>行情</a>
+    <a href="demo-assets-v2.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16.5 15h.01"/></svg>资产</a>
+    <a class="active" href="demo-other.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg>其他</a>
+  </nav>
+
+</div>
+</body>
+</html>
