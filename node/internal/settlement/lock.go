@@ -180,11 +180,22 @@ func sendVaultTx(ctx context.Context, rpcURL, vaultAddr, privateKeyHex string, d
 		return "", fmt.Errorf("gas price: %w", err)
 	}
 	to := common.HexToAddress(vaultAddr)
+	// gas 改为链上估算×1.3（下限 21000）：第二十一轮 Vault 落锁新增外部
+	// 验签/摘要调用与墓碑写入，Sepolia 实测约 725,799 gas，已超旧固定
+	// 上限 600,000 并导致落锁交易 OOG 回滚（第二十二轮部署时实测定位）。
+	// 估算失败时回退到 1,200,000。
+	gasLimit := uint64(1_200_000)
+	if est, err := client.EstimateGas(ctx, ethereum.CallMsg{From: from, To: &to, Data: data}); err == nil && est > 0 {
+		gasLimit = est * 13 / 10
+		if gasLimit < 21_000 {
+			gasLimit = 21_000
+		}
+	}
 	tx := types.NewTx(&types.LegacyTx{
 		Nonce:    nonce,
 		To:       &to,
 		Value:    big.NewInt(0),
-		Gas:      600_000,
+		Gas:      gasLimit,
 		GasPrice: gasPrice,
 		Data:     data,
 	})
