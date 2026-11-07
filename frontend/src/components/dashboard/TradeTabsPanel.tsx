@@ -6,6 +6,7 @@ import { signCancelOrder } from '../../services/orderSigning'
 import { formatError, formatTokenAmount, getProvider } from '../../utils'
 import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
 import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
+import { fromScaled, fmtPrice, fmtAmount, fmtDateTime } from './tradeFormat'
 import type { Order, Trade } from '../../OrderBookSection'
 import type { Signer } from 'ethers'
 
@@ -30,14 +31,22 @@ export interface TradeTabsPanelProps {
   refreshSignal?: number
 }
 
-function fmtCell(v: string): string {
-  const n = Number(v)
-  return Number.isFinite(n) ? n.toFixed(4) : v
+/**
+ * 第 28 轮：节点订单/成交的价格为 1e18 定点、数量为 wei，展示前统一换算
+ * 并走 tradeFormat（千分位 + 量级小数位）；无法换算时原样显示。
+ */
+function fmtPriceCell(v: string): string {
+  const n = fromScaled(v)
+  return Number.isFinite(n) ? fmtPrice(n) : v
+}
+
+function fmtAmountCell(v: string): string {
+  const n = fromScaled(v)
+  return Number.isFinite(n) ? fmtAmount(n) : v
 }
 
 function fmtTime(sec: number): string {
-  if (!sec) return '—'
-  return new Date(sec * 1000).toLocaleString()
+  return fmtDateTime(sec)
 }
 
 interface BalanceRow {
@@ -180,9 +189,9 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
             <tr>
               <th>时间</th>
               <th>方向</th>
-              <th>价格 ({quoteSymbol})</th>
-              <th>数量 ({baseSymbol})</th>
-              <th>已成交</th>
+              <th className="num">价格 ({quoteSymbol})</th>
+              <th className="num">数量 ({baseSymbol})</th>
+              <th className="num">已成交</th>
               <th>状态</th>
               {withCancel && <th></th>}
             </tr>
@@ -190,14 +199,18 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
           <tbody>
             {orders.map((o) => (
               <tr key={o.orderId}>
-                <td>{fmtTime(o.createdAt)}</td>
-                <td style={{ color: o.side === 'buy' ? 'var(--b100-up)' : 'var(--b100-down)' }}>
+                <td className="time">{fmtTime(o.createdAt)}</td>
+                <td className="side" style={{ color: o.side === 'buy' ? 'var(--b100-up)' : 'var(--b100-down)' }}>
                   {o.side === 'buy' ? '买入' : '卖出'}
                 </td>
-                <td className="num">{fmtCell(o.price)}</td>
-                <td className="num">{fmtCell(o.amount)}</td>
-                <td className="num">{fmtCell(o.filled)}</td>
-                <td>{STATUS_LABEL[o.status] ?? o.status}</td>
+                <td className="num">{fmtPriceCell(o.price)}</td>
+                <td className="num">{fmtAmountCell(o.amount)}</td>
+                <td className="num">{fmtAmountCell(o.filled)}</td>
+                <td>
+                  <span className={`status-chip status-${o.status}`}>
+                    {STATUS_LABEL[o.status] ?? o.status}
+                  </span>
+                </td>
                 {withCancel && (
                   <td>
                     <Button
@@ -258,22 +271,22 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
                 <thead>
                   <tr>
                     <th>时间</th>
-                    <th>价格 ({quoteSymbol})</th>
-                    <th>数量 ({baseSymbol})</th>
+                    <th className="num">价格 ({quoteSymbol})</th>
+                    <th className="num">数量 ({baseSymbol})</th>
                     <th>结算</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedTrades.slice(0, 30).map((t) => (
                     <tr key={t.tradeId}>
-                      <td>{fmtTime(t.timestamp)}</td>
-                      <td className="num">{fmtCell(t.price)}</td>
-                      <td className="num">{fmtCell(t.amount)}</td>
+                      <td className="time">{fmtTime(t.timestamp)}</td>
+                      <td className="num">{fmtPriceCell(t.price)}</td>
+                      <td className="num">{fmtAmountCell(t.amount)}</td>
                       <td>
                         {t.txHash ? (
-                          <span style={{ color: 'var(--b100-up)' }}>已上链</span>
+                          <span className="status-chip status-settled">已上链</span>
                         ) : (
-                          <span style={{ color: 'var(--b100-text-2)' }}>待结算</span>
+                          <span className="status-chip status-pending">待结算</span>
                         )}
                       </td>
                     </tr>
@@ -295,10 +308,10 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
                 <thead>
                   <tr>
                     <th>资产</th>
-                    <th>钱包余额</th>
-                    <th>Vault 总额</th>
-                    <th>可用</th>
-                    <th>锁定中</th>
+                    <th className="num">钱包余额</th>
+                    <th className="num">Vault 总额</th>
+                    <th className="num">可用</th>
+                    <th className="num">锁定中</th>
                   </tr>
                 </thead>
                 <tbody>

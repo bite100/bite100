@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from 'react'
 import { nodeGet } from '../nodeClient'
+import { fromScaled } from '../components/dashboard/tradeFormat'
 
 const DEFAULT_PAIR = 'TKA/TKB'
 const TRADES_LIMIT = 500
@@ -104,8 +105,10 @@ export function usePairStats(pair: string = DEFAULT_PAIR): PairStats {
           const o: Record<string, unknown> =
             t && typeof t === 'object' ? (t as Record<string, unknown>) : {}
           return {
-            price: Number(o.price ?? 0),
-            amount: Number(o.amount ?? 0),
+            // 第 28 轮：节点定点/wei → 人类单位（统计口径不变，仅展示单位换算；
+            // 此前未换算时最新价会显示为 7.57e+22 量级）
+            price: fromScaled(o.price),
+            amount: fromScaled(o.amount),
             timestamp: Number(o.timestamp ?? 0),
           }
         })

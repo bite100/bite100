@@ -1,5 +1,6 @@
 /*
- * 交易主屏样式（第十二轮：布局对标 Hyperliquid）
+ * 交易主屏样式（第十二轮：布局对标 Hyperliquid；第 28 轮：K 线/盘口/表格组件级打磨，
+ * 规格基准见 docs/round28-chart-orderbook-ui-2026-11-08.md）
  * 皮肤严格沿用第十一轮设计系统：颜色/圆角/阴影一律走 --b100-* token，不新增硬编码色值。
  */
 
@@ -112,6 +113,8 @@
 }
 
 /* ---------- 盘口 / 最新成交 ---------- */
+/* 第 28 轮盘口规格（Binance/HL 实测口径）：12px 等宽数字、行高压至 ~20px、
+   深度条自右向左按累计量比例、价差行居中 */
 .book-head {
   display: flex;
   align-items: baseline;
@@ -124,7 +127,7 @@
   grid-template-columns: 1fr 1fr 1fr;
   font-size: 0.7rem;
   color: var(--b100-text-3);
-  padding: 0 6px 4px;
+  padding: 0 8px 4px;
 }
 
 .book-cols span:nth-child(2),
@@ -137,12 +140,12 @@
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   width: 100%;
-  padding: 2.5px 6px;
+  padding: 2px 8px;
   border: 0;
   background: transparent;
   font-family: var(--b100-font-num);
-  font-size: 0.78rem;
-  line-height: 1.45;
+  font-size: 0.75rem;
+  line-height: 1.5;
   color: var(--b100-text);
   text-align: left;
 }
@@ -161,16 +164,16 @@ button.book-row:hover {
   top: 1px;
   bottom: 1px;
   right: 0;
-  border-radius: 4px;
+  border-radius: 2px;
   pointer-events: none;
 }
 
 .book-depth-ask {
-  background: var(--b100-error-bg);
+  background: var(--b100-depth-ask);
 }
 
 .book-depth-bid {
-  background: var(--b100-up-bg);
+  background: var(--b100-depth-bid);
 }
 
 .book-cell {
@@ -189,7 +192,8 @@ button.book-row:hover {
 .book-spread {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  justify-content: center;
+  gap: 8px;
   padding: 7px 6px;
   margin: 4px 0;
   border-top: 1px solid var(--b100-border);
@@ -198,7 +202,7 @@ button.book-row:hover {
 
 .book-spread-mid {
   font-family: var(--b100-font-num);
-  font-size: 1.05rem;
+  font-size: 0.95rem;
   font-weight: 600;
 }
 
@@ -206,6 +210,73 @@ button.book-row:hover {
   font-family: var(--b100-font-num);
   font-size: 0.72rem;
   color: var(--b100-text-2);
+}
+
+/* ---------- K 线（第 28 轮：图例读数行 + 周期文字页签） ---------- */
+.kline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 2px 2px 6px;
+}
+
+.kline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-family: var(--b100-font-num);
+  font-size: 0.72rem;
+  color: var(--b100-text-2);
+}
+
+.kline-legend b {
+  color: var(--b100-text);
+  font-weight: 500;
+}
+
+.kline-legend-time {
+  color: var(--b100-text);
+  font-weight: 500;
+}
+
+.kline-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.kline-tab {
+  padding: 3px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-size: 0.75rem;
+  color: var(--b100-text-2);
+  cursor: pointer;
+}
+
+.kline-tab:hover {
+  color: var(--b100-text);
+}
+
+.kline-tab-active {
+  color: var(--b100-text);
+  font-weight: 600;
+  border-bottom-color: var(--b100-accent);
+}
+
+.kline-stage {
+  position: relative;
+}
+
+.kline-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 
 /* ---------- 下单面板 ---------- */
@@ -262,7 +333,7 @@ button.book-row:hover {
   text-decoration-style: solid;
 }
 
-/* ---------- 页签表格 ---------- */
+/* ---------- 页签表格（第 28 轮：密度/对齐/状态色标对齐基准） ---------- */
 .trade-table-wrap {
   overflow-x: auto;
 }
@@ -270,22 +341,31 @@ button.book-row:hover {
 .trade-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
 
 .trade-table th {
   text-align: left;
   font-weight: 500;
-  color: var(--b100-text-2);
-  padding: 6px 8px;
+  font-size: 0.7rem;
+  color: var(--b100-text-3);
+  padding: 6px 10px;
   border-bottom: 1px solid var(--b100-border);
   white-space: nowrap;
 }
 
+.trade-table th.num {
+  text-align: right;
+}
+
 .trade-table td {
-  padding: 6px 8px;
+  padding: 5px 10px;
   border-bottom: 1px solid var(--b100-border);
   white-space: nowrap;
+}
+
+.trade-table tbody tr:hover td {
+  background: var(--b100-surface-2);
 }
 
 .trade-table tbody tr:last-child td {
@@ -294,4 +374,49 @@ button.book-row:hover {
 
 .trade-table td.num {
   font-family: var(--b100-font-num);
+  text-align: right;
+}
+
+.trade-table td.time {
+  font-family: var(--b100-font-num);
+  font-size: 0.75rem;
+  color: var(--b100-text-2);
+}
+
+.trade-table td.side {
+  font-weight: 500;
+}
+
+/* 订单/结算状态色标：语义色只出现在状态数据位 */
+.status-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.status-open,
+.status-pending {
+  background: var(--b100-warning-bg);
+  color: var(--b100-warning);
+}
+
+.status-partial {
+  background: var(--b100-accent-soft);
+  color: var(--b100-accent-hover);
+}
+
+.status-filled,
+.status-settled {
+  background: var(--b100-up-bg);
+  color: var(--b100-up);
+}
+
+.status-cancelled,
+.status-canceled,
+.status-expired {
+  background: var(--b100-surface-2);
+  color: var(--b100-text-2);
 }

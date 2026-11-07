@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Text } from '@mantine/core'
 import { nodeGet } from '../../nodeClient'
 import { DEFAULT_PAIR } from '../../config/pairs'
+import { fromScaled, fmtPrice, fmtAmount, fmtTime } from './tradeFormat'
 
 const DISPLAY_LIMIT = 18
 
@@ -43,8 +44,8 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
               t && typeof t === 'object' ? (t as Record<string, unknown>) : {}
             return {
               tradeId: String(o.tradeId ?? o.TradeID ?? ''),
-              price: Number(o.price ?? 0),
-              amount: Number(o.amount ?? 0),
+              price: fromScaled(o.price),
+              amount: fromScaled(o.amount),
               timestamp: Number(o.timestamp ?? 0),
             }
           })
@@ -102,11 +103,11 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
           return (
             <div className="book-row book-row-static" key={t.tradeId || `${t.timestamp}-${i}`}>
               <span className="book-cell book-price" style={{ color }}>
-                {t.price.toFixed(4)}
+                {fmtPrice(t.price)}
               </span>
-              <span className="book-cell book-cell-r">{t.amount.toFixed(4)}</span>
+              <span className="book-cell book-cell-r">{fmtAmount(t.amount)}</span>
               <span className="book-cell book-cell-r">
-                {t.timestamp > 0 ? new Date(t.timestamp * 1000).toLocaleTimeString() : '—'}
+                {t.timestamp > 0 ? fmtTime(t.timestamp) : '—'}
               </span>
             </div>
           )
