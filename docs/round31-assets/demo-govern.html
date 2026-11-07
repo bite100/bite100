@@ -60,6 +60,22 @@
       <div class="link-row" style="margin-top:12px"><span>Merkle 空投领取</span><span class="chev">›</span></div>
     </div>
 
+    <!-- 贡献奖励 · 新方案分区（金库飞轮，已拍板、待启用）：未启用时只显结构与空状态，不显示任何数字；
+         启用后替换上方现行方案卡。设计见方案文档 §12.2 -->
+    <div class="card">
+      <h3>贡献奖励 · 新方案（金库飞轮）<span class="pill gray" style="margin-left:6px">待启用</span></h3>
+      <p class="hint">奖励规则已拍板调整：原「撮合 40 / 存储 25」改记两项新口径——金库存入者按<b>份额·天数</b>累计、金库飞轮占 50；结算提交者按实际结算笔数与金额计<b>结算加成</b>占 15（单期封顶为实收手续费）；流动性 20 与中继 15 不变。新方案落地启用后，本分区替换上方现行卡片，数字全部读自链上与金库数据。</p>
+      <div class="rows" style="margin-top:6px">
+        <div class="rowline"><span class="k">我的份额·天数累计（金库存入）</span><span class="v" style="color:var(--b100-text-3);font-weight:500">奖励尚未启用</span></div>
+        <div class="rowline"><span class="k">结算提交加成（本期）</span><span class="v" style="color:var(--b100-text-3);font-weight:500">—</span></div>
+        <div class="rowline"><span class="k">待领取</span><span class="v" style="color:var(--b100-text-3);font-weight:500">—</span></div>
+      </div>
+      <div style="height:12px"></div>
+      <button class="btn primary" style="opacity:.45">领取奖励</button>
+      <div class="link-row" style="margin-top:12px"><span>奖励历史（份额·天数明细 / 加成记录 / 领取记录）</span><span class="chev">›</span></div>
+      <p class="hint" style="margin-top:8px">空状态口径：奖励未启用时只展示结构与说明，不出现任何金额数字；按钮为禁用态，直到第一期新方案奖励结算完成。分区结构为三段式：统计卡（份额·天数累计）+ 明细行（结算加成）+ 历史页签位（本行）；结构参考 HY 质押页组织，视觉以币安为准。</p>
+    </div>
+
   </div>
 
   <nav class="tabbar">

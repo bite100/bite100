@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390, initial-scale=1">
+<title>比特100 · 做市金库子页（第31轮设计演示）</title>
+<link rel="stylesheet" href="demo.css">
+</head>
+<body>
+<div class="phone">
+
+  <div class="topbar">
+    <div class="mark">B</div>
+    <div class="title">资产</div>
+    <span class="demo-flag">设计演示 · 示意数据</span>
+    <div class="spacer"></div>
+    <div class="chain-chip"><span class="dot"></span>Sepolia</div>
+    <div class="wallet-chip">0x4B3f…a93e</div>
+  </div>
+
+  <div class="page">
+
+    <!-- 账户页签行：金库页签 = 做市金库子页（本页），与资产总览的金库卡「进入金库」落点一致 -->
+    <div class="big-tabs">
+      <button>总览</button><button class="on">金库</button>
+    </div>
+
+    <!-- ① 头条卡（结构参考 HY 金库页「大数头条卡 + 快照线」的页面组织，视觉以币安为准、全白实现）：
+         大数 = 金库总规模；卡内下半 = NAV 快照线（导航明细在下一张键值卡） -->
+    <div class="card vault-card">
+      <span class="tag">做市金库 · MAKERVAULT（ERC-4626）</span>
+      <div class="lb" style="margin-top:10px;font-size:12px;color:var(--b100-text-2)">金库总规模（Total Assets）</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:2px">
+        <span class="num" style="font-size:30px;font-weight:700">1,000.00</span>
+        <span style="font-size:13px;color:var(--b100-text-2);font-weight:600">USDT</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:14px">
+        <span style="font-size:11px;color:var(--b100-text-3)">NAV 快照 · 近 30 日</span>
+        <span style="font-size:11px;color:var(--b100-text-2)">现值 <span class="num" style="font-weight:700;color:var(--b100-text)">0.99992</span></span>
+      </div>
+      <svg width="326" height="40" viewBox="0 0 326 40" style="display:block;margin-top:4px" aria-label="NAV 快照示意">
+        <path d="M0,26 L30,24 L60,27 L90,22 L120,24 L150,20 L180,23 L210,19 L240,21 L270,17 L300,19 L326,16 L326,40 L0,40 Z" fill="#FF007A" opacity="0.07"/>
+        <path d="M0,26 L30,24 L60,27 L90,22 L120,24 L150,20 L180,23 L210,19 L240,21 L270,17 L300,19 L326,16" fill="none" stroke="#FF007A" stroke-width="1.6"/>
+      </svg>
+      <p class="hint" style="margin-top:6px">快照线为演示走势；正式上线时由金库 NAV 的链上历史采样绘制，采样不到时整行不展示。</p>
+    </div>
+
+    <!-- ② 明细卡（HL 金库卡同式键值行）：NAV / 总份额 / 我的份额 / 我的市值 / 可提 / 锁定 -->
+    <div class="card">
+      <h3>金库明细</h3>
+      <div class="rows" style="margin-top:4px">
+        <div class="rowline"><span class="k">份额净值 NAV（每份可赎回）</span><span class="v num">0.99992 USDT</span></div>
+        <div class="rowline"><span class="k">总份额</span><span class="v num">1,000.08</span></div>
+        <div class="rowline"><span class="k">我的份额</span><span class="v num">0.00</span></div>
+        <div class="rowline"><span class="k">我的市值（份额 × NAV）</span><span class="v num">0.00 USDT</span></div>
+        <div class="rowline"><span class="k">我的可提份额（未被挂单锁定）</span><span class="v num">0.00</span></div>
+        <div class="rowline"><span class="k">做市挂单占用中（对应份额）</span><span class="v num">0.00</span></div>
+      </div>
+      <p class="hint" style="margin-top:8px">本页数字为设计演示值；正式上线时全部读取金库合约的链上数据（净值、总份额、总规模、我的份额），读不到时不展示数字。</p>
+    </div>
+
+    <!-- ② 存入区：USDT → 份额（按当前 NAV 折算） -->
+    <div class="card">
+      <h3>存入 USDT，换取份额</h3>
+      <div class="field">
+        <label>存入数量</label>
+        <div class="inputbox">
+          <input class="num" value="100.00" readonly>
+          <span class="unit">USDT</span>
+          <button class="maxbtn">最大</button>
+        </div>
+      </div>
+      <div class="avail"><span>钱包余额</span><span class="num">250.00 USDT</span></div>
+      <div class="avail"><span>预计获得份额（按 NAV 0.99992 折算）</span><span class="num">≈ 100.01 份</span></div>
+      <p class="hint" style="margin-top:12px">存入的是你钱包里的 USDT，换得的份额可以在下方随时赎回。首次存入需先在钱包里确认一次 USDT 授权，之后可直接存入；存入本身是链上交易，在钱包中确认。</p>
+      <div style="height:12px"></div>
+      <button class="btn primary">存入</button>
+    </div>
+
+    <!-- ③ 提取区：份额 → USDT；挂单锁定的部分不可提（第 27 轮口径原文） -->
+    <div class="card">
+      <h3>提取（赎回份额）</h3>
+      <div class="field">
+        <label>赎回份额</label>
+        <div class="inputbox">
+          <input class="num" placeholder="0.00" readonly>
+          <span class="unit">份</span>
+          <button class="maxbtn">最大</button>
+        </div>
+      </div>
+      <div class="avail"><span>我的可提份额</span><span class="num">0.00 份</span></div>
+      <div class="avail"><span>预计赎回（按 NAV 0.99992 折算）</span><span class="num">≈ 0.00 USDT</span></div>
+      <p class="hint" style="margin-top:12px">提取按份额赎回成 USDT 回到你的钱包。挂单锁定的部分不能提取（金库正在用这部分资金挂单做市），需要等挂单成交或撤单、锁定释放后再提；金库暂停时仍可提取。</p>
+      <div style="height:12px"></div>
+      <button class="btn dark">提取</button>
+    </div>
+
+    <!-- ④ 说明区：份额与 NAV 的来历（页面内说明，实现轮原文保留） -->
+    <div class="card">
+      <h3>份额与 NAV 说明</h3>
+      <div class="rows" style="margin-top:4px">
+        <div class="rowline" style="align-items:flex-start"><span class="k" style="flex:none;padding-right:10px">份额是什么</span><span style="font-size:12.5px;line-height:1.6;text-align:right">ERC-4626 份额凭证。存入时按当时 NAV 折算份额，提取时按当时 NAV 赎回 USDT，份额本身不单独交易。</span></div>
+        <div class="rowline" style="align-items:flex-start"><span class="k" style="flex:none;padding-right:10px">NAV 怎么变</span><span style="font-size:12.5px;line-height:1.6;text-align:right">NAV = 金库全部资产净值 ÷ 总份额。做市收益留在金库里、体现在 NAV 上涨，不单独分红；做市亏损同样体现在 NAV 下跌。</span></div>
+        <div class="rowline" style="align-items:flex-start"><span class="k" style="flex:none;padding-right:10px">谁在做市</span><span style="font-size:12.5px;line-height:1.6;text-align:right">金库登记的专用签名者自动挂单做市。签名者只能签名交易、不能提款；签名者可以更换，金库暂停时停止做市与存入，提取与更换签名者不受影响。</span></div>
+        <div class="rowline" style="align-items:flex-start"><span class="k" style="flex:none;padding-right:10px">数据口径</span><span style="font-size:12.5px;line-height:1.6;text-align:right">本页所有数字读自金库合约（链上），页面不估算、不补数；链上读不到时该数字不展示。</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <nav class="tabbar">
+    <a href="demo-trade-v2.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 3v3M7 15v6M5 6h4v9H5zM17 2v4M17 14v8M15 6h4v8h-4z"/></svg>交易</a>
+    <a class="active" href="demo-assets-v2.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16.5 15h.01"/></svg>资产</a>
+    <a href="demo-bridge.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg>跨链桥</a>
+    <a href="demo-govern.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>治理与贡献</a>
+    <a href="demo-data.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3"/></svg>数据</a>
+  </nav>
+
+</div>
+</body>
+</html>

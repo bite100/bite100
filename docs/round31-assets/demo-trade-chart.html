@@ -40,8 +40,12 @@
       </div>
     </div>
 
-    <!-- 图表区：第 28 轮 KLineChart 的展开态归宿（此处为静态绘制示意） -->
+    <!-- 图表区：第 28 轮 KLineChart 的展开态归宿（此处为静态绘制示意）；K线/深度图为同卡页签，深度图态见 demo-trade-depth -->
     <div class="card chart-card">
+      <div class="text-tabs" style="padding:0 8px">
+        <button class="on">K线</button><button>深度图</button>
+      </div>
+      <div style="height:8px"></div>
       <div class="chart-legend num">
         <span>11-08 05:30</span><span>开 <b>75,980.00</b></span><span>高 <b>76,510.00</b></span>
         <span>低 <b>75,902.50</b></span><span>收 <b class="up">76,420.50</b></span><span class="up"><b>+0.58%</b></span>
@@ -50,7 +54,6 @@
       <svg id="kchart" width="358" height="196" viewBox="0 0 358 196" aria-label="K 线示意图"></svg>
       <div class="period-row">
         <button>15m</button><button class="on">1H</button><button>4H</button><button>1D</button>
-        <span style="margin-left:auto;font-size:11.5px;color:var(--b100-text-3)">深度图 ›</span>
       </div>
     </div>
 

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390, initial-scale=1">
+<title>比特100 · 交易 v2 深度图（第31轮设计演示）</title>
+<link rel="stylesheet" href="demo.css">
+</head>
+<body>
+<div class="phone">
+
+  <div class="topbar">
+    <div class="mark">B</div>
+    <div class="title">比特100</div>
+    <span class="demo-flag">设计演示 · 示意数据</span>
+    <div class="spacer"></div>
+    <div class="chain-chip"><span class="dot"></span>Sepolia</div>
+    <div class="wallet-chip">0x4B3f…a93e</div>
+  </div>
+
+  <div class="page">
+
+    <!-- 交易对头条（与图表展开态同一页头） -->
+    <div class="card pair-head">
+      <div class="pair-line">
+        <span class="pair-name">BTC/USDT <span class="chev">▾</span></span>
+        <span class="pill accent">现货</span>
+        <span style="margin-left:auto" class="pill gray">Sepolia</span>
+      </div>
+      <div class="pair-price num up">76,420.50</div>
+      <div class="pair-sub">
+        <span>≈ $76,420.50</span>
+        <span class="pill up num">+1.86%</span>
+        <span>参考价（Chainlink）<span class="num" style="color:var(--b100-text);font-weight:600">76,402.10</span></span>
+      </div>
+      <div class="pair-stats">
+        <div><div class="k">24h 最高</div><div class="v num">77,180.00</div></div>
+        <div><div class="k">24h 最低</div><div class="v num">74,905.25</div></div>
+        <div><div class="k">24h 量（BTC）</div><div class="v num">12.4830</div></div>
+      </div>
+    </div>
+
+    <!-- 深度图态：与 K线 同卡页签；深度 = 订单簿逐档累计聚合（买盘累计向中间价递增、卖盘同理） -->
+    <div class="card chart-card">
+      <div class="text-tabs" style="padding:0 8px">
+        <button>K线</button><button class="on">深度图</button>
+      </div>
+      <div style="height:8px"></div>
+      <div class="chart-legend num">
+        <span>买盘累计 <b style="color:#039855">0.6754 BTC</b></span>
+        <span>卖盘累计 <b style="color:#d92d20">0.6120 BTC</b></span>
+        <span>中间价 <b>76,420.50</b></span>
+        <span>价差 <b>2.50（0.003%）</b></span>
+      </div>
+      <svg width="358" height="196" viewBox="0 0 358 196" aria-label="深度图示意">
+        <line x1="6" y1="130" x2="312" y2="130" stroke="#f1f1f4"/>
+        <line x1="6" y1="90" x2="312" y2="90" stroke="#f1f1f4"/>
+        <line x1="6" y1="50" x2="312" y2="50" stroke="#f1f1f4"/>
+        <text x="318" y="133" font-size="8.5" fill="#a8a8ae" font-family="ui-monospace,monospace">0.20</text>
+        <text x="318" y="93" font-size="8.5" fill="#a8a8ae" font-family="ui-monospace,monospace">0.40</text>
+        <text x="318" y="53" font-size="8.5" fill="#a8a8ae" font-family="ui-monospace,monospace">0.60</text>
+        <path d="M6,170 L6,34.9 L44.3,34.9 L44.3,77.1 L78.7,77.1 L78.7,112.2 L97.8,112.2 L97.8,125.8 L124.6,125.8 L124.6,151.3 L162.8,151.3 L162.8,170 Z" fill="#089981" opacity="0.16"/>
+        <path d="M6,34.9 L44.3,34.9 L44.3,77.1 L78.7,77.1 L78.7,112.2 L97.8,112.2 L97.8,125.8 L124.6,125.8 L124.6,151.3 L162.8,151.3" fill="none" stroke="#089981" stroke-width="1.5"/>
+        <path d="M162.8,170 L162.8,139.2 L182,139.2 L182,98.9 L197.3,98.9 L197.3,81.6 L220.2,81.6 L220.2,58 L239.3,58 L239.3,47.6 L312,47.6 L312,170 Z" fill="#f23645" opacity="0.14"/>
+        <path d="M162.8,139.2 L182,139.2 L182,98.9 L197.3,98.9 L197.3,81.6 L220.2,81.6 L220.2,58 L239.3,58 L239.3,47.6 L312,47.6" fill="none" stroke="#f23645" stroke-width="1.5"/>
+        <line x1="162.8" y1="16" x2="162.8" y2="170" stroke="#a8a8ae" stroke-width="0.8" stroke-dasharray="3 3"/>
+        <text x="30" y="186" font-size="8.5" fill="#a8a8ae" font-family="ui-monospace,monospace">76,405</text>
+        <text x="84" y="186" font-size="8.5" fill="#a8a8ae" font-family="ui-monospace,monospace">76,412</text>
+        <text x="163" y="186" font-size="8.5" fill="#66666e" font-family="ui-monospace,monospace" text-anchor="middle">76,420.50</text>
+        <text x="206" y="186" font-size="8.5" fill="#a8a8ae" font-family="ui-monospace,monospace">76,428</text>
+        <text x="258" y="186" font-size="8.5" fill="#a8a8ae" font-family="ui-monospace,monospace">76,435</text>
+      </svg>
+      <p class="hint" style="padding:2px 8px 4px">深度由订单簿逐档累计聚合：越靠近中间价，累计数量越大。盘口变化时实时重绘，口径与下方盘口表一致。</p>
+    </div>
+
+    <!-- 精简盘口 / 最新成交切换（与 K线 态同一张卡） -->
+    <div class="card" style="padding-top:12px">
+      <div class="text-tabs">
+        <button class="on">盘口</button><button>最新成交</button>
+      </div>
+      <div style="height:8px"></div>
+      <div class="book-head"><span class="p">价格（USDT）</span><span class="a">数量（BTC）</span><span class="t">累计</span></div>
+      <div id="asks"></div>
+      <div class="spread-row"><span class="mid num up">76,420.50 ↑</span><span class="sd num">价差 2.50（0.003%）</span><span class="sd" style="margin-left:auto">点任意行带价回下单</span></div>
+      <div id="bids"></div>
+    </div>
+
+    <!-- 收起条：回主交易屏（双列骨架） -->
+    <a class="chart-bar" href="demo-trade-v2.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V10M9.5 20V4M15 20v-8M20 20V7"/></svg>
+      BTC/USDT 图表
+      <span class="cb-act">收起 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 9l7 7 7-7"/></svg></span>
+    </a>
+
+  </div>
+
+  <nav class="tabbar">
+    <a class="active" href="demo-trade-v2.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7 3v3M7 15v6M5 6h4v9H5zM17 2v4M17 14v8M15 6h4v8h-4z"/></svg>交易</a>
+    <a href="demo-assets-v2.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16.5 15h.01"/></svg>资产</a>
+    <a href="demo-bridge.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12l-3-3M20 17H8l3 3"/></svg>跨链桥</a>
+    <a href="demo-govern.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8.4-7 10-3.8-1.6-7-5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>治理与贡献</a>
+    <a href="demo-data.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3"/></svg>数据</a>
+  </nav>
+
+</div>
+
+<script>
+  function rows(el, list, cls, color) {
+    var html = '', max = list[list.length - 1][2];
+    list.forEach(function (r) {
+      html += '<div class="book-row"><span class="depth" style="width:' + (r[2] / max * 100).toFixed(1) + '%;background:var(--b100-depth-' + cls + ')"></span>' +
+        '<span class="p num" style="color:' + color + '">' + r[0] + '</span><span class="a num">' + r[1] + '</span><span class="t num">' + r[2].toFixed(4) + '</span></div>';
+    });
+    document.getElementById(el).innerHTML = html;
+  }
+  rows('asks', [['76,435.00','0.0521',0.0521],['76,430.50','0.1180',0.1701],['76,428.00','0.0864',0.2565],['76,425.00','0.2013',0.4578],['76,423.00','0.1542',0.6120]], 'ask', '#d92d20');
+  rows('bids', [['76,418.00','0.0935',0.0935],['76,415.50','0.1274',0.2209],['76,412.00','0.0681',0.2890],['76,409.50','0.1756',0.4646],['76,405.00','0.2108',0.6754]], 'bid', '#039855');
+</script>
+</body>
+</html>
