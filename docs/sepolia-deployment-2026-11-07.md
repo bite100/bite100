@@ -18,7 +18,7 @@
 | 合约 | 地址 | 部署 tx |
 |---|---|---|
 | Vault | [0xb4945C5E0208803FF11d0f86173B55489aE87d2A](https://sepolia.etherscan.io/address/0xb4945C5E0208803FF11d0f86173B55489aE87d2A) | [0xe3c252e9…b873e](https://sepolia.etherscan.io/tx/0xe3c252e91a815cda54fa0b995112395e8340e62fd083577d37b657c7b04b873e) |
-| FeeDistributor | [0xfb458224973c91ddBa3Fb5B55DAD337038768b21](https://sepolia.etherscan.io/address/0xfb458224973c91ddBa3Fb5B55DAD337038768b21) | [0xc1410a73…eca2](https://sepolia.etherscan.io/tx/0xc1410a735bd0f2e5ee56bbf314288d9e3def2b31bb39ad60b31cae54fd97eca2) |
+| FeeDistributor | [0x346DE29B7fEe95F44A5b5385e87182F031E8E1B5](https://sepolia.etherscan.io/address/0x346DE29B7fEe95F44A5b5385e87182F031E8E1B5) | [0xc1410a73…eca2](https://sepolia.etherscan.io/tx/0xc1410a735bd0f2e5ee56bbf314288d9e3def2b31bb39ad60b31cae54fd97eca2) |
 | Settlement | [0xA4Eaa449360239e1F719608236d087c23379d5A6](https://sepolia.etherscan.io/address/0xA4Eaa449360239e1F719608236d087c23379d5A6) | [0xffa3c817…c111](https://sepolia.etherscan.io/tx/0xffa3c81758b454a2dbfefdba3f8381b241243af5bee2083d8c24c12bab5bc111) |
 
 > 注：上表 Settlement 已在第五轮被新地址替代（见文末第五轮小节），Vault 的 settlement 登记已切换；

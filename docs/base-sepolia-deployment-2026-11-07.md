@@ -38,7 +38,7 @@ Sepolia 相同的一套脚本（第七轮已链参数化，全程带 `TARGET_CHA
 | 合约 | 地址 | 部署 tx |
 |---|---|---|
 | Vault | [0xfb458224973c91ddBa3Fb5B55DAD337038768b21](https://sepolia.basescan.org/address/0xfb458224973c91ddBa3Fb5B55DAD337038768b21) | [0xee230607…a0bec2](https://sepolia.basescan.org/tx/0xee230607c589f67b251fce133d37cf7a957c223575a5bfe9860508d494a0bec2) |
-| FeeDistributor | [0xa4eaa449360239e1f719608236d087c23379d5a6](https://sepolia.basescan.org/address/0xa4eaa449360239e1f719608236d087c23379d5a6) | [0xccb3a7ad…6b161](https://sepolia.basescan.org/tx/0xccb3a7ad352675bc54a0c5c15de78d2087da1de4d7b11501ee4b9e046b16b161) |
+| FeeDistributor | [0xAeC85272Cba4F22eaf93a0313b0D09164Ca009b7](https://sepolia.basescan.org/address/0xAeC85272Cba4F22eaf93a0313b0D09164Ca009b7) | [0xccb3a7ad…6b161](https://sepolia.basescan.org/tx/0xccb3a7ad352675bc54a0c5c15de78d2087da1de4d7b11501ee4b9e046b16b161) |
 | Settlement | [0x1f81caafa089cfbeb953fc88d272d0a6181e2985](https://sepolia.basescan.org/address/0x1f81caafa089cfbeb953fc88d272d0a6181e2985) | [0x13964998…d0f1e](https://sepolia.basescan.org/tx/0x13964998e6da9f3c38809ef5b51f7a924fd14b0ea08a27b8be52b8417d3d0f1e) |
 | MockERC20 TKA (Token0) | [0x1ee28c1c490727e49939c95032c749ea5b58b45f](https://sepolia.basescan.org/address/0x1ee28c1c490727e49939c95032c749ea5b58b45f) | [0x9c00204c…ec673](https://sepolia.basescan.org/tx/0x9c00204cc97a7e9f1f073c8d1fd88f2356f91c067ab66ecc1f065e1cbeeec673) |
 | MockERC20 TKB (Token1) | [0x20a78bcb39ff510adba3d3aec9229a9583c5bdb3](https://sepolia.basescan.org/address/0x20a78bcb39ff510adba3d3aec9229a9583c5bdb3) | [0x5ce44e33…4fbd4](https://sepolia.basescan.org/tx/0x5ce44e330577c97397e64120452f1b9388abe723f1249cd645a3cf6af374fbd4) |

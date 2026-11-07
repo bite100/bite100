@@ -12,7 +12,25 @@ export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 
 const defaultChain = getChainConfig(DEFAULT_CHAIN_ID)
 
-/** EIP-712 域分隔符（默认链 = Sepolia，与节点 signature.go 默认域一致） */
+/**
+ * 按链生成 EIP-712 域（verifyingContract 取该链的 Settlement 地址）。
+ * 下单/撤单签名必须用当前链的域，否则节点按本链域恢复出的地址不符、订单被拒。
+ * 调用方一律传当前链 CHAIN_ID（见 orderSigning.ts / orderVerification.ts 的 chainId 参数）。
+ */
+export function getEIP712Domain(chainId: number) {
+  const chain = getChainConfig(chainId)
+  return {
+    name: '比特100',
+    version: '1',
+    chainId: chain?.chainId ?? chainId,
+    verifyingContract: chain?.contracts.settlement ?? ZERO_ADDRESS,
+  }
+}
+
+/**
+ * EIP-712 域分隔符（默认链 = Sepolia，与节点 signature.go 默认域一致）。
+ * 仅作兼容保留：新代码一律用 getEIP712Domain(CHAIN_ID)，不要直接用它签 Base 链订单。
+ */
 export const EIP712_DOMAIN = {
   name: '比特100',
   version: '1',

@@ -155,7 +155,7 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
       const signer = await getSigner()
       if (!signer) throw new Error('请先连接钱包')
       const timestamp = Math.floor(Date.now() / 1000)
-      const signature = await signCancelOrder(orderId, account, timestamp, signer)
+      const signature = await signCancelOrder(orderId, account, timestamp, signer, CHAIN_ID)
       await nodePost('/api/order/cancel', { orderId, signature, timestamp })
       await fetchMyOrders()
     } catch (e) {

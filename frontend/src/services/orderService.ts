@@ -1,4 +1,5 @@
 import { ethers } from 'ethers'
+import { CHAIN_ID } from '../config'
 import { nodePost } from '../nodeClient'
 import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce, OrderData } from './orderSigning'
 
@@ -24,7 +25,7 @@ export async function submitOrder(
   const orderId = generateOrderId()
 
   // 统一规范：签名必须带链上结算 nonce（结算时被合约消耗）
-  const nonce = await fetchOrderNonce(address, signer)
+  const nonce = await fetchOrderNonce(address, signer, CHAIN_ID)
 
   // 构造订单数据
   const orderData: OrderData = {
@@ -40,8 +41,8 @@ export async function submitOrder(
     nonce,
   }
 
-  // 签名订单
-  const signature = await signOrder(orderData, signer)
+  // 签名订单（域按当前链生成）
+  const signature = await signOrder(orderData, signer, CHAIN_ID)
 
   // 提交到 P2P 节点（nonce/expiresAt 必须随单提交，节点按签名原文重建验签）
   await nodePost('/api/order', {
@@ -69,7 +70,7 @@ export async function cancelOrder(
   const address = await signer.getAddress()
   const timestamp = Math.floor(Date.now() / 1000)
   
-  const signature = await signCancelOrder(orderID, address, timestamp, signer)
+  const signature = await signCancelOrder(orderID, address, timestamp, signer, CHAIN_ID)
   
   await nodePost('/api/order/cancel', {
     orderId: orderID,

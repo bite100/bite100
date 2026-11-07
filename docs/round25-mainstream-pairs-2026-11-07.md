@@ -114,18 +114,31 @@
 
 1. Chainlink feed 仅覆盖 BTC/ETH（Sepolia）与 ETH（Base Sepolia）；其余 5 对 × 双链无已核实 feed，参考价靠本市场数据或显示「暂无参考价」。
 2. 成交记录 `amountOut` 对高价对失真 ×1e18（§5），结算不受影响。
-3. `GET /api/trades` 缺省 `since` 返回 null（既有 quirk），须带 `since=0`。
-4. 前端 `EIP712_DOMAIN` 仍静态 Sepolia；Base 界面下单签名未验证；前端未部署。
-5. Gas 对半回收在提交器侧未接通（`gasReimburse` 传 0），本次结算未扣 gas。
+3. `GET /api/trades` 空结果返回 `null` 而非 `[]`（节点侧既有 quirk）；接口本身不支持 `since` 参数（窗口写死近 7 天），不要用 `since=0` 绕。
+4. 前端 `EIP712_DOMAIN` 静态 Sepolia 的问题已在本轮验收中修复（见 §6.5）：签名域改为按链生成（`getEIP712Domain(chainId)`），下单/撤单/nonce/验签四处均透传当前链 `CHAIN_ID`；Base 构建下单签名现指 Base Settlement。回归测试 `frontend/src/services/orderSigningTypes.test.ts` 锁定两链域。
+5. ~~Gas 对半回收在提交器侧未接通（`gasReimburse` 传 0），本次结算未扣 gas~~——**此条表述错误，已更正**：第 21 轮合约设计即为忽略自报 `gasReimburse` 字段、链上计量后对半回收，提交器传 0 是正确行为；本轮两笔 E2E 结算链上均有 `GasCostShared` 事件，双边扣款精确相等、shortfall 均为 0（Sepolia 各扣 16,173,630,000；Base 各扣 2,683,602,000,000,000）。
 6. Base 结算第 1 次尝试瞬时失败后重试成功（第 26 轮提交器竞态，见 §5）。
 7. 第 26 轮自有 E2E 的两条成交显示 `settleStatus: failed`（`Settlement: fill exceeds signed order`，疑似重复提交同一 fill），属第 26 轮自有产物，与本轮成交无关；2026-11-07 遗留成交已结算（tx `0x08fda7b0…09f3`）。
 8. 节点配置与 `ensure.sh` 模板在仓库之外（`~/workspace/bite100-node/`、`~/workspace/tools/bite100-node/`），改配置必须双处同步，否则看门狗 10 分钟内还原。
 9. 本轮零主网操作；跨链桥 DVN 1-of-1 主网门禁不变；未动 Ren 的钱包（仅测试钱包）。
 
+### 6.5 验收修复：EIP-712 签名域按链生成（2026-11-08 验收时补）
+
+**问题**：前端 `EIP712_DOMAIN` 是模块级静态常量，固定 Sepolia（chainId 11155111，Settlement `0x549690D6…7Ef6`）；`signOrder / signCancelOrder / fetchOrderNonce` 均不接受 chain 参数。以 `VITE_CHAIN_ID=84532` 构建 Base 界面时，下单签名仍走 Sepolia 域，Base 节点（验签域 84532 + Settlement `0x6291E0F2…3671`）恢复出的地址不符，订单必被拒；nonce 也会读错链。
+
+**修复**（`frontend/src/services/orderSigningTypes.ts`、`orderSigning.ts`、`orderVerification.ts` + 4 个调用点）：
+- 新增 `getEIP712Domain(chainId)`：域按链生成，`verifyingContract` 取该链 Settlement 地址；未登记链回落为传入 chainId + 零地址（不冒充别链）。
+- `signOrder / signCancelOrder / fetchOrderNonce / verifyOrderSignatureSignedData / verifyCancelSignature` 增加 `chainId` 参数，缺省为当前构建链 `CHAIN_ID`（`config.ts`，来自 `VITE_CHAIN_ID`）；`fetchOrderNonce` 的 Settlement 地址缺省取该链域的 verifyingContract。
+- 调用点（`OrderBookSection.tsx`、`LimitOrderFormWidget.tsx`、`TradeTabsPanel.tsx`、`orderService.ts`）显式透传 `CHAIN_ID`；旧 `EIP712_DOMAIN` 常量保留作默认链兼容。
+- 回归测试 `frontend/src/services/orderSigningTypes.test.ts`：锁定 Sepolia/Base 两链域各指各的 Settlement。
+
+**验证方法**：`VITE_CHAIN_ID=84532 npm run build` 后在 Base 界面下单，节点应接受订单（此前必被拒）；Sepolia 构建行为不变。**对用户的使用说明**：无操作变化——下单/撤单流程不变，只是 Base 界面下单从“必被拒”变为可用。
+
 ## 7. 本轮文件清单
 
 - `contracts/script/DeployMainstreamTokens.s.sol`（新增）
 - `frontend/src/config/chains.ts`、`frontend/src/config/pairs.ts`（新增）、`frontend/src/hooks/useCurrentPair.ts`（新增）、`frontend/src/components/dashboard/{Dashboard,PairStatsBar,OrderBookWidget,RecentTradesWidget,KLineChart,TradeTabsPanel,LimitOrderFormWidget,OrderBookSection}.tsx`、`frontend/src/hooks/useTokenPrice.ts`
-- 测试：`frontend/src/config/pairs.test.ts`、`frontend/src/hooks/useCurrentPair.test.ts`、`frontend/src/referencePrice.test.ts`、`frontend/src/hooks/useTokenPrice.test.ts`
+- 测试：`frontend/src/config/pairs.test.ts`、`frontend/src/hooks/useCurrentPair.test.ts`、`frontend/src/referencePrice.test.ts`、`frontend/src/hooks/useTokenPrice.test.ts`、`frontend/src/services/orderSigningTypes.test.ts`（验收新增，锁定两链 EIP-712 域）
+- 验收修复（2026-11-08）：`frontend/src/services/{orderSigningTypes,orderSigning,orderVerification}.ts`、`frontend/src/{OrderBookSection.tsx,services/orderService.ts}`、`frontend/src/components/dashboard/{LimitOrderFormWidget,TradeTabsPanel}.tsx`（签名域按链生成）；`docs/{sepolia,base-sepolia}-deployment-2026-11-07.md`（FeeDistributor 地址订正为链上实值）
 - 本文档：`docs/round25-mainstream-pairs-2026-11-07.md`
 - 仓外改动（节点运行所需，非本轮代码提交）：`~/workspace/bite100-node/{sepolia,base}/config.yaml`（8 对）、`~/workspace/tools/bite100-node/ensure.sh`（内嵌配置模板同步 8 对）

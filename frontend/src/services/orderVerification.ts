@@ -3,8 +3,9 @@
  * 与 orderSigning.ts 及节点 internal/match/signature.go 结构一致，防止订单伪造
  */
 import { ethers } from 'ethers'
+import { CHAIN_ID } from '../config'
 import {
-  EIP712_DOMAIN,
+  getEIP712Domain,
   ORDER_TYPES,
   CANCEL_TYPES,
   ZERO_ADDRESS,
@@ -33,12 +34,13 @@ function toMessage(orderData: OrderData) {
  * @param orderData 签名时的订单数据
  * @param signature 0x 前缀的签名
  * @param options.checkExpiry 是否拒绝已过期订单（默认 true，Replay 防护）
+ * @param options.chainId 签名域所属链（默认当前构建链 CHAIN_ID）
  * @returns 验证通过返回 true
  */
 export async function verifyOrderSignatureSignedData(
   orderData: OrderData,
   signature: string,
-  options?: { checkExpiry?: boolean }
+  options?: { checkExpiry?: boolean; chainId?: number }
 ): Promise<boolean> {
   try {
     if (!signature || !orderData.userAddress) return false
@@ -46,7 +48,7 @@ export async function verifyOrderSignatureSignedData(
       if (orderData.expiresAt < Math.floor(Date.now() / 1000)) return false
     }
     const recovered = await ethers.verifyTypedData(
-      EIP712_DOMAIN,
+      getEIP712Domain(options?.chainId ?? CHAIN_ID),
       ORDER_TYPES,
       toMessage(orderData),
       signature
@@ -64,12 +66,13 @@ export async function verifyCancelSignature(
   orderId: string,
   userAddress: string,
   timestamp: number,
-  signature: string
+  signature: string,
+  chainId: number = CHAIN_ID
 ): Promise<boolean> {
   try {
     if (!signature || !userAddress) return false
     const recovered = await ethers.verifyTypedData(
-      EIP712_DOMAIN,
+      getEIP712Domain(chainId),
       CANCEL_TYPES,
       { orderId, userAddress, timestamp },
       signature

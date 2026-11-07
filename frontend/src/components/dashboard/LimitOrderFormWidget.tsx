@@ -282,7 +282,7 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
 
       const orderId = generateOrderId()
       // 统一规范：签名必须带链上结算 nonce（结算时被合约消耗）；广播/入库的 nonce 字段同此值，不再用时间戳冒充
-      const nonce = await fetchOrderNonce(account, signer)
+      const nonce = await fetchOrderNonce(account, signer, CHAIN_ID)
       const orderData = {
         orderId,
         userAddress: account,
@@ -295,8 +295,8 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         expiresAt,
         nonce,
       }
-      const signature = await signOrder(orderData, signer)
-      const valid = await verifyOrderSignatureSignedData(orderData, signature)
+      const signature = await signOrder(orderData, signer, CHAIN_ID)
+      const valid = await verifyOrderSignatureSignedData(orderData, signature, { chainId: CHAIN_ID })
       if (!valid) throw new Error('订单签名验证失败，请重试')
       const order = {
         orderId,
