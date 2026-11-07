@@ -413,12 +413,27 @@ func (s *Server) handleTrades(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now().Unix()
-	since := now - 86400*7 // 最近 7 天
+	// since 起始时间（unix 秒，第二十九轮新增）：缺省仍为最近 7 天（与旧
+	// 行为一致）；显式传入但格式非法（非整数/负数）返回 400，避免调用方
+	// 以为过滤已生效。until 恒为当前时间。
+	since := now - 86400*7
+	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+		n, err := strconv.ParseInt(sinceStr, 10, 64)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid since (want unix seconds >= 0)", http.StatusBadRequest)
+			return
+		}
+		since = n
+	}
 	trades, err := s.Store.ListTrades(since, now, limit, pair)
 	if err != nil {
 		log.Printf("[api] trades: %v", err)
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
+	}
+	if trades == nil {
+		// 双保险：空结果恒为 []，永不 null（ListTrades 已保证，见 storage）
+		trades = []*storage.Trade{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(trades)

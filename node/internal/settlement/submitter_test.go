@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -227,9 +228,13 @@ func TestSubmitterTimeoutWithoutHashRetries(t *testing.T) {
 	}
 }
 
-// 交易已广播但仍在 mempool（第二十七轮回归）：SubmitFn 返回 (hash,
-// ErrTxPending) 时，提交器必须重试到次数上限——带 hash 也不得记终态，
-// 失败记录里也不得留下该 hash（它只是「未定论」，不是失败 tx）。
+// 交易已广播但仍在 mempool：SubmitFn 返回 (hash, ErrTxPending) 时，提交器
+// 必须重试到次数上限——带 hash 也不得一次记终态。第二十九轮契约更新：
+// 耗尽记终态时 hash 随记录保存（settle_error 保留 "attempts exhausted"
+// 出处），供终态对账按回执定论（见 TestSubmitterReconcile* 系列）；第二十七
+// 轮「失败记录不留 hash」的旧断言随之 supersede——旧行为下 hash 被丢弃，
+// 这类成交永远停在 failed 且无从判定到底结算了没有。它仍不是一笔「已确认
+// 失败」的交易：对账查到它落账会改判 settled、查不到（dropped）会重提。
 func TestSubmitterPendingHashRetries(t *testing.T) {
 	db := openTestStore(t)
 	rec := &submitRecorder{fn: func(int) (string, error) {
@@ -244,8 +249,11 @@ func TestSubmitterPendingHashRetries(t *testing.T) {
 	if rec.count() != 2 {
 		t.Errorf("SubmitFn 调用 %d 次, want 2（pending 应重试至上限，而非一次终态）", rec.count())
 	}
-	if got.TxHash != "" {
-		t.Errorf("pending 交易不得记入失败 tx, got %q", got.TxHash)
+	if got.TxHash != "0xpending" {
+		t.Errorf("耗尽终态应保存最后广播的 hash 供终态对账, got %q", got.TxHash)
+	}
+	if !strings.HasPrefix(got.SettleError, "attempts exhausted") {
+		t.Errorf("终态出处应为 attempts exhausted（对账据此区分）, got %q", got.SettleError)
 	}
 }
 

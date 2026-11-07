@@ -401,6 +401,19 @@ func removeOrderFromBook(ob *OrderBook, orderID string) bool {
 	return len(ob.Bids)+len(ob.Asks) < before
 }
 
+// tradeQuoteAmount 由成交量与成交价派生对手币数量（最小单位整数口径）：
+// quote = qty × price / 1e18，与签名订单的统一公式 DeriveAmountOut 逐位一致。
+// qty 与 price 均为整数值（最小单位数量与 1e18 定点价），故走整数派生精确
+// 无舍入。历史教训（第二十九轮修复）：此处曾写成浮点 qty×price 漏除 1e18，
+// 成交记录的对手币字段被放大 1e18 倍（且浮点 64 位尾数把高位价格的数量尾数
+// 磨成乱码）；结算本身不受影响——TradeToFill 从不读这两个字段、恒按签名价
+// 重算。本函数的口径由 engine 测试锁定，勿再改回浮点乘积。
+func tradeQuoteAmount(qty, price *big.Float) *big.Float {
+	qtyInt, _ := qty.Int(nil)
+	priceInt, _ := price.Int(nil)
+	return new(big.Float).SetPrec(256).SetInt(DeriveAmountOut(qtyInt, priceInt))
+}
+
 // Match 用 taker 订单与对手盘撮合，返回成交列表并更新订单簿内订单的 filled/status
 func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 	t0 := time.Now()
@@ -453,7 +466,7 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 			}
 			price := makerPrice
 			amountIn := qty
-			amountOut := new(big.Float).Mul(qty, price)
+			amountOut := tradeQuoteAmount(qty, price)
 			t := &storage.Trade{
 				TradeID:      genTradeID(maker.OrderID),
 				Pair:         taker.Pair,
@@ -511,7 +524,7 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 			}
 			price := makerPrice
 			amountIn := qty
-			amountOut := new(big.Float).Mul(qty, price)
+			amountOut := tradeQuoteAmount(qty, price)
 			t := &storage.Trade{
 				TradeID:      genTradeID(maker.OrderID),
 				Pair:         taker.Pair,
