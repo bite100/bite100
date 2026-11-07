@@ -156,11 +156,132 @@ contract VaultLockingTest is Test {
         vault.lockForOrder(_vaultOrder(order), badSig, true);
     }
 
+    /// @notice 第三十轮 L2 起本用例语义反转：旧版断言「非 locker 落锁 revert」，
+    /// L2 后任何人（含订单用户本人、任意第三方）都可为验签有效的订单落锁。
+    /// 完整的 L2 专项覆盖见本文件末尾的 L2 段与 VaultL2 语义注释。
     function test_Lock_NotLockerReverts() public {
         (Settlement.SignedOrder memory m,) = _stdPair();
-        vm.prank(maker); // 连订单用户本人也不能直接上锁，只有 locker
-        vm.expectRevert("Vault: not locker");
+        vm.prank(maker); // L2：订单用户本人可直接自锁，不再 revert
+        bytes32 digest = vault.lockForOrder(_vaultOrder(m.order), m.signature, true);
+        assertEq(digest, settlement.orderDigest(m.order));
+        assertEq(vault.locked(maker, address(tokenA)), 100e18);
+    }
+
+    // ---------- 第三十轮 L2：无权限落锁 ----------
+
+    function test_L2_ThirdPartyLocksValidOrder() public {
+        (Settlement.SignedOrder memory m,) = _stdPair();
+        address stranger = makeAddr("stranger"); // 非 locker、非订单用户
+        assertFalse(vault.lockers(stranger));
+        vm.prank(stranger);
+        bytes32 digest = vault.lockForOrder(_vaultOrder(m.order), m.signature, true);
+        assertEq(digest, settlement.orderDigest(m.order));
+        assertEq(vault.locked(maker, address(tokenA)), 100e18);
+        assertEq(vault.availableBalance(maker, address(tokenA)), 400e18);
+        (address user, address token, uint256 remaining,) = vault.orderLocks(digest);
+        assertEq(user, maker); // 锁的归属恒为签名者，与调用者无关
+        assertEq(token, address(tokenA));
+        assertEq(remaining, 100e18);
+        // 墓碑同写（失败归责的凭据不因 L2 而改变）
+        (address tombUser, address tombToken) = vault.lockTombstones(digest);
+        assertEq(tombUser, maker);
+        assertEq(tombToken, address(tokenA));
+        _assertInvariant(maker, address(tokenA));
+    }
+
+    function test_L2_ThirdPartyLocksBuySide() public {
+        (, Settlement.SignedOrder memory t) = _stdPair();
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        bytes32 digest = vault.lockForOrder(_vaultOrder(t.order), t.signature, false);
+        (address user, address token, uint256 remaining,) = vault.orderLocks(digest);
+        assertEq(user, taker);
+        assertEq(token, address(tokenB)); // 买方锁 tokenOut × amountOut
+        assertEq(remaining, 100e18);
+        assertEq(vault.locked(taker, address(tokenB)), 100e18);
+    }
+
+    function test_L2_InvalidSignatureReverts() public {
+        Settlement.Order memory order = _order(maker, "m1", 100e18, 100e18, 0);
+        bytes memory badSig = _sign(takerKey, order); // 他人私钥签 → 验签不过
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vm.expectRevert("Vault: invalid order signature");
+        vault.lockForOrder(_vaultOrder(order), badSig, true);
+        // 垃圾签名（随机字节）同样被挡
+        vm.prank(stranger);
+        vm.expectRevert("Vault: invalid order signature");
+        vault.lockForOrder(_vaultOrder(order), new bytes(65), true);
+    }
+
+    function test_L2_DoubleLockReverts() public {
+        (Settlement.SignedOrder memory m,) = _stdPair();
+        address stranger1 = makeAddr("stranger1");
+        address stranger2 = makeAddr("stranger2");
+        vm.prank(stranger1);
         vault.lockForOrder(_vaultOrder(m.order), m.signature, true);
+        vm.prank(stranger2); // 换一个调用者重复落锁同样被挡（按 digest 判重，与调用者无关）
+        vm.expectRevert("Vault: order already locked");
+        vault.lockForOrder(_vaultOrder(m.order), m.signature, true);
+    }
+
+    function test_L2_ExpiredOrderReverts() public {
+        (Settlement.SignedOrder memory m,) = _stdPair();
+        vm.warp(block.timestamp + 2 days);
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vm.expectRevert("Vault: order expired");
+        vault.lockForOrder(_vaultOrder(m.order), m.signature, true);
+    }
+
+    function test_L2_InsufficientAvailableReverts() public {
+        Settlement.SignedOrder memory big = _signed(makerKey, _order(maker, "big", 600e18, 600e18, 0));
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vm.expectRevert("Vault: insufficient available");
+        vault.lockForOrder(_vaultOrder(big.order), big.signature, true);
+    }
+
+    function test_L2_WrongDirectionFlagFailsClosed() public {
+        // maker 只持有 tokenA（卖方）；以买方口径（payWithTokenIn=false）落锁会去锁
+        // maker 的 tokenB 义务，其可用余额为 0 → revert，资金不被错误锁定。
+        (Settlement.SignedOrder memory m,) = _stdPair();
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        vm.expectRevert("Vault: insufficient available");
+        vault.lockForOrder(_vaultOrder(m.order), m.signature, false);
+        assertEq(vault.locked(maker, address(tokenA)), 0);
+        assertEq(vault.locked(maker, address(tokenB)), 0);
+    }
+
+    function test_L2_LockByStranger_ReleaseSemanticsUnchanged() public {
+        (Settlement.SignedOrder memory m,) = _stdPair();
+        address stranger = makeAddr("stranger");
+        vm.prank(stranger);
+        bytes32 digest = vault.lockForOrder(_vaultOrder(m.order), m.signature, true);
+
+        // 落锁者本人（非 locker、非锁属用户）无权释放他人的锁
+        vm.prank(stranger);
+        vm.expectRevert("Vault: not authorized to release");
+        vault.releaseOrderLock(digest);
+
+        // 锁属用户本人仍可自助释放（撤单路径不回归）
+        vm.prank(maker);
+        vault.releaseOrderLock(digest);
+        assertEq(vault.locked(maker, address(tokenA)), 0);
+        assertEq(vault.availableBalance(maker, address(tokenA)), 500e18);
+    }
+
+    function test_L2_LockByStranger_ThenSettlesNormally() public {
+        (Settlement.SignedOrder memory m, Settlement.SignedOrder memory t) = _stdPair();
+        address stranger = makeAddr("stranger");
+        vm.startPrank(stranger);
+        vault.lockForOrder(_vaultOrder(m.order), m.signature, true);
+        vault.lockForOrder(_vaultOrder(t.order), t.signature, false);
+        vm.stopPrank();
+        settlement.settleTrade(_fill(m, t, 100e18, 100e18));
+        assertEq(vault.balanceOf(address(tokenB), maker), 99.99e18);
+        assertEq(vault.balanceOf(address(tokenA), taker), 99.99e18);
     }
 
     function test_Lock_InsufficientAvailableReverts() public {
