@@ -65,8 +65,9 @@ export function GovernanceSection({ account }: { account: string | null }) {
               votingEndsAt: String(p[4] ?? 0),
               yesCount: String(p[5] ?? 0),
               noCount: String(p[6] ?? 0),
-              executed: Boolean(p[7]),
-              executableAt: String(p[8] ?? 0),
+              // 合约字段序：[7]=executableAt、[8]=executed（第 32 轮随 ABI 一并对正，此前两处写反）
+              executed: Boolean(p[8]),
+              executableAt: String(p[7] ?? 0),
               isMultiStep: false,
             })
           }
@@ -82,7 +83,8 @@ export function GovernanceSection({ account }: { account: string | null }) {
                 votingEndsAt: String(mp[5] ?? 0),
                 yesCount: String(mp[6] ?? 0),
                 noCount: String(mp[7] ?? 0),
-                executed: Boolean(mp[8]),
+                // 合约字段序：[8]=executableAt、[9]=executed（第 32 轮对正）
+                executed: Boolean(mp[9]),
                 executableAt: String(mp[8] ?? 0),
                 isMultiStep: true,
               })
