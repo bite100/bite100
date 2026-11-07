@@ -75,14 +75,23 @@ describe('isPastClaimDeadline', () => {
     expect(isPastClaimDeadline('2025-02-03')).toBe(true)
     expect(isPastClaimDeadline('a_b_c')).toBe(true)
   })
-  it('returns false when within 14 days of period end', () => {
-    // 2025-02-09 为周日，设为周期结束日；当前设为 2025-02-10（周期结束后 1 天）
+  it('returns false when within 90 days of period end (scheme A)', () => {
+    // 2025-02-09 为周期结束日；结束后 1 天、30 天均在 90 天窗口内
     vi.setSystemTime(new Date('2025-02-10T12:00:00Z'))
     expect(isPastClaimDeadline('2025-02-03_2025-02-09')).toBe(false)
+    vi.setSystemTime(new Date('2025-03-11T12:00:00Z'))
+    expect(isPastClaimDeadline('2025-02-03_2025-02-09')).toBe(false)
   })
-  it('returns true when more than 14 days past period end', () => {
-    // 2025-02-09 周期结束，14 天后为 2025-02-24 00:00 之后
-    vi.setSystemTime(new Date('2025-02-25T12:00:00Z'))
+  it('returns true when more than 90 days past period end', () => {
+    // 2025-02-09 周期结束 + 90 天 = 2025-05-10 23:59:59Z 截止
+    vi.setSystemTime(new Date('2025-05-10T12:00:00Z'))
+    expect(isPastClaimDeadline('2025-02-03_2025-02-09')).toBe(false)
+    vi.setSystemTime(new Date('2025-05-11T12:00:00Z'))
     expect(isPastClaimDeadline('2025-02-03_2025-02-09')).toBe(true)
+  })
+  it('getClaimDeadline returns period end + 90 days, null for invalid', async () => {
+    const { getClaimDeadline } = await import('./contributorRewardUtils')
+    expect(getClaimDeadline('2025-02-03_2025-02-09')?.toISOString()).toBe('2025-05-10T23:59:59.000Z')
+    expect(getClaimDeadline('invalid')).toBeNull()
   })
 })

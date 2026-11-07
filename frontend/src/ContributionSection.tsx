@@ -141,10 +141,10 @@ export function ContributionSection({ account }: { account: string | null }) {
                 <span className="value mono">{r.score}</span>
               </div>
               <div className="row result">
-                <span className="label">TKA 未领取</span>
+                <span className="label">TKA 单次可领</span>
                 <span className="value">{r.claimableT0}</span>
-                {isPastClaimDeadline(r.period) && Number(r.claimableT0) > 0 && (
-                  <span className="hint" style={{ marginLeft: '0.5rem' }}>已过领取期限，不再发放</span>
+                {isPastClaimDeadline(r.period) && (
+                  <span className="hint" style={{ marginLeft: '0.5rem' }}>已过领取期限（90 天），未领部分将回流下一期</span>
                 )}
                 {canClaimAny && Number(r.claimableT0) > 0 && !isPastClaimDeadline(r.period) && (
                   <button
@@ -163,10 +163,10 @@ export function ContributionSection({ account }: { account: string | null }) {
                 <span className="value">{r.claimedT0}</span>
               </div>
               <div className="row result">
-                <span className="label">TKB 未领取</span>
+                <span className="label">TKB 单次可领</span>
                 <span className="value">{r.claimableT1}</span>
-                {isPastClaimDeadline(r.period) && Number(r.claimableT1) > 0 && (
-                  <span className="hint" style={{ marginLeft: '0.5rem' }}>已过领取期限，不再发放</span>
+                {isPastClaimDeadline(r.period) && (
+                  <span className="hint" style={{ marginLeft: '0.5rem' }}>已过领取期限（90 天），未领部分将回流下一期</span>
                 )}
                 {canClaimAny && Number(r.claimableT1) > 0 && !isPastClaimDeadline(r.period) && (
                   <button

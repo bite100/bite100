@@ -12,7 +12,7 @@ import {
   TOKEN1_ADDRESS,
 } from '../config'
 import { getProvider, withSigner, formatTokenAmount, formatError, isValidAddress } from '../utils'
-import { getLastTwoPeriods, periodToId, isPastClaimDeadline, formatScore } from '../services/contributorRewardUtils'
+import { getLastTwoPeriods, periodToId, isPastClaimDeadline, getClaimDeadline, formatScore } from '../services/contributorRewardUtils'
 
 const ZERO = '0x0000000000000000000000000000000000000000'
 const isDeployed = () =>
@@ -23,8 +23,12 @@ const isFeeDistDeployed = () =>
 export interface PeriodClaimRow {
   period: string
   score: string
+  /** 单次可领（合约 claimable，受奖池 10% 上限） */
   claimableT0: string
   claimableT1: string
+  /** 待领总额（合约 claimableTotal） */
+  totalT0: string
+  totalT1: string
   claimedT0: string
   claimedT1: string
 }
@@ -77,13 +81,17 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
               reward.getContributionScore(p, account),
               reward.claimable(p, TOKEN0_ADDRESS, account),
               reward.claimable(p, TOKEN1_ADDRESS, account),
+              reward.claimableTotal(p, TOKEN0_ADDRESS, account),
+              reward.claimableTotal(p, TOKEN1_ADDRESS, account),
               reward.claimed(pid, TOKEN0_ADDRESS, account),
               reward.claimed(pid, TOKEN1_ADDRESS, account),
-            ]).then(([score, claim0, claim1, claimed0, claimed1]) => ({
+            ]).then(([score, claim0, claim1, total0, total1, claimed0, claimed1]) => ({
               period: p,
               score: formatScore(score),
               claimableT0: formatTokenAmount(claim0 ?? 0n),
               claimableT1: formatTokenAmount(claim1 ?? 0n),
+              totalT0: formatTokenAmount(total0 ?? 0n),
+              totalT1: formatTokenAmount(total1 ?? 0n),
               claimedT0: formatTokenAmount(claimed0 ?? 0n),
               claimedT1: formatTokenAmount(claimed1 ?? 0n),
             }))
@@ -266,40 +274,52 @@ export function UnifiedRewardClaim({ account, onError }: UnifiedRewardClaimProps
             const pastDeadline = isPastClaimDeadline(r.period)
             const canClaimT0 = !pastDeadline && Number(r.claimableT0) > 0
             const canClaimT1 = !pastDeadline && Number(r.claimableT1) > 0
+            const deadline = getClaimDeadline(r.period)
             return (
               <div key={r.period} className="unified-reward-period-card">
                 <div className="unified-reward-period-label">贡献奖励 · {r.period}</div>
-                <div className="unified-reward-period-row">
-                  <span className="label">TKA 可领</span>
-                  <span className="value">{r.claimableT0}</span>
-                </div>
-                {pastDeadline && Number(r.claimableT0) > 0 ? (
-                  <p className="unified-reward-deadline">已过领取期限</p>
+                <p className="unified-reward-hint">
+                  {deadline
+                    ? `领取截止：${deadline.toISOString().slice(0, 10)}（周期结束后 90 天内，单次领取上限为奖池 10%）`
+                    : '领取期限：周期结束后 90 天内，单次领取上限为奖池 10%'}
+                </p>
+                {pastDeadline ? (
+                  <p className="unified-reward-deadline">已过领取期限，未领部分将回流下一期奖池</p>
                 ) : (
-                  <button
-                    type="button"
-                    className="btn primary claim-btn-large"
-                    disabled={!canClaimT0 || claiming !== null}
-                    onClick={() => handleClaim(r.period, 'T0')}
-                  >
-                    {claiming === `${r.period}-T0` ? '领取中…' : '领取 TKA'}
-                  </button>
-                )}
-                <div className="unified-reward-period-row">
-                  <span className="label">TKB 可领</span>
-                  <span className="value">{r.claimableT1}</span>
-                </div>
-                {pastDeadline && Number(r.claimableT1) > 0 ? (
-                  <p className="unified-reward-deadline">已过领取期限</p>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn primary claim-btn-large"
-                    disabled={!canClaimT1 || claiming !== null}
-                    onClick={() => handleClaim(r.period, 'T1')}
-                  >
-                    {claiming === `${r.period}-T1` ? '领取中…' : '领取 TKB'}
-                  </button>
+                  <>
+                    <div className="unified-reward-period-row">
+                      <span className="label">TKA 单次可领</span>
+                      <span className="value">{r.claimableT0}</span>
+                    </div>
+                    <div className="unified-reward-period-row">
+                      <span className="label">TKA 待领总额</span>
+                      <span className="value">{r.totalT0}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn primary claim-btn-large"
+                      disabled={!canClaimT0 || claiming !== null}
+                      onClick={() => handleClaim(r.period, 'T0')}
+                    >
+                      {claiming === `${r.period}-T0` ? '领取中…' : '领取 TKA'}
+                    </button>
+                    <div className="unified-reward-period-row">
+                      <span className="label">TKB 单次可领</span>
+                      <span className="value">{r.claimableT1}</span>
+                    </div>
+                    <div className="unified-reward-period-row">
+                      <span className="label">TKB 待领总额</span>
+                      <span className="value">{r.totalT1}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn primary claim-btn-large"
+                      disabled={!canClaimT1 || claiming !== null}
+                      onClick={() => handleClaim(r.period, 'T1')}
+                    >
+                      {claiming === `${r.period}-T1` ? '领取中…' : '领取 TKB'}
+                    </button>
+                  </>
                 )}
               </div>
             )

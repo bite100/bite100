@@ -38,15 +38,23 @@ export function periodToId(period: string): string {
   return solidityPackedKeccak256(['string'], [period])
 }
 
-const CLAIM_DEADLINE_DAYS = 14
+/** 领取期限（方案 A，与合约 CLAIM_DEADLINE_SECONDS 一致）：周期结束后 90 天内可领 */
+export const CLAIM_DEADLINE_DAYS = 90
 
-/** 周期结束 + 14 天为领取截止，超过则未领取不再发放 */
-export function isPastClaimDeadline(period: string): boolean {
+/** 某周期的领取截止时间（UTC）；周期格式非法时返回 null */
+export function getClaimDeadline(period: string): Date | null {
   const parts = period.split('_')
-  if (parts.length !== 2) return true
-  const endYMD = parts[1]
-  const endDate = new Date(endYMD + 'T23:59:59Z')
+  if (parts.length !== 2) return null
+  const endDate = new Date(parts[1] + 'T23:59:59Z')
+  if (Number.isNaN(endDate.getTime())) return null
   const deadline = new Date(endDate)
   deadline.setUTCDate(deadline.getUTCDate() + CLAIM_DEADLINE_DAYS)
+  return deadline
+}
+
+/** 是否已过领取截止（与合约一致：now > 周期结束 + 90 天）；逾期未领部分将回流下一期 */
+export function isPastClaimDeadline(period: string): boolean {
+  const deadline = getClaimDeadline(period)
+  if (!deadline) return true
   return Date.now() > deadline.getTime()
 }

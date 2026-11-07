@@ -12,6 +12,7 @@ description: 贡献分、ContributorReward 合约、节点/流动性贡献证明
 3. **防重放**：同一 (msg.sender, period) 仅接受一次提交。
 4. **贡献分价值**：每周期锁定「每贡献分价值」，领奖按发放时价值算（贡献奖励接口 §3.3）。
 5. **领奖地址**：msg.sender 为领奖账户，或方案 B 的注册 claimAddress。
+6. **领取规则（方案 A，2026-11-07 定案）**：单次领取上限 = 该期奖池 10%（可多次领完）；领取窗 = 周期结束后 90 天（合约 CLAIM_DEADLINE_SECONDS，按 periodEndTimestamp 强制）；逾期未领部分由 owner 经 rolloverUnclaimed 回流下一期奖池。前端展示必须与合约一致：claimable() = 单次可领、claimableTotal() = 待领总额，并显示领取截止日期（contributorRewardUtils 的 90 天口径与合约同步）。
 
 ## 代码位置
 
