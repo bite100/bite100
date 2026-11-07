@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { Text } from '@mantine/core'
 import { nodeGet } from '../../nodeClient'
 import { DEFAULT_PAIR } from '../../config/pairs'
+import { fromScaled, toPlain, fmtPrice, fmtAmount, fmtTotal } from './tradeFormat'
 
 /** 右栏盘口每侧展示档位数（对标 HY 右栏密度） */
 const DISPLAY_DEPTH = 10
 
 export interface OrderBookRow {
+  /** 人类单位（非 wei）十进制字符串——marketOrder.ts 注明的既有口径 */
   price: string
   amount: string
   side: 'buy' | 'sell'
@@ -34,6 +36,13 @@ function withTotals(rows: OrderBookRow[]): BookLevel[] {
   })
 }
 
+/**
+ * 订单簿（第 28 轮视觉重做，排版基准见 docs/round28-chart-orderbook-ui-2026-11-08.md）：
+ * 卖盘倒序、价差居中行、深度条按累计量比例（浅底淡色）、价格涨跌语义色、
+ * 等宽数字右对齐。节点返回的定点/wei 在此换算为人类单位（展示层换算，
+ * 数据口径不变）；本组件对外（onBookUpdate/onPriceClick）一律人类单位，
+ * 与 marketOrder.ts 的既有约定一致。
+ */
 export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClick }: OrderBookWidgetProps = {}) {
   const [bids, setBids] = useState<OrderBookRow[]>([])
   const [asks, setAsks] = useState<OrderBookRow[]>([])
@@ -50,8 +59,13 @@ export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClic
           { pair }
         )
         if (cancelled) return
-        const newBids = (data.bids ?? []).slice(0, 15).map((o) => ({ price: o.price, amount: o.amount, side: 'buy' as const }))
-        const newAsks = (data.asks ?? []).slice(0, 15).map((o) => ({ price: o.price, amount: o.amount, side: 'sell' as const }))
+        const toRow = (o: { price: string; amount: string }, side: 'buy' | 'sell'): OrderBookRow => ({
+          price: toPlain(fromScaled(o.price)),
+          amount: toPlain(fromScaled(o.amount)),
+          side,
+        })
+        const newBids = (data.bids ?? []).slice(0, 15).map((o) => toRow(o, 'buy'))
+        const newAsks = (data.asks ?? []).slice(0, 15).map((o) => toRow(o, 'sell'))
         setBids(newBids)
         setAsks(newAsks)
         setFailed(false)
@@ -106,10 +120,10 @@ export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClic
           style={{ width: `${depthPct}%` }}
         />
         <span className="book-cell book-price" style={{ color: kind === 'ask' ? 'var(--b100-down)' : 'var(--b100-up)' }}>
-          {Number(level.price).toFixed(4)}
+          {fmtPrice(Number(level.price))}
         </span>
-        <span className="book-cell book-cell-r">{Number(level.amount).toFixed(4)}</span>
-        <span className="book-cell book-cell-r">{level.total.toFixed(4)}</span>
+        <span className="book-cell book-cell-r">{fmtAmount(Number(level.amount))}</span>
+        <span className="book-cell book-cell-r">{fmtTotal(level.total)}</span>
       </button>
     )
   }
@@ -145,9 +159,9 @@ export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClic
           <div className="book-spread">
             {hasSpread ? (
               <>
-                <span className="book-spread-mid">{mid.toFixed(4)}</span>
+                <span className="book-spread-mid">{fmtPrice(mid)}</span>
                 <span className="book-spread-val">
-                  价差 {spread.toFixed(4)}
+                  价差 {fmtPrice(spread)}
                   {!Number.isNaN(spreadPct) && ` (${spreadPct.toFixed(2)}%)`}
                 </span>
               </>

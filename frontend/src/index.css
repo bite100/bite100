@@ -23,6 +23,16 @@
   --b100-error-bg: #fef3f2;
   --b100-error-border: #fecdca;
   --b100-error-text: #b42318;
+  /* 第 28 轮：K 线/盘口专业组件 token（基准实测见 docs/round28-chart-orderbook-ui-2026-11-08.md）
+     蜡烛涨跌用 TradingView 现行默认色（与站内 --b100-up/down 分工：图表数据位专用） */
+  --b100-chart-up: #089981;
+  --b100-chart-down: #f23645;
+  --b100-ma-1: #f0b90b;
+  --b100-ma-2: #eb40b5;
+  --b100-depth-bid: rgba(3, 152, 85, 0.08);
+  --b100-depth-ask: rgba(217, 45, 32, 0.08);
+  --b100-grid-line: #f1f1f4;
+  --b100-crosshair: #b9b9c0;
   --b100-radius-card: 24px;
   --b100-shadow-card: 0 2px 12px rgba(16, 16, 20, 0.05);
   --b100-shadow-pop: 0 16px 40px rgba(16, 16, 20, 0.12);

@@ -1,6 +1,7 @@
 import { Paper, Text, Button, Select } from '@mantine/core'
 import type { PairStats } from '../../hooks/usePairStats'
 import { TRADE_PAIRS, type TradePair } from '../../config/pairs'
+import { fmtPrice, fmtAmount } from './tradeFormat'
 
 export interface PairStatsBarProps {
   pair: string
@@ -12,16 +13,9 @@ export interface PairStatsBarProps {
   onShowFullOrderbook?: () => void
 }
 
-function fmt(n: number | null | undefined, digits = 4): string {
-  if (n == null || Number.isNaN(n)) return '—'
-  return n.toFixed(digits)
-}
-
-function fmtCompact(n: number | null | undefined): string {
-  if (n == null || Number.isNaN(n)) return '—'
-  if (Math.abs(n) >= 10000) return n.toFixed(2)
-  if (Math.abs(n) >= 1) return n.toFixed(4)
-  return n.toFixed(6)
+/** 第 28 轮：统一走 tradeFormat（千分位 + 量级小数位），替代旧 toFixed 直出 */
+function fmt(n: number | null | undefined): string {
+  return fmtPrice(n)
 }
 
 /**
@@ -88,10 +82,10 @@ export function PairStatsBar({ pair, stats, midPrice, onPairChange, onShowFullOr
       <div className="ts-item">
         <Text size="xs" c="dimmed">24h 成交量</Text>
         <Text className="ts-value">
-          {fmtCompact(stats.volume24hBase)} <span className="ts-unit">{base}</span>
+          {fmtAmount(stats.volume24hBase)} <span className="ts-unit">{base}</span>
         </Text>
         <Text size="xs" c="dimmed" className="ts-sub">
-          ≈ {fmtCompact(stats.volume24hQuote)} {quote}
+          ≈ {fmtAmount(stats.volume24hQuote)} {quote}
         </Text>
       </div>
 
