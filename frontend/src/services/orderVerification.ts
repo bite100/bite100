@@ -24,6 +24,7 @@ function toMessage(orderData: OrderData) {
     price: orderData.price,
     timestamp: orderData.timestamp,
     expiresAt: orderData.expiresAt,
+    nonce: orderData.nonce ?? 0,
   }
 }
 

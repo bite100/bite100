@@ -94,8 +94,11 @@ export const CONTRIBUTOR_REWARD_ABI = [
   'function getContributionScore(string calldata period, address account) view returns (uint256)',
   'function getPeriodTotalScore(string calldata period) view returns (uint256)',
   'function claimable(string calldata period, address token, address account) view returns (uint256)',
+  'function claimableTotal(string calldata period, address token, address account) view returns (uint256)',
   'function claimed(bytes32 periodId, address token, address account) view returns (uint256)',
   'function claimReward(string calldata period, address token)',
+  'function periodEndTimestamp(bytes32 periodId) view returns (uint256)',
+  'function CLAIM_DEADLINE_SECONDS() view returns (uint256)',
 ] as const
 
 export const FEE_DISTRIBUTOR_ABI = [
@@ -113,12 +116,5 @@ export const NODE_REWARDS_ABI = [
   'function bindAndRegister(bytes32 nodeId)',
 ] as const
 
-/** Settlement 合约：链下撮合后调用 settleTrade 上链结算（需 owner/relayer） */
-export const SETTLEMENT_ABI = [
-  'function settleTrade(address maker, address taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 gasReimburseIn, uint256 gasReimburseOut)',
-  'function settleTradesBatch(address[] makers, address[] takers, address[] tokenIns, address[] tokenOuts, uint256[] amountIns, uint256[] amountOuts, uint256[] gasReimburseIns, uint256[] gasReimburseOuts)',
-  'function settleTradesBatchWithGasSavings(address[] makers, address[] takers, address[] tokenIns, address[] tokenOuts, uint256[] amountIns, uint256[] amountOuts, uint256[] gasReimburseIns, uint256[] gasReimburseOuts, uint256 gasSavingsUsdt6)',
-  'event TradeSettled(address indexed maker, address indexed taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 feeAmount)',
-  'event TradeSettledWithGasReimburse(address indexed maker, address indexed taker, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 feeAmount, uint256 gasReimburseIn, uint256 gasReimburseOut, address indexed gasRecipient)',
-  'event GasSavingsDistributed(uint256 userRebateUsdt, uint256 toFeeDistributorUsdt, uint256 toFounderUsdt)',
-] as const
+/** Settlement 合约：链下撮合后调用 settleTrade 上链验签结算（需 owner/relayer 提交，双方签名订单随 Fill 携带） */
+export { SETTLEMENT_ABI } from './services/settlementAbi'

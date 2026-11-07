@@ -5,7 +5,7 @@ import { ethers } from 'ethers'
 import { formatError } from '../../utils'
 import { nodePost } from '../../nodeClient'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
-import { signOrder, generateOrderId } from '../../services/orderSigning'
+import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
 import { TOKEN0_ADDRESS, TOKEN1_ADDRESS } from '../../config'
 import type { Signer } from 'ethers'
@@ -59,6 +59,8 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
       const priceWei = ethers.parseUnits(price, 18)
       const amountOutWei = (BigInt(amountInWei.toString()) * BigInt(priceWei.toString())) / BigInt(1e18)
       const orderId = generateOrderId()
+      // 统一规范：签名必须带链上结算 nonce（结算时被合约消耗）；广播/入库的 nonce 字段同此值，不再用时间戳冒充
+      const nonce = await fetchOrderNonce(account, signer)
       const orderData = {
         orderId,
         userAddress: account,
@@ -69,6 +71,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
         price: priceWei.toString(),
         timestamp,
         expiresAt,
+        nonce,
       }
       const signature = await signOrder(orderData, signer)
       const valid = await verifyOrderSignatureSignedData(orderData, signature)
@@ -82,7 +85,7 @@ export function LimitOrderFormWidget({ account, getSigner, recommendedPrice, onS
         amount: orderData.amountIn,
         filled: '0',
         status: 'open',
-        nonce: timestamp,
+        nonce,
         createdAt: timestamp,
         expiresAt,
         signature,

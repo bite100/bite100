@@ -9,6 +9,8 @@ export interface Order {
   signature: string
   /** 过期时间戳（毫秒），未设则永不过期；加载/恢复时过滤已过期订单 */
   expiresAt?: number
+  /** 链上结算 nonce（签名内字段，结算验签必需；旧订单可能缺失） */
+  nonce?: number
 }
 
 export interface CancelRequest {

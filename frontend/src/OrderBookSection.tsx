@@ -9,7 +9,7 @@ import { formatError, formatTokenAmount, getProvider } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { nodeGet, nodePost } from './nodeClient'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
-import { signOrder, signCancelOrder, generateOrderId } from './services/orderSigning'
+import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
 import { verifyOrderSignatureSignedData } from './services/orderVerification'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorDisplay } from './components/ErrorDisplay'
@@ -340,6 +340,8 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       const priceWei = ethers.parseUnits(price, 18)
       const amountOutWei = (BigInt(amountInWei.toString()) * BigInt(priceWei.toString())) / BigInt(1e18)
       const orderId = generateOrderId()
+      // 统一规范：签名必须带链上结算 nonce（结算时被合约消耗）；广播/入库的 nonce 字段同此值，不再用时间戳冒充
+      const nonce = await fetchOrderNonce(account, signer)
       const orderData = {
         orderId,
         userAddress: account,
@@ -350,6 +352,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         price: priceWei.toString(),
         timestamp,
         expiresAt,
+        nonce,
       }
       const signature = await signOrder(orderData, signer)
       const valid = await verifyOrderSignatureSignedData(orderData, signature)
@@ -365,7 +368,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         amount: orderData.amountIn,
         filled: '0',
         status: 'open',
-        nonce: timestamp,
+        nonce,
         createdAt: timestamp,
         expiresAt,
         signature,

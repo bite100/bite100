@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { ethers, Contract } from 'ethers'
 import { useP2P } from '../contexts/P2PContext'
-import { signOrder, generateOrderId } from '../services/orderSigning'
+import { signOrder, generateOrderId, fetchOrderNonce } from '../services/orderSigning'
 import { verifyOrderSignatureSignedData } from '../services/orderVerification'
 import { usePairMarketPrice } from '../hooks/useTokenPrice'
 import { TOKEN0_ADDRESS, TOKEN1_ADDRESS, ERC20_ABI } from '../config'
@@ -146,6 +146,8 @@ export function OrderForm({ pair, account, onSuccess }: OrderFormProps) {
       const a = BigInt(amountInWei.toString())
       const p = BigInt(priceWei.toString())
       const amountOutWei = (a * p) / BigInt(1e18)
+      // 统一规范：签名必须带链上结算 nonce（结算时被合约消耗）
+      const nonce = await fetchOrderNonce(address, signer)
 
       const orderData = {
         orderId,
@@ -157,6 +159,7 @@ export function OrderForm({ pair, account, onSuccess }: OrderFormProps) {
         price: priceWei.toString(),
         timestamp,
         expiresAt,
+        nonce,
       }
 
       const signature = await signOrder(orderData, signer)
@@ -174,6 +177,7 @@ export function OrderForm({ pair, account, onSuccess }: OrderFormProps) {
         amount: orderData.amountIn,
         timestamp,
         expiresAt,
+        nonce,
         signature,
       })
 
