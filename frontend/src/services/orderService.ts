@@ -1,6 +1,7 @@
 import { ethers } from 'ethers'
 import { CHAIN_ID } from '../config'
 import { nodePost } from '../nodeClient'
+import { dualSendOrderToRelay } from './relayDualSend'
 import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce, OrderData } from './orderSigning'
 
 export interface OrderParams {
@@ -45,7 +46,7 @@ export async function submitOrder(
   const signature = await signOrder(orderData, signer, CHAIN_ID)
 
   // 提交到 P2P 节点（nonce/expiresAt 必须随单提交，节点按签名原文重建验签）
-  await nodePost('/api/order', {
+  const orderBody = {
     orderId,
     trader: address,
     pair: params.pair,
@@ -58,8 +59,12 @@ export async function submitOrder(
     expiresAt,
     nonce,
     signature,
-  })
-  
+  }
+  await nodePost('/api/order', orderBody)
+  // 无节点化阶段 1 双发：主发成功后 best-effort 副发同一订单到公告栏中继；
+  // 副发失败不影响下单结果（relayDualSend 内部吞错）
+  await dualSendOrderToRelay(orderBody, CHAIN_ID)
+
   return orderId
 }
 

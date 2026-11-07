@@ -12,6 +12,7 @@ import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { nodeGet, nodePost } from './nodeClient'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
 import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
+import { dualSendOrderToRelay } from './services/relayDualSend'
 import { verifyOrderSignatureSignedData } from './services/orderVerification'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorDisplay } from './components/ErrorDisplay'
@@ -394,6 +395,8 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         signature,
       }
       await nodePost('/api/order', order)
+      // 无节点化阶段 1 双发：主发成功后 best-effort 副发同一订单到公告栏中继（失败不影响下单）
+      await dualSendOrderToRelay({ ...order }, CHAIN_ID)
       await p2pOrderBroadcast.publishOrder({ ...order, signature: order.signature ?? '' })
       setPrice('')
       setAmount('')

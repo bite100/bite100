@@ -5,6 +5,7 @@ import { formatError, formatTokenAmount, getProvider } from '../../utils'
 import { nodePost } from '../../nodeClient'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
+import { dualSendOrderToRelay } from '../../services/relayDualSend'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
 import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
 import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
@@ -315,6 +316,8 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         ...(orderType === 'market' ? { execType: 'market' } : {}),
       }
       await nodePost('/api/order', order)
+      // 无节点化阶段 1 双发：主发成功后 best-effort 副发同一订单到公告栏中继（失败不影响下单）
+      await dualSendOrderToRelay({ ...order }, CHAIN_ID)
       await p2pOrderBroadcast.publishOrder(order)
       setPrice('')
       setAmount('')
