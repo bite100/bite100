@@ -483,6 +483,11 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing required fields", http.StatusBadRequest)
 		return
 	}
+	// 执行指令校验（第十七轮）：仅 "" / "limit" / "market" 合法；market 时 Price 为签名保护价
+	if o.ExecType != "" && o.ExecType != storage.ExecTypeLimit && o.ExecType != storage.ExecTypeMarket {
+		http.Error(w, "invalid execType", http.StatusBadRequest)
+		return
+	}
 	// Spam 防护：黑名单 trader 拒绝
 	if s.BlockedTraders != nil {
 		if _, blocked := s.BlockedTraders[strings.ToLower(o.Trader)]; blocked {
@@ -515,6 +520,13 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid signature", http.StatusUnauthorized)
 			return
 		}
+	}
+	// 市价单入口拒绝（第十七轮，docs/market-orders.md §2.1）：本地订单簿对手盘
+	// 为空时同步拒绝并明确报错，不广播、不落锁。无撮合引擎的纯中继节点无盘口
+	// 视图，跳过预检——接单节点的 IOC 执行对空盘口只产生零成交+余量取消。
+	if o.IsMarketOrder() && s.MatchEngine != nil && !s.MatchEngine.HasOppositeLiquidity(o.Pair, o.Side) {
+		http.Error(w, "market order rejected: no liquidity on the opposite side of the book", http.StatusBadRequest)
+		return
 	}
 	data, err := json.Marshal(&o)
 	if err != nil {

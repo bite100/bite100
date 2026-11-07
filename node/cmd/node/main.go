@@ -501,8 +501,110 @@ func (h *orderMatchHandler) OnNewOrder(order *storage.Order) error {
 	return h.processOrderLocally(order)
 }
 
+// releaseRemainderAsync 市价单余量锁定的异步精确释放（docs/market-orders.md
+// §2.5）：先按未成交余量换算「结算消费完全部成交后应剩的锁定量」（买单按
+// 保护价折 amountOut、卖单即余量本身），再等链上剩余量降至该值时释放。
+// 失败只记日志：订单到期后 releaseExpiredOrderLock 是硬兜底。
+func (l *vaultLocker) releaseRemainderAsync(order *storage.Order, exec *match.MarketExecution) {
+	so, err := l.signedOrder(order)
+	if err != nil {
+		log.Printf("[lock] 市价单 %s 余量释放准备失败: %v", order.OrderID, err)
+		return
+	}
+	remainderWei, err := settlement.EngineDecimalToWei(exec.Remainder)
+	if err != nil {
+		log.Printf("[lock] 市价单 %s 余量换算失败: %v", order.OrderID, err)
+		return
+	}
+	expectedUnused := remainderWei
+	if order.Side == "buy" {
+		priceWei, err := settlement.EngineDecimalToWei(order.Price)
+		if err != nil {
+			log.Printf("[lock] 市价单 %s 保护价换算失败: %v", order.OrderID, err)
+			return
+		}
+		expectedUnused = match.DeriveAmountOut(remainderWei, priceWei)
+	}
+	if expectedUnused.Sign() <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	tx, err := settlement.ReleaseRemainderAfterSettlement(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so, expectedUnused, 5*time.Second, 14*time.Minute)
+	if err != nil {
+		log.Printf("[lock] 市价单 %s 余量锁定释放未成（到期后可兜底释放）: %v", order.OrderID, err)
+		return
+	}
+	if tx != "" {
+		log.Printf("[lock] 市价单 %s 余量锁定已释放 tx=%s", order.OrderID, tx)
+	}
+}
+
+// processMarketOrderLocally 市价单本地处理（第十七轮，docs/market-orders.md）：
+// 落锁口径与限价单一致（按保护价全额义务）；IOC 执行不入簿；订单以最终
+// 状态落库；余量锁定按 §2.5 释放（零成交立即全额、有成交待结算消费后精确
+// 释放、全额成交无余量）。
+func (h *orderMatchHandler) processMarketOrderLocally(order *storage.Order) error {
+	if h.locker != nil {
+		if err := h.locker.lockForBookOrder(order); err != nil {
+			log.Printf("[lock] 市价单 %s 落锁失败，拒绝执行: %v", order.OrderID, err)
+			return nil
+		}
+	}
+	var exec *match.MarketExecution
+	if h.engine != nil {
+		h.engine.EnsurePair(order.Pair)
+		orderCopy := *order
+		exec = h.engine.ExecuteMarketOrder(&orderCopy)
+		for _, t := range exec.Trades {
+			data, _ := json.Marshal(t)
+			_ = h.publisher.PublishRaw(context.Background(), sync.TopicTradeExecuted, data)
+			if h.ws != nil {
+				h.ws.BroadcastTrade(t)
+			}
+			if h.store != nil {
+				_ = h.store.InsertTrade(t)
+			}
+		}
+		order.Filled = exec.Executed
+		if exec.FullyFilled {
+			order.Status = "filled"
+		} else {
+			order.Status = "cancelled" // IOC：未成交余量立即自动撤销
+		}
+	} else {
+		// 无撮合引擎（纯中继节点）：无法本地执行，按零成交取消落库
+		order.Filled = "0"
+		order.Status = "cancelled"
+	}
+	if h.store != nil {
+		_ = h.store.InsertOrder(order)
+	}
+	if h.ws != nil {
+		h.ws.BroadcastOrderStatus(order)
+	}
+	if h.locker != nil {
+		switch {
+		case exec == nil || len(exec.Trades) == 0:
+			// 零成交：无待结算成交，立即全额释放（失败仅记日志）
+			if err := h.locker.releaseForOrder(order); err != nil {
+				log.Printf("[lock] 市价单 %s 零成交释放锁定未成: %v", order.OrderID, err)
+			}
+		case exec.FullyFilled:
+			// 全额成交：锁定由结算全额消费，无余量可释放
+		default:
+			go h.locker.releaseRemainderAsync(order, exec)
+		}
+	}
+	return nil
+}
+
 // processOrderLocally 本地处理订单（撮合或仅转发到 WS）
 func (h *orderMatchHandler) processOrderLocally(order *storage.Order) error {
+	// 市价单走 IOC 专有路径（不入簿、余量自动撤销）
+	if order.IsMarketOrder() {
+		return h.processMarketOrderLocally(order)
+	}
 	// 挂单锁定（第十五轮）：启用锁定时先落锁再入簿；落锁失败（可用余额不足、
 	// 验签不过等）拒绝该订单，不入簿、不落库。重启恢复路径直接 AddOrder 不经
 	// 此处——锁定在首次接受时已上链、跨重启保留，无需重复落锁。

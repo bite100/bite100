@@ -14,6 +14,19 @@ func OrderExpired(o *Order) bool {
 	return time.Now().Unix() > o.ExpiresAt
 }
 
+// 执行类型（第十七轮市价单，设计见 docs/market-orders.md）：
+// ExecType 仅是订单消息上的执行指令，不进 EIP-712 签名——签名内的 Price
+// 对市价单即保护价，一切执行被签名封顶，指令字段改不动价格/数量/交易者。
+const (
+	ExecTypeLimit  = "limit"
+	ExecTypeMarket = "market"
+)
+
+// IsMarketOrder 判断订单是否为市价（IOC）执行
+func (o *Order) IsMarketOrder() bool {
+	return o != nil && o.ExecType == ExecTypeMarket
+}
+
 // Order 订单（与 Phase3 设计文档 §2.2 对齐）
 type Order struct {
 	OrderID   string `json:"orderId"`
@@ -28,6 +41,9 @@ type Order struct {
 	CreatedAt int64  `json:"createdAt"`
 	ExpiresAt int64  `json:"expiresAt"`
 	Signature string `json:"signature,omitempty"`
+	// ExecType 执行指令："" / "limit" = 限价（未成交部分挂簿）；
+	// "market" = 市价 IOC（立即按盘口逐档成交、余量自动撤销、永不入簿），此时 Price 为签名保护价
+	ExecType string `json:"execType,omitempty"`
 }
 
 // InsertOrder 插入或替换订单（新订单或状态更新）

@@ -567,6 +567,57 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 	return trades
 }
 
+// HasOppositeLiquidity 返回对手盘是否存在未成交档位（市价单入口拒绝预检用）：
+// 买单看卖盘、卖单看买盘；订单簿不存在或对手盘为空均返回 false。
+func (e *Engine) HasOppositeLiquidity(pair, side string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	ob, ok := e.pairs[pair]
+	if !ok {
+		return false
+	}
+	if side == "buy" {
+		return len(ob.Asks) > 0
+	}
+	return len(ob.Bids) > 0
+}
+
+// MarketExecution 市价（IOC）执行结果：成交列表 + 实际成交量 + 未成交余量（文本口径与 Order.Amount 一致）
+type MarketExecution struct {
+	Trades      []*storage.Trade
+	Executed    string // 实际成交量（Token0 计）
+	Remainder   string // 未成交余量（立即撤销，永不入簿）
+	FullyFilled bool
+}
+
+// ExecuteMarketOrder 市价 IOC 执行（第十七轮，设计见 docs/market-orders.md）：
+// taker 的 Price 即签名保护价；本方法只调 Match 与对手盘逐档成交（成交价为
+// maker 价、触及保护价即停），**不把 taker 加入订单簿**，余量由调用方按
+// IOC 语义取消。已过期订单不执行。Match 本身不检查订单是否已在簿中，
+// 故市价路径与限价路径（先 AddOrder 再 Match）在引擎层的唯一差别就是
+// 「不入簿」——这正是 IOC 的定义。
+func (e *Engine) ExecuteMarketOrder(taker *storage.Order) *MarketExecution {
+	res := &MarketExecution{}
+	if taker == nil || storage.OrderExpired(taker) {
+		return res
+	}
+	amount := bigNew(taker.Amount)
+	before := bigNew(taker.Filled)
+	res.Trades = e.Match(taker)
+	executed := new(big.Float).Sub(bigNew(taker.Filled), before)
+	if executed.Sign() < 0 {
+		executed.SetInt64(0)
+	}
+	remainder := new(big.Float).Sub(amount, bigNew(taker.Filled))
+	if remainder.Sign() < 0 {
+		remainder.SetInt64(0)
+	}
+	res.Executed = executed.Text('f', 18)
+	res.Remainder = remainder.Text('f', 18)
+	res.FullyFilled = remainder.Sign() == 0
+	return res
+}
+
 // MatchBatch §12.2 Epoch 内批量撮合：对多笔 taker 按 pair+CreatedAt+OrderID 确定性排序后依次撮合
 // 返回所有成交，供 relayer 按 Epoch 分组后调用 settleTradesBatch
 func (e *Engine) MatchBatch(takers []*storage.Order) (trades []*storage.Trade) {

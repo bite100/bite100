@@ -37,6 +37,7 @@ const vaultLockABIJSON = `[
   {"inputs":[{"internalType":"bytes32","name":"digest","type":"bytes32"}],"name":"releaseOrderLock","outputs":[],"stateMutability":"nonpayable","type":"function"},
   {"inputs":[{"internalType":"address","name":"user","type":"address"},{"internalType":"address","name":"token","type":"address"}],"name":"locked","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
   {"inputs":[{"internalType":"address","name":"user","type":"address"},{"internalType":"address","name":"token","type":"address"}],"name":"availableBalance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
+  {"inputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"name":"orderLocks","outputs":[{"internalType":"address","name":"user","type":"address"},{"internalType":"address","name":"token","type":"address"},{"internalType":"uint256","name":"remaining","type":"uint256"},{"internalType":"uint256","name":"expiresAt","type":"uint256"}],"stateMutability":"view","type":"function"},
   {"inputs":[{"internalType":"address","name":"token","type":"address"},{"internalType":"address","name":"user","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
 ]`
 
@@ -255,4 +256,86 @@ func ReleaseOrderLock(ctx context.Context, rpcURL, vaultAddr, lockerKeyHex strin
 		return "", fmt.Errorf("pack releaseOrderLock: %w", err)
 	}
 	return sendVaultTx(ctx, rpcURL, vaultAddr, lockerKeyHex, data)
+}
+
+// EngineDecimalToWei 把撮合引擎的浮点文本数量（如 "30.000000000000000000"，
+// 数值口径为最小单位）截断为整数最小单位，与 TradeToFill 的换算口径一致。
+func EngineDecimalToWei(s string) (*big.Int, error) {
+	return decimalToInt(s)
+}
+
+// OrderLockRemaining 读回某订单当前的锁定记录（user 为零地址表示记录不存在）。
+func OrderLockRemaining(ctx context.Context, client *ethclient.Client, vaultAddr string, digest common.Hash) (common.Address, *big.Int, error) {
+	to := common.HexToAddress(vaultAddr)
+	data, err := vaultLockABI.Pack("orderLocks", digest)
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, nil)
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+	res, err := vaultLockABI.Unpack("orderLocks", out)
+	if err != nil {
+		return common.Address{}, nil, err
+	}
+	if len(res) != 4 {
+		return common.Address{}, nil, fmt.Errorf("orderLocks: unexpected outputs %d", len(res))
+	}
+	user, _ := res[0].(common.Address)
+	remaining, _ := res[2].(*big.Int)
+	if remaining == nil {
+		return common.Address{}, nil, fmt.Errorf("orderLocks: unexpected remaining type %T", res[2])
+	}
+	return user, remaining, nil
+}
+
+// ReleaseRemainderAfterSettlement 市价单余量锁定的精确释放（第十七轮，
+// docs/market-orders.md §2.5）：Vault.releaseOrderLock 释放的是锁定记录的
+// 全部剩余量，而成交部分的锁定由 Settlement 异步按笔消费——必须等链上
+// 剩余量恰好降到 expectedUnused（= 未成交部分应剩的锁定量）时才能释放，
+// 提前释放会把已成交未结算的部分一并放掉、令其结算 revert。
+//
+// 轮询等待（pollInterval）至 timeout：记录不存在（已被全部消费/释放）→
+// 无需释放、返回空 tx；剩余量小于 expectedUnused → 异常（过度消费），
+// 返回错误；超时 → 返回错误，调用方记日志，订单到期后可经
+// releaseExpiredOrderLock 兜底释放。expectedUnused 为 0 时不应调用本函数
+// （全额成交，结算将消费全部锁定）。
+func ReleaseRemainderAfterSettlement(ctx context.Context, rpcURL, vaultAddr, settlementAddr, lockerKeyHex string, so *storage.SignedOrder, expectedUnused *big.Int, pollInterval, timeout time.Duration) (string, error) {
+	if expectedUnused == nil || expectedUnused.Sign() <= 0 {
+		return "", fmt.Errorf("expectedUnused must be positive")
+	}
+	client, err := ethclient.Dial(rpcURL)
+	if err != nil {
+		return "", fmt.Errorf("dial rpc: %w", err)
+	}
+	defer client.Close()
+	digest, err := OrderDigest(ctx, client, settlementAddr, so)
+	if err != nil {
+		return "", fmt.Errorf("order digest: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		user, remaining, err := OrderLockRemaining(ctx, client, vaultAddr, digest)
+		if err != nil {
+			return "", fmt.Errorf("read order lock: %w", err)
+		}
+		if user == (common.Address{}) {
+			return "", nil // 锁定记录已不存在：无需释放
+		}
+		switch remaining.Cmp(expectedUnused) {
+		case 0:
+			return ReleaseOrderLock(ctx, rpcURL, vaultAddr, lockerKeyHex, digest)
+		case -1:
+			return "", fmt.Errorf("order lock over-consumed: remaining %s < expected unused %s", remaining, expectedUnused)
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timeout waiting for settlement consumption: remaining %s, expected unused %s", remaining, expectedUnused)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
 }
