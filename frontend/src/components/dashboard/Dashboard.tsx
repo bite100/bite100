@@ -35,7 +35,7 @@ function computeMidFromBook(
 /**
  * 交易主屏（第十二轮：布局对标 Hyperliquid，皮肤保留第十一轮浅色极简）。
  * 固定确定性网格：顶部信息条 / 左侧 K 线 + 页签表格 / 右栏盘口 + 最新成交 / 下单面板。
- * 此前可拖拽网格（react-grid-layout）按 Ren 指令让位于该固定布局，本地保存的旧布局不再读取。
+ * 此前可拖拽网格（react-grid-layout）按 Ren 指令让位于该固定布局；第十三轮已移除该依赖与旧网格样式。
  */
 export function Dashboard({ account, getSigner, onShowFullOrderbook }: DashboardProps) {
   const [recommendedPrice, setRecommendedPrice] = useState('')

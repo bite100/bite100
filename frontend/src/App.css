@@ -732,37 +732,8 @@ select.input {
   margin-top: 0.5rem;
 }
 
-/* ---------- Dashboard 网格 ---------- */
-@media (min-width: 769px) {
-  .layout .drag-handle {
-    min-height: 48px;
-    display: inline-flex;
-    align-items: center;
-    padding: 0.5rem 0;
-    -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
-  }
-}
-@media (max-width: 768px) {
-  .layout.layout-mobile {
-    padding: 0;
-  }
-  .layout-mobile .react-grid-item {
-    touch-action: pan-y;
-  }
-  .layout-mobile .drag-handle {
-    cursor: default;
-  }
-  .layout-mobile [class*="Paper"] {
-    padding: 0.75rem !important;
-  }
-  .layout-mobile .kline-chart-wrap {
-    min-height: 280px;
-  }
-  .layout-mobile .kline-chart-wrap > div:last-child {
-    min-height: 280px;
-  }
-}
+/* ---------- Dashboard 下单面板 ---------- */
+/* （旧可拖拽网格 .layout/.drag-handle/.react-grid-item 样式已于第十三轮随 react-grid-layout 依赖一并删除） */
 .dashboard-orderform .btn-primary-action {
   font-weight: 600;
 }
@@ -788,12 +759,6 @@ select.input {
   }
   .ob-number {
     font-size: 1rem !important;
-  }
-}
-@media (max-width: 640px) {
-  .layout-mobile .mantine-Table-tbody td {
-    padding: 0.5rem 0.375rem;
-    min-height: 40px;
   }
 }
 
