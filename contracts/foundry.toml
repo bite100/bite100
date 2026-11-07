@@ -9,6 +9,9 @@ via_ir = true
 remappings = [
     "forge-std/=lib/forge-std/src/",
     "@layerzerolabs/oapp-evm/=lib/oapp-evm/",
+    "@layerzerolabs/lz-evm-protocol-v2/=lib/lz-evm-protocol-v2/",
+    "@layerzerolabs/lz-evm-messagelib-v2/=lib/lz-evm-messagelib-v2/",
+    "solidity-bytes-utils/=lib/solidity-bytes-utils/",
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/"
 ]
 

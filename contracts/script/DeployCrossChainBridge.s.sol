@@ -20,9 +20,9 @@ contract DeployCrossChainBridge is ChainGuard {
         
         vm.startBroadcast(deployerPrivateKey);
         
+        // 真实 OApp 构造为 (endpoint, delegate)，owner = 部署者（msg.sender）
         CrossChainBridge bridge = new CrossChainBridge(
             endpoint,
-            owner,
             delegate
         );
         
