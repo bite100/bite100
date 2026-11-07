@@ -25,8 +25,9 @@ interface ISettlementVerifier {
 }
 
 /// @title Vault 资产托管
-/// @notice 用户存入/提取资产，仅 Settlement 可划转用于结算；挂单经 locker 落锁后，
-/// 对应余额被锁定：不可提取、随成交消耗、撤单/过期释放（设计见 docs/order-balance-locking.md）
+/// @notice 用户存入/提取资产，仅 Settlement 可划转用于结算；挂单落锁后（第三十轮起
+/// 无权限，见 lockForOrder），对应余额被锁定：不可提取、随成交消耗、撤单/过期释放
+/// （设计见 docs/order-balance-locking.md、docs/nodeless-design-2026-11-07.md §4.2 L2）
 contract Vault {
     address public settlement;
     address public owner;
@@ -56,6 +57,9 @@ contract Vault {
     mapping(bytes32 => LockTombstone) public lockTombstones;
 
     /// @notice 挂单锁定操作员（节点/中继身份）；仅 owner 可增删。
+    /// 第三十轮 L2 后落锁已无权限（见 lockForOrder），本角色不再是落锁的准入条件，
+    /// 保留仅为向后兼容：releaseOrderLock 仍认 locker 身份（locker 或锁属用户本人
+    /// 可释放），既有节点/中继以 locker 身份运行的路径不受影响。
     /// 测试网阶段为部署/运营身份，主网须换成领导者/BFT 授权的中继集合。
     mapping(address => bool) public lockers;
 
@@ -79,6 +83,8 @@ contract Vault {
         _;
     }
 
+    /// @dev 第三十轮 L2 后 lockForOrder 不再使用本修饰器（落锁无权限）；保留定义是
+    /// 为 ABI/源码向后兼容与未来如需收紧时的现成挂点，当前无函数引用它。
     modifier onlyLocker() {
         require(lockers[msg.sender], "Vault: not locker");
         _;
@@ -128,13 +134,15 @@ contract Vault {
     /// （tokenIn/tokenOut 恒为交易对两币，与方向无关），义务按方向二选一：
     /// payWithTokenIn=true（卖方）锁 (tokenIn, amountIn)；false（买方）锁
     /// (tokenOut, amountOut)。金额一律由 Vault 从验签后的订单本身派生，
-    /// locker 只能给方向，无法传入任意金额。
-    /// 仅 locker 可调用，且 Vault 强制向 Settlement 验签并由 Settlement 计算摘要——
-    /// locker 只能为真实签名订单上锁，无法凭空锁定他人余额，也无法伪造锁定键。
-    /// 同一订单重复上锁、已过期、可用余额不足均 revert。
+    /// 调用者只能给方向，无法传入任意金额。
+    /// 【第三十轮 L2：无权限落锁】任何人可调用（不再限 locker）。安全性不来自
+    /// 调用者身份，而来自 Vault 强制向 Settlement 验签并由 Settlement 计算摘要：
+    /// 调用者只能替订单签名者执行其已签名同意的锁定（金额/代币/归属全部由签名
+    /// 订单派生），无法凭空锁定他人余额、无法伪造锁定键、无法改动锁定条款。
+    /// 无效签名、同一订单重复上锁、已过期、可用余额不足均 revert。
+    /// lockers 角色保留（见 lockers 注释）：releaseOrderLock 的授权仍认 locker。
     function lockForOrder(VaultOrder calldata order, bytes calldata signature, bool payWithTokenIn)
         external
-        onlyLocker
         returns (bytes32 digest)
     {
         require(settlement != address(0), "Vault: settlement unset");
