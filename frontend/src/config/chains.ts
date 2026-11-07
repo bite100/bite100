@@ -27,7 +27,7 @@ export interface ChainConfig {
   }
 }
 
-// Sepolia 测试网（已部署）
+// Sepolia 测试网（2026-11-07 新部署：核心六合约；治理/贡献者奖励/代币注册表/链配置未部署，置零）
 const SEPOLIA: ChainConfig = {
   chainId: 11155111,
   name: 'Sepolia',
@@ -39,16 +39,16 @@ const SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0xbe3962Eaf7103d05665279469FFE3573352ec70C',
-    settlement: '0x493Da680973F6c222c89eeC02922E91F1D9404a0',
-    token0: '0x678195277dc8F84F787A4694DF42F3489eA757bf',
-    token1: '0x9Be241a0bF1C2827194333B57278d1676494333a',
-    ammPool: '0x8d392e6b270238c3a05dDB719795eE31ad7c72AF',
-    contributorReward: '0x851019107c4F3150D90f1629f6A646eBC1B1E286',
-    feeDistributor: '0xeF4BFB58541270De18Af9216EB0Cd8EC07a2547F',
-    governance: '0x8F107ffaB0FC42E623AA69Bd10d8ad4cfbcE87BB',
-    tokenRegistry: '0x77AF51BC13eE8b83274255f4a9077D3E9498c556',
-    chainConfig: '0x7639fc976361752c8d9cb82a41bc5D0F423D5169',
+    vault: '0xb4945C5E0208803FF11d0f86173B55489aE87d2A',
+    settlement: '0xee35587f3e3f500de9f9E1E97c340F801dc71078',
+    token0: '0x903cdDF52963D9DEA0BDF8be9159E08706683654',
+    token1: '0x1Ee28c1c490727e49939C95032C749ea5b58b45f',
+    ammPool: '0x20a78bCb39Ff510AdBa3D3AEC9229a9583C5BDB3',
+    contributorReward: '0x0000000000000000000000000000000000000000',
+    feeDistributor: '0xB63a3D858E5230233e4D1B76052387C2274d6e3A',
+    governance: '0x0000000000000000000000000000000000000000',
+    tokenRegistry: '0x0000000000000000000000000000000000000000',
+    chainConfig: '0x0000000000000000000000000000000000000000',
   },
 }
 

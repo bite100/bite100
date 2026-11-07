@@ -17,7 +17,7 @@ describe('getChainConfig', () => {
     expect(c).not.toBeNull()
     expect(c!.chainId).toBe(11155111)
     expect(c!.name).toBe('Sepolia')
-    expect(c!.contracts.settlement).toBe('0x493Da680973F6c222c89eeC02922E91F1D9404a0')
+    expect(c!.contracts.settlement).toBe('0xee35587f3e3f500de9f9E1E97c340F801dc71078')
   })
 
   it('returns Ethereum mainnet for chainId 1', () => {
