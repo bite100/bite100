@@ -1,19 +1,28 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createChart, CandlestickSeries, type IChartApi, type ISeriesApi } from 'lightweight-charts'
 import { useTradesOHLC } from '../../hooks/useTradesOHLC'
-import { Text } from '@mantine/core'
+import { Text, Group, SegmentedControl } from '@mantine/core'
 
 const DEFAULT_PAIR = 'TKA/TKB'
 
-const CHART_HEIGHT_DESKTOP = 380
-const CHART_HEIGHT_MOBILE = 280
+const CHART_HEIGHT_DESKTOP = 400
+const CHART_HEIGHT_MOBILE = 300
 
-/** K 线图：从 /api/trades 聚合 1h OHLC，并订阅 WS trade 实时更新（浅底、绿涨红跌，涨跌色仅数据语义） */
+/** 周期工具条：全部由同一份 /api/trades 成交数据按不同粒度聚合，无额外数据源 */
+const INTERVALS = [
+  { value: '900', label: '15m' },
+  { value: '3600', label: '1h' },
+  { value: '14400', label: '4h' },
+  { value: '86400', label: '1d' },
+]
+
+/** K 线图：从 /api/trades 聚合 OHLC，并订阅 WS trade 实时更新（浅底、绿涨红跌，涨跌色仅数据语义） */
 export function KLineChart() {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
-  const { bars, loading, error } = useTradesOHLC(DEFAULT_PAIR, 3600)
+  const [interval, setIntervalValue] = useState('3600')
+  const { bars, loading, error } = useTradesOHLC(DEFAULT_PAIR, Number(interval))
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -79,6 +88,18 @@ export function KLineChart() {
 
   return (
     <div className="kline-chart-wrap" style={{ width: '100%', minHeight: CHART_HEIGHT_DESKTOP }}>
+      <Group justify="space-between" align="center" mb="xs">
+        <Text size="sm" fw={600}>
+          K 线 · {DEFAULT_PAIR}
+        </Text>
+        <SegmentedControl
+          size="xs"
+          value={interval}
+          onChange={setIntervalValue}
+          data={INTERVALS}
+          aria-label="K 线周期"
+        />
+      </Group>
       {loading && <Text size="xs" c="dimmed">K 线加载中…</Text>}
       {error && <Text size="xs" c="red">K 线加载失败：{error}</Text>}
       <div ref={containerRef} style={{ width: '100%', minHeight: CHART_HEIGHT_DESKTOP }} />
