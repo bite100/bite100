@@ -77,8 +77,8 @@ interface BridgeAdapter {
 | 桥 | id | 安全模型标签 | 费用口径（ETH↔Base 向，调研值） | 预估时延 | 状态 |
 |---|---|---|---|---|---|
 | LayerZero V2 | `layerzero` | 「DVN 多签验证（应用自选验证者集）」——**当前测试网部署为 1-of-1（仅 LayerZero Labs DVN），见 §5 如实标注**；主网目标 ≥2 独立 DVN | 按消息动态报价（DVN+执行者费，源链原生币付） | 约 1–15 分钟（源链确认数 + DVN 签名） | ✅ 首个实现（M2a） |
-| Chainlink CCIP | `ccip` | 「Chainlink 预言机网络共识（全网统一验证者集，零事故记录）」 | 固定价：ETH→Base $0.50 / Base→ETH $1.50（调研值） | 约 10–20 分钟 | ⏳ 待接入（M2b） |
-| Wormhole | `wormhole` | 「19 Guardian 多签（协议费为零）」 | 协议费 0；自动中继约 0.3 USDC 等值 | 约 5–20 分钟 | ⏳ 待接入（M2c） |
+| Chainlink CCIP | `ccip` | 「Chainlink 预言机网络共识（全网统一验证者集，零事故记录）」 | 固定价：ETH→Base $0.50 / Base→ETH $1.50（调研值）；第十九轮实测 10 wTKA Sepolia→Base Sepolia 为 0.0002274 ETH | 约 10–20 分钟（实测约 20 分钟） | ✅ 已接入（M2b，第十九轮） |
+| Wormhole | `wormhole` | 「19 Guardian 多签（协议费为零）」 | 协议费 0；测试网 messageFee 实测 0，自动中继在测试网不保证（实测需手动投递） | 约 5–20 分钟出 VAA，投递另计 | ✅ 已接入（M2c，第十九轮） |
 
 ## 4. 防重放与失败语义（所有桥共同）
 
@@ -111,3 +111,25 @@ interface BridgeAdapter {
   把两条方向的发送+接收 ULN 配置都设为 ≥2 家独立运营商
   （候选：LayerZero Labs + Google Cloud + Nethermind，主网地址以
   LayerZero 官方 DVN 部署表为准），并以 `getConfig` 读回存档后才允许开放桥。
+
+## 6. 第十九轮实现状态（2026-11-07，CCIP + Wormhole 接入完成）
+
+全量记录见 `docs/round19-three-bridges-2026-11-07.md`，此处只记与本规格的对应关系：
+
+- **统一接口落地形态**：本轮的 quote/initiate/status 落在前端桥页与官方组件上，
+  未另建后端抽象服务——quote 分别走各桥官方只读接口（LZ `quoteBridgeFee`、
+  CCIP Router `getFee`、Wormhole 核心桥 `messageFee`），initiate 路由到各桥官方
+  入口（LZ 桥合约 `bridgeToken`、CCIP Router `ccipSend`、NTT Manager `transfer`），
+  status 以桥原生查询页/状态机呈现（LayerZeroScan 口径的合约状态轮询、
+  ccip.chain.link 消息页、WormholeScan + VAA）。统一四态状态服务仍待后续轮次
+  在节点侧补齐，本轮前端状态文案与四态语义保持一致，不另造口径。
+- **载体代币**：CCIP 与 Wormhole 以 wTKA（WrappedTKA，1:1 包装 TKA 的胶水代币）
+  为载体——现行 TKA 缺两家官方流程要求的接口（CCIP 注册钩子、burn/mint），
+  详见 round-19 文档 §2/§3。wTKA 的跨链铸造与本地 wrap 储备是两套供给，
+  目标链赎回依赖本地储备（round-19 文档 §6 如实记录）。
+- **防重放**：三家均以桥原生唯一性为第一道并实测/读回——LZ guid（第十六轮已验）、
+  CCIP messageId 状态机、Wormhole emitter+sequence（复投实测 revert
+  `TransferAlreadyCompleted`）。目标侧统一去重表仍属节点侧后续工作。
+- **费用/风险展示**：已按「确认前摊开」落地（round-19 文档 §7）：不预选桥、
+  卡片实时报价 + 时效预估 + 安全标签 + 可展开风险、确认弹窗复述。
+- **DVN 状态不变**：§5 的 1-of-1 现状与主网硬门禁在本轮后继续有效。
