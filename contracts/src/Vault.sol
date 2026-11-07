@@ -102,11 +102,19 @@ contract Vault {
     }
 
     /// @notice 用户存入代币：需先 approve Vault
+    /// @dev 第 32 轮起按**实际到账**记账（ChatGPT 审查整改）：transferFrom 前后
+    /// 各读一次 Vault 的代币余额，差额即实收。带转账扣费/税的代币实收小于
+    /// 名义额，按实收记账与发事件，保证内部账本与 Vault 真实余额恒一致；
+    /// 标准代币实收恒等于名义额，行为不变。实收为 0（全额扣费）时 revert，
+    /// 不记空账。withdraw/结算等下游一律以 balances 为准，无需感知此口径。
     function deposit(address token, uint256 amount) external {
         require(token != address(0) && amount > 0, "Vault: invalid input");
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         require(IERC20(token).transferFrom(msg.sender, address(this), amount), "Vault: transfer failed");
-        balances[msg.sender][token] += amount;
-        emit Deposit(msg.sender, token, amount);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
+        require(received > 0, "Vault: nothing received");
+        balances[msg.sender][token] += received;
+        emit Deposit(msg.sender, token, received);
     }
 
     /// @notice 用户提取代币：只能提取可用余额（总余额 − 挂单锁定），锁定部分提不出
