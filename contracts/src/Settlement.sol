@@ -48,6 +48,49 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     /// @notice 每代币手续费上限（该代币最小单位），0 表示不设上限；如 USDC 6 位小数下 1e6 = 1 USD
     mapping(address => uint256) public feeCapPerToken;
 
+    /// @notice 统一订单结构（EIP-712 签名对象）：字段顺序即编码顺序，前端/节点/合约三方规范见 docs/eip712-order-spec.md
+    struct Order {
+        string orderId;
+        address userAddress;
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint256 amountOut;
+        uint256 price;
+        uint256 timestamp;
+        uint256 expiresAt;
+        uint256 nonce;
+    }
+
+    /// @notice 签名订单（订单 + 其 65 字节 EIP-712 签名）
+    struct SignedOrder {
+        Order order;
+        bytes signature;
+    }
+
+    /// @notice 一笔成交的结算请求：双方签名订单 + 实际成交量（tokenIn = maker 卖出，tokenOut = taker 卖出）
+    struct Fill {
+        SignedOrder makerOrder;
+        SignedOrder takerOrder;
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint256 amountOut;
+        uint256 gasReimburseIn;
+        uint256 gasReimburseOut;
+    }
+
+    /// @notice 按订单 digest 累计已结算量（以订单自身方向计：In = 该订单 tokenIn 侧已成交量），支持部分成交且防超额重放
+    mapping(bytes32 => uint256) public orderFilledIn;
+    mapping(bytes32 => uint256) public orderFilledOut;
+
+    bytes32 private constant _DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 private constant _ORDER_TYPEHASH =
+        keccak256("Order(string orderId,address userAddress,address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOut,uint256 price,uint256 timestamp,uint256 expiresAt,uint256 nonce)");
+    bytes32 private constant _DOMAIN_NAME_HASH = keccak256(bytes(unicode"比特100"));
+    bytes32 private constant _DOMAIN_VERSION_HASH = keccak256(bytes("1"));
+
     // 优化事件：减少gas消耗，使用indexed和打包
     event TradeSettled(
         address indexed maker,
@@ -314,48 +357,111 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         }
     }
     
-    /// @notice 验证订单签名（安全优化：增强签名验证）
-    /// @dev 验证订单的EIP-712签名，确保订单未被篡改
-    function verifyOrderSignature(
-        address user,
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 amountOut,
-        uint256 price,
-        uint256 timestamp,
-        uint256 expiresAt,
-        uint256 nonce,
-        bytes memory signature
-    ) external view returns (bool) {
-        // 构建EIP-712消息哈希
-        bytes32 domainSeparator = keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId)"),
-            keccak256("P2P Exchange"),
-            keccak256("1"),
-            block.chainid
-        ));
-        
+    /// @notice EIP-712 域分隔符（绑定 chainId 与本合约地址；统一规范见 docs/eip712-order-spec.md）
+    function domainSeparator() public view returns (bytes32) {
+        return keccak256(abi.encode(_DOMAIN_TYPEHASH, _DOMAIN_NAME_HASH, _DOMAIN_VERSION_HASH, block.chainid, address(this)));
+    }
+
+    /// @notice 订单的 EIP-712 签名摘要（客户端与测试可用同一摘要签名/验证）
+    function orderDigest(Order calldata order) public view returns (bytes32) {
+        return _orderDigest(order);
+    }
+
+    function _orderDigest(Order calldata order) internal view returns (bytes32) {
         bytes32 structHash = keccak256(abi.encode(
-            keccak256("Order(address user,address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOut,uint256 price,uint256 timestamp,uint256 expiresAt,uint256 nonce)"),
-            user,
-            tokenIn,
-            tokenOut,
-            amountIn,
-            amountOut,
-            price,
-            timestamp,
-            expiresAt,
-            nonce
+            _ORDER_TYPEHASH,
+            keccak256(bytes(order.orderId)),
+            order.userAddress,
+            order.tokenIn,
+            order.tokenOut,
+            order.amountIn,
+            order.amountOut,
+            order.price,
+            order.timestamp,
+            order.expiresAt,
+            order.nonce
         ));
-        
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-        
-        // 恢复签名者
+        return keccak256(abi.encodePacked("\x19\x01", domainSeparator(), structHash));
+    }
+
+    /// @notice 验证订单签名（统一规范）：恢复出的签名者必须等于 order.userAddress
+    function verifyOrderSignature(Order calldata order, bytes calldata signature) public view returns (bool) {
+        if (signature.length != 65) return false;
         (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signature);
+        address signer = ecrecover(_orderDigest(order), v, r, s);
+        return signer != address(0) && signer == order.userAddress;
+    }
+
+    /// @notice 内部：验签并返回订单 digest（签名不符直接 revert，maker/taker 分开报错便于定位）
+    function _verifySignedOrder(SignedOrder calldata signedOrder, string memory errMsg) internal view returns (bytes32 digest) {
+        digest = _orderDigest(signedOrder.order);
+        require(signedOrder.signature.length == 65, "Settlement: invalid signature length");
+        (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signedOrder.signature);
         address signer = ecrecover(digest, v, r, s);
-        
-        return signer == user && signer != address(0);
+        require(signer != address(0) && signer == signedOrder.order.userAddress, errMsg);
+    }
+
+    /// @notice 内部：订单时效校验（已生效且未过期）
+    function _checkOrderValidity(Order calldata order) internal view {
+        require(order.timestamp <= block.timestamp, "Settlement: order not yet valid");
+        require(order.expiresAt > 0 && block.timestamp <= order.expiresAt, "Settlement: order expired");
+    }
+
+    /// @notice 内部：把一笔成交折算到某个订单自身方向并累加已结算量，累计超签名量即 revert（防超额重放）
+    function _accountFill(bytes32 digest, Order calldata order, Fill calldata fill) internal {
+        uint256 addIn;
+        uint256 addOut;
+        if (fill.tokenIn == order.tokenIn) {
+            addIn = fill.amountIn;
+            addOut = fill.amountOut;
+        } else {
+            addIn = fill.amountOut;
+            addOut = fill.amountIn;
+        }
+        uint256 newIn = orderFilledIn[digest] + addIn;
+        uint256 newOut = orderFilledOut[digest] + addOut;
+        require(newIn <= order.amountIn && newOut <= order.amountOut, "Settlement: fill exceeds signed order");
+        orderFilledIn[digest] = newIn;
+        orderFilledOut[digest] = newOut;
+    }
+
+    /// @notice 内部：订单首次结算消耗 nonce（单调水位）；同一订单的部分成交续结（continuation）跳过；
+    /// 不同订单复用已被占用的 nonce 时，continuation 必为 false，在此拒绝
+    function _consumeOrderNonce(Order calldata order, bool continuation) internal {
+        if (usedNonces[order.userAddress][order.nonce]) {
+            require(continuation, "Settlement: nonce already used by another order");
+            return;
+        }
+        useNonce(order.userAddress, order.nonce);
+    }
+
+    /// @notice 内部：校验一笔 Fill 的双方签名订单（验签/同对/时效/累计上限/nonce），全部通过后才落账
+    function _verifyFill(Fill calldata fill) internal {
+        Order calldata mo = fill.makerOrder.order;
+        Order calldata to = fill.takerOrder.order;
+        bytes32 makerDigest = _verifySignedOrder(fill.makerOrder, "Settlement: invalid maker signature");
+        bytes32 takerDigest = _verifySignedOrder(fill.takerOrder, "Settlement: invalid taker signature");
+
+        require(mo.userAddress != to.userAddress, "Settlement: maker == taker");
+        require(mo.tokenIn == to.tokenIn && mo.tokenOut == to.tokenOut, "Settlement: pair mismatch");
+        require(mo.tokenIn != mo.tokenOut, "Settlement: same token");
+        require(fill.tokenIn != fill.tokenOut, "Settlement: same token");
+        require(fill.amountIn > 0 && fill.amountOut > 0, "Settlement: zero amount");
+        require(
+            (fill.tokenIn == mo.tokenIn && fill.tokenOut == mo.tokenOut) ||
+            (fill.tokenIn == mo.tokenOut && fill.tokenOut == mo.tokenIn),
+            "Settlement: token mismatch"
+        );
+        _checkOrderValidity(mo);
+        _checkOrderValidity(to);
+
+        // 先于落账读取「是否已有成交」，供 nonce 独占判定（防同 nonce 异订单在本笔内自证续结）
+        bool makerContinuation = orderFilledIn[makerDigest] > 0 || orderFilledOut[makerDigest] > 0;
+        bool takerContinuation = orderFilledIn[takerDigest] > 0 || orderFilledOut[takerDigest] > 0;
+        _accountFill(makerDigest, mo, fill);
+        _accountFill(takerDigest, to, fill);
+        _consumeOrderNonce(mo, makerContinuation);
+        _consumeOrderNonce(to, takerContinuation);
     }
     
     /// @notice 拆分签名
@@ -372,193 +478,111 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         require(v == 27 || v == 28, "Settlement: invalid v");
     }
 
-    /// @param maker 挂单方
-    /// @param taker 吃单方
-    /// @param tokenIn maker 卖出的代币
-    /// @param tokenOut maker 买入的代币（即 taker 卖出）
-    /// @param amountIn maker 卖出数量
-    /// @param amountOut maker 得到数量（taker 卖出数量）
-    /// @param gasReimburseIn 从 maker 侧（tokenIn）扣除给 gas 代付方的数量，卖方均摊的 gas 费（0 表示无代付）
-    /// @param gasReimburseOut 从 taker 侧（tokenOut）扣除给 gas 代付方的数量，买方均摊的 gas 费（0 表示无代付）
-    /// @notice 当 gasReimburseIn 或 gasReimburseOut 非 0 时，仅 owner 或 relayer 可调用，且 relayer 必须已设置；扣完交易费与 gas 费后再转给买家/卖家
-    function settleTrade(
-        address maker,
-        address taker,
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 amountOut,
-        uint256 gasReimburseIn,
-        uint256 gasReimburseOut,
-        uint256 makerNonce,
-        uint256 takerNonce
-    ) external nonReentrant {
+    /// @notice 结算一笔成交：双方订单必须为统一规范的 EIP-712 签名订单（docs/eip712-order-spec.md）。
+    /// 合约逐项验签、校验累计成交量不超签名量并消耗双方 nonce，中继者只是无须信任的搬运工。
+    /// @param fill makerOrder/takerOrder 为双方签名订单；amountIn = maker 卖出 tokenIn 量，amountOut = taker 卖出 tokenOut 量；
+    /// gasReimburseIn/Out 为从 maker/taker 侧扣除给 gas 代付方的数量（0 表示无代付），非 0 时受 maxGasReimbursePerTrade 上限约束
+    function settleTrade(Fill calldata fill) external nonReentrant {
         require(_isSettlementCaller(), "Settlement: not auth");
-        
-        // 输入验证增强：验证所有参数
+
+        address maker = fill.makerOrder.order.userAddress;
+        address taker = fill.takerOrder.order.userAddress;
         require(maker != address(0) && taker != address(0), "Settlement: zero address");
-        require(tokenIn != address(0) && tokenOut != address(0), "Settlement: zero token");
-        require(maker != taker, "Settlement: maker == taker");
-        require(tokenIn != tokenOut, "Settlement: same token");
-        require(amountIn > 0 && amountOut > 0, "Settlement: zero amount");
-        require(amountIn <= type(uint128).max && amountOut <= type(uint128).max, "Settlement: amount overflow");
-        
-        // 防重放攻击：验证nonce
-        useNonce(maker, makerNonce);
-        useNonce(taker, takerNonce);
-        
+        require(fill.tokenIn != address(0) && fill.tokenOut != address(0), "Settlement: zero token");
+        require(fill.amountIn <= type(uint128).max && fill.amountOut <= type(uint128).max, "Settlement: amount overflow");
+
+        bool withGas = fill.gasReimburseIn > 0 || fill.gasReimburseOut > 0;
+        if (withGas && maxGasReimbursePerTrade > 0) {
+            require(fill.gasReimburseIn + fill.gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
+        }
+
         // Relayer 限流和信誉检查
         if (msg.sender != owner) {
             _checkRelayerRateLimit(msg.sender);
             _checkRelayerReputation(msg.sender);
         }
-        
-        bool withGas = gasReimburseIn > 0 || gasReimburseOut > 0;
-        if (withGas && maxGasReimbursePerTrade > 0) {
-            require(gasReimburseIn + gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
-        }
 
-        (uint256 feeIn, uint256 feeOut) = _feesFor(tokenIn, tokenOut, amountIn, amountOut, feeBps);
+        // 验签 + 累计上限 + nonce 消耗（防重放）
+        _verifyFill(fill);
 
-        _settleOne(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn, feeOut, gasReimburseIn, gasReimburseOut);
-        
+        (uint256 feeIn, uint256 feeOut) = _feesFor(fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, feeBps);
+
+        _settleOne(maker, taker, fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, feeIn, feeOut, fill.gasReimburseIn, fill.gasReimburseOut);
+
         // 更新Relayer信誉（成功交易）
         if (msg.sender != owner) {
             _updateRelayerReputationSuccess(msg.sender);
         }
     }
 
-    /// @notice 批量结算多笔交易（节省 Gas）；参数数组长度需一致
-    /// @param makers 挂单方数组
-    /// @param takers 吃单方数组
-    /// @param tokenIns maker 卖出的代币数组
-    /// @param tokenOuts maker 买入的代币数组
-    /// @param amountIns maker 卖出数量数组
-    /// @param amountOuts maker 得到数量数组
-    /// @param gasReimburseIns 从 maker 侧扣除的 gas 费数组（0 表示无代付）
-    /// @param gasReimburseOuts 从 taker 侧扣除的 gas 费数组（0 表示无代付）
-    function settleTradesBatch(
-        address[] calldata makers,
-        address[] calldata takers,
-        address[] calldata tokenIns,
-        address[] calldata tokenOuts,
-        uint256[] calldata amountIns,
-        uint256[] calldata amountOuts,
-        uint256[] calldata gasReimburseIns,
-        uint256[] calldata gasReimburseOuts
-    ) external nonReentrant {
+    /// @notice 批量结算多笔成交（节省 Gas）；每笔 Fill 与单笔走同一套验签/防重放校验，无例外路径
+    function settleTradesBatch(Fill[] calldata fills) external nonReentrant {
         require(_isSettlementCaller(), "Settlement: not auth");
-        
+
         // Relayer 限流检查（批量调用只计一次）
         if (msg.sender != owner) {
             _checkRelayerRateLimit(msg.sender);
         }
-        uint256 len = _batchLength(makers, takers, tokenIns, tokenOuts, amountIns, amountOuts, gasReimburseIns, gasReimburseOuts);
+        uint256 len = fills.length;
         require(len > 0 && len <= 50, "Settlement: batch size 1-50");
 
-        // 逐笔下沉到 _settleBatchItem：批量入口只保留数组与下标，避免 8 数组参数下栈溢出
         uint16 _feeBps = feeBps;
         for (uint256 i = 0; i < len; i++) {
-            _settleBatchItem(makers[i], takers[i], tokenIns[i], tokenOuts[i], amountIns[i], amountOuts[i], gasReimburseIns[i], gasReimburseOuts[i], _feeBps);
+            _settleBatchItem(fills[i], _feeBps);
         }
     }
 
-    /// @notice 内部：计算单笔 Trade 的默克尔叶子（与 settleTradesBatchWithMerkle 原内联计算一致）
-    function _tradeLeaf(
-        address maker,
-        address taker,
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 amountOut,
-        uint256 gasReimburseIn,
-        uint256 gasReimburseOut
-    ) internal pure returns (bytes32) {
+    /// @notice 内部：Fill 的默克尔叶子（绑定双方签名订单摘要与成交量，见 settleTradesBatchWithMerkle）
+    function _fillLeaf(Fill calldata fill) internal view returns (bytes32) {
         return keccak256(abi.encodePacked(
-            maker,
-            taker,
-            tokenIn,
-            tokenOut,
-            amountIn,
-            amountOut,
-            gasReimburseIn,
-            gasReimburseOut
+            _orderDigest(fill.makerOrder.order),
+            _orderDigest(fill.takerOrder.order),
+            fill.tokenIn,
+            fill.tokenOut,
+            fill.amountIn,
+            fill.amountOut,
+            fill.gasReimburseIn,
+            fill.gasReimburseOut
         ));
     }
 
-    /// @notice 内部：校验批量数组长度一致并返回长度（8 个 calldata 数组的 offset+length 同时存活会压爆入口函数栈帧，故下沉）
-    function _batchLength(
-        address[] calldata makers,
-        address[] calldata takers,
-        address[] calldata tokenIns,
-        address[] calldata tokenOuts,
-        uint256[] calldata amountIns,
-        uint256[] calldata amountOuts,
-        uint256[] calldata gasReimburseIns,
-        uint256[] calldata gasReimburseOuts
-    ) internal pure returns (uint256 len) {
-        len = makers.length;
-        require(len == takers.length, "Settlement: length mismatch");
-        require(len == tokenIns.length, "Settlement: length mismatch");
-        require(len == tokenOuts.length, "Settlement: length mismatch");
-        require(len == amountIns.length, "Settlement: length mismatch");
-        require(len == amountOuts.length, "Settlement: length mismatch");
-        require(len == gasReimburseIns.length, "Settlement: length mismatch");
-        require(len == gasReimburseOuts.length, "Settlement: length mismatch");
-    }
-
-    /// @notice 内部：批量结算的单笔逻辑（校验 + gas 报销上限 + 计费 + 结算），供三个批量入口共用
-    function _settleBatchItem(
-        address maker,
-        address taker,
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        uint256 amountOut,
-        uint256 gasReimburseIn,
-        uint256 gasReimburseOut,
-        uint16 _feeBps
-    ) internal {
-        require(maker != address(0) && taker != address(0), "Settlement: zero address");
-        require(tokenIn != address(0) && tokenOut != address(0), "Settlement: zero token");
-        require(amountIn > 0 && amountOut > 0, "Settlement: zero amount");
-
-        bool withGas = gasReimburseIn > 0 || gasReimburseOut > 0;
+    /// @notice 内部：批量结算的单笔逻辑（gas 报销上限 + 验签记账 + 计费 + 结算），供三个批量入口共用
+    function _settleBatchItem(Fill calldata fill, uint16 _feeBps) internal {
+        bool withGas = fill.gasReimburseIn > 0 || fill.gasReimburseOut > 0;
         if (withGas && maxGasReimbursePerTrade > 0) {
-            require(gasReimburseIn + gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
+            require(fill.gasReimburseIn + fill.gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
         }
 
-        (uint256 feeIn, uint256 feeOut) = _feesFor(tokenIn, tokenOut, amountIn, amountOut, _feeBps);
-        _settleOne(maker, taker, tokenIn, tokenOut, amountIn, amountOut, feeIn, feeOut, gasReimburseIn, gasReimburseOut);
+        _verifyFill(fill);
+
+        (uint256 feeIn, uint256 feeOut) = _feesFor(fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, _feeBps);
+        _settleOne(
+            fill.makerOrder.order.userAddress, fill.takerOrder.order.userAddress,
+            fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut,
+            feeIn, feeOut, fill.gasReimburseIn, fill.gasReimburseOut
+        );
     }
 
     /// @notice 批量结算并分配 gas 节省：50% 减 fee 退用户，25% 进 FeeDistributor，25% 进 NodeRewards 创始人积分（按当时 USDT 价值）
     /// @param gasSavingsUsdt6 本次批量相对单笔结算节省的 gas 价值（USDT 6 位小数）；0 则不做分配
     /// 调用前 relayer 需 approve(settlement, gasSavingsUsdt6 * 50%)，用于 25% FD + 25% 创始人
     function settleTradesBatchWithGasSavings(
-        address[] calldata makers,
-        address[] calldata takers,
-        address[] calldata tokenIns,
-        address[] calldata tokenOuts,
-        uint256[] calldata amountIns,
-        uint256[] calldata amountOuts,
-        uint256[] calldata gasReimburseIns,
-        uint256[] calldata gasReimburseOuts,
+        Fill[] calldata fills,
         uint256 gasSavingsUsdt6
     ) external nonReentrant {
         require(_isSettlementCaller(), "Settlement: not auth");
-        
+
         // Relayer 限流检查
         if (msg.sender != owner) {
             _checkRelayerRateLimit(msg.sender);
         }
-        uint256 len = _batchLength(makers, takers, tokenIns, tokenOuts, amountIns, amountOuts, gasReimburseIns, gasReimburseOuts);
+        uint256 len = fills.length;
         require(len > 0 && len <= 50, "Settlement: batch size 1-50");
 
         if (gasSavingsUsdt6 == 0) {
             uint16 _feeBps0 = feeBps;
             for (uint256 i = 0; i < len; i++) {
-                _settleBatchItem(makers[i], takers[i], tokenIns[i], tokenOuts[i], amountIns[i], amountOuts[i], gasReimburseIns[i], gasReimburseOuts[i], _feeBps0);
+                _settleBatchItem(fills[i], _feeBps0);
             }
             return;
         }
@@ -570,18 +594,18 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         uint256[] memory feeOuts = new uint256[](len);
 
         for (uint256 i = 0; i < len; i++) {
-            require(makers[i] != address(0) && takers[i] != address(0), "Settlement: zero address");
-            require(tokenIns[i] != address(0) && tokenOuts[i] != address(0), "Settlement: zero token");
-            require(amountIns[i] > 0 && amountOuts[i] > 0, "Settlement: zero amount");
-            if (gasReimburseIns[i] + gasReimburseOuts[i] > 0 && maxGasReimbursePerTrade > 0) {
-                require(gasReimburseIns[i] + gasReimburseOuts[i] <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
+            Fill calldata fill = fills[i];
+            bool withGas = fill.gasReimburseIn > 0 || fill.gasReimburseOut > 0;
+            if (withGas && maxGasReimbursePerTrade > 0) {
+                require(fill.gasReimburseIn + fill.gasReimburseOut <= maxGasReimbursePerTrade, "Settlement: gas reimburse cap");
             }
-            (uint256 feeIn, uint256 feeOut) = _feesFor(tokenIns[i], tokenOuts[i], amountIns[i], amountOuts[i], _feeBps);
+            _verifyFill(fill);
+            (uint256 feeIn, uint256 feeOut) = _feesFor(fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut, _feeBps);
             feeIns[i] = feeIn;
             feeOuts[i] = feeOut;
             if (_usdt != address(0)) {
-                if (tokenIns[i] == _usdt) totalFeeUsdt += feeIn;
-                if (tokenOuts[i] == _usdt) totalFeeUsdt += feeOut;
+                if (fill.tokenIn == _usdt) totalFeeUsdt += feeIn;
+                if (fill.tokenOut == _usdt) totalFeeUsdt += feeOut;
             }
         }
 
@@ -589,14 +613,15 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         if (_usdt != address(0) && totalFeeUsdt > 0) {
             userRebateUsdt = (gasSavingsUsdt6 * 50) / 100;
             if (userRebateUsdt > totalFeeUsdt) userRebateUsdt = totalFeeUsdt;
-            _applyUserRebate(feeIns, feeOuts, tokenIns, tokenOuts, _usdt, totalFeeUsdt, userRebateUsdt);
+            _applyUserRebate(feeIns, feeOuts, fills, _usdt, totalFeeUsdt, userRebateUsdt);
         }
 
         for (uint256 i = 0; i < len; i++) {
+            Fill calldata fill = fills[i];
             _settleOne(
-                makers[i], takers[i], tokenIns[i], tokenOuts[i],
-                amountIns[i], amountOuts[i], feeIns[i], feeOuts[i],
-                gasReimburseIns[i], gasReimburseOuts[i]
+                fill.makerOrder.order.userAddress, fill.takerOrder.order.userAddress,
+                fill.tokenIn, fill.tokenOut, fill.amountIn, fill.amountOut,
+                feeIns[i], feeOuts[i], fill.gasReimburseIn, fill.gasReimburseOut
             );
         }
 
@@ -607,16 +632,15 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     function _applyUserRebate(
         uint256[] memory feeIns,
         uint256[] memory feeOuts,
-        address[] calldata tokenIns,
-        address[] calldata tokenOuts,
+        Fill[] calldata fills,
         address _usdt,
         uint256 totalFeeUsdt,
         uint256 userRebateUsdt
     ) internal pure {
         uint256 len = feeIns.length;
         for (uint256 i = 0; i < len; i++) {
-            uint256 feeInUsdt = tokenIns[i] == _usdt ? feeIns[i] : 0;
-            uint256 feeOutUsdt = tokenOuts[i] == _usdt ? feeOuts[i] : 0;
+            uint256 feeInUsdt = fills[i].tokenIn == _usdt ? feeIns[i] : 0;
+            uint256 feeOutUsdt = fills[i].tokenOut == _usdt ? feeOuts[i] : 0;
             uint256 part = feeInUsdt + feeOutUsdt;
             if (part == 0 || totalFeeUsdt == 0) continue;
             uint256 deduct = (userRebateUsdt * part) / totalFeeUsdt;
@@ -646,51 +670,37 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         }
     }
 
-    /// @notice 批量结算带默克尔根验证（便于审计）；先验证默克尔根，再批量结算
+    /// @notice 批量结算带默克尔根验证（便于审计）；先验证默克尔根，再批量结算（结算仍逐笔验签）
     /// @param batchId 批次 ID（用于事件索引）
-    /// @param merkleRoot 所有 Trade 的默克尔根
-    /// @param makers 挂单方数组
-    /// @param takers 吃单方数组
-    /// @param tokenIns maker 卖出的代币数组
-    /// @param tokenOuts maker 买入的代币数组
-    /// @param amountIns maker 卖出数量数组
-    /// @param amountOuts maker 得到数量数组
-    /// @param gasReimburseIns 从 maker 侧扣除的 gas 费数组
-    /// @param gasReimburseOuts 从 taker 侧扣除的 gas 费数组
-    /// @param proofs 每个 Trade 的默克尔证明数组（proofs[i] 对应第 i 个 Trade）
+    /// @param merkleRoot 所有 Fill 的默克尔根（叶子见 _fillLeaf：绑定双方签名订单摘要与成交量）
+    /// @param fills 结算请求数组
+    /// @param proofs 每个 Fill 的默克尔证明数组（proofs[i] 对应第 i 个 Fill）
     function settleTradesBatchWithMerkle(
         uint256 batchId,
         bytes32 merkleRoot,
-        address[] calldata makers,
-        address[] calldata takers,
-        address[] calldata tokenIns,
-        address[] calldata tokenOuts,
-        uint256[] calldata amountIns,
-        uint256[] calldata amountOuts,
-        uint256[] calldata gasReimburseIns,
-        uint256[] calldata gasReimburseOuts,
+        Fill[] calldata fills,
         bytes32[][] calldata proofs
     ) external nonReentrant {
         require(_isSettlementCaller(), "Settlement: not auth");
-        
+
         // Relayer 限流检查
         if (msg.sender != owner) {
             _checkRelayerRateLimit(msg.sender);
         }
-        uint256 len = _batchLength(makers, takers, tokenIns, tokenOuts, amountIns, amountOuts, gasReimburseIns, gasReimburseOuts);
+        uint256 len = fills.length;
         require(len == proofs.length, "Settlement: length mismatch");
         require(len > 0 && len <= 50, "Settlement: batch size 1-50");
 
-        // 验证每个 Trade 的默克尔证明（叶子计算下沉到 _tradeLeaf，避免本函数栈溢出）
+        // 验证每个 Fill 的默克尔证明
         for (uint256 i = 0; i < len; i++) {
-            bytes32 leaf = _tradeLeaf(makers[i], takers[i], tokenIns[i], tokenOuts[i], amountIns[i], amountOuts[i], gasReimburseIns[i], gasReimburseOuts[i]);
+            bytes32 leaf = _fillLeaf(fills[i]);
             require(MerkleProof.verify(proofs[i], merkleRoot, leaf), "Settlement: invalid merkle proof");
         }
 
         // 验证通过后批量结算
         uint16 _feeBps = feeBps;
         for (uint256 i = 0; i < len; i++) {
-            _settleBatchItem(makers[i], takers[i], tokenIns[i], tokenOuts[i], amountIns[i], amountOuts[i], gasReimburseIns[i], gasReimburseOuts[i], _feeBps);
+            _settleBatchItem(fills[i], _feeBps);
         }
 
         emit TradesBatchSettledWithMerkle(batchId, merkleRoot, len);
