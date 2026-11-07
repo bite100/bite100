@@ -1,6 +1,15 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Contract, ZeroAddress, AbiCoder, zeroPadValue } from 'ethers'
+import { Contract, ZeroAddress, AbiCoder, zeroPadValue, formatUnits } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig } from '../config/chains'
+import {
+  fetchFastLaneQuote,
+  fetchFastLaneStatus,
+  fastLanePairSupport,
+  fastLaneBlockMessage,
+  resolveFastLaneTokenPair,
+  formatFastLaneEta,
+  type FastLaneQuote,
+} from '../services/fastLane'
 import { getProvider, withSigner, formatTokenAmount, formatError } from '../utils'
 import { ErrorDisplay } from './ErrorDisplay'
 import { ERC20_ABI } from '../config'
@@ -106,7 +115,7 @@ const LAYERZERO_EIDS: Record<number, number> = {
   421614: 40231,   // Arbitrum Sepolia
 }
 
-type BridgeId = 'layerzero' | 'ccip' | 'wormhole'
+type BridgeId = 'layerzero' | 'ccip' | 'wormhole' | 'fastlane'
 
 interface BridgeMeta {
   id: BridgeId
@@ -154,12 +163,38 @@ const BRIDGE_METAS: BridgeMeta[] = [
       '若目标链长时间未自动到账，可能需要凭消息证明（VAA）在目标链手动完成投递，桥页下方有查询入口与说明。',
     ],
   },
+  {
+    id: 'fastlane',
+    name: '极速到账（做市商垫付）',
+    feeSummary: '主网实时报价（经 LI.FI 聚合多家做市商/桥选路）：做市商与协议费用从到账数量中扣除，发送交易的 gas 以源链原生币另付；点确认前会把每一项拆开展示',
+    etaSummary: '主网预计约 1–5 分钟到账（以实时报价为准；做市商在目的链先行垫付，不用等源链最终确认）',
+    securitySummary: '安全模型：没有跨链消息验证环节——做市商用自有资金在目的链先付给你，事后自行过桥平账；你面对的是报价与履约风险，不是验证方作恶风险',
+    riskPoints: [
+      '主网功能，测试网不可用：做市商只在主网有真实资金流动性，Sepolia / Base Sepolia 上没有人垫资。此选项在测试网组合下只展示说明，不发起报价、不接受发起，页面上也不会出现编造的报价数字。',
+      '费用从到账里扣：报价即最终口径——预计到账与最低到账都会在确认前展示；做市商利润、聚合器（LI.FI）服务费与协议费都包含在报价差额中，发送交易的 gas 以源链原生币另付。',
+      '履约方以报价为准：聚合器会在多家做市商/桥之间选路（可能经 Across、Relay、deBridge 等履约），实际履约方名称会显示在报价里；对方先在目的链付款，你不需要等源链最终确认。',
+      '若无人接单或长时间未到账：不要重复发送同一笔。先凭发送交易哈希在本页或 LI.FI Explorer 查状态；未履约的按履约方机制处理（继续等待或退款路径），也可以改走本页其余三家消息桥重新发起——务必先确认原单状态再发新单，避免重复转移。',
+      '跨链转账不可撤销；报价有有效期，过期或价格变化后需要重新报价，以重新报价的数字为准。',
+    ],
+  },
 ]
 
 function parseAmountToWei(amount: string): bigint {
   const n = parseFloat(amount)
   if (!isFinite(n) || n <= 0) return 0n
   return BigInt(Math.floor(n * 1e18))
+}
+
+// 快线报价一句话（卡片展示）：履约方 / 预计到账 / 从到账扣除的费用 / 另付 gas / 预计时效
+function formatFastLaneQuoteLine(q: FastLaneQuote): string {
+  const net = formatUnits(q.netReceived, q.toTokenDecimals)
+  const feeText = q.deductedFees.length
+    ? q.deductedFees.map((f) => `${formatUnits(f.amount, f.decimals)} ${f.symbol}`).join(' + ')
+    : '0'
+  const gasText = q.gasCosts.length
+    ? `；gas 约 ${q.gasCosts.map((g) => `${formatUnits(g.amount, g.decimals)} ${g.symbol}`).join(' + ')} 另付`
+    : ''
+  return `实时报价（经 ${q.routeTool} 履约）：预计到账 ${net} ${q.toTokenSymbol}；费用 ${feeText} 从到账扣除${gasText}；${formatFastLaneEta(q.etaSeconds)}到账`
 }
 
 export function CrossChainBridge({ account, currentChainId }: CrossChainBridgeProps) {
@@ -183,6 +218,8 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   const [lastRequestId, setLastRequestId] = useState<string | null>(null)
   const [ccipMessageId, setCcipMessageId] = useState<string | null>(null)
   const [wormholeTxHash, setWormholeTxHash] = useState<string | null>(null)
+  const [fastLaneQuote, setFastLaneQuote] = useState<FastLaneQuote | null>(null)
+  const [fastlaneTxHash, setFastlaneTxHash] = useState<string | null>(null)
 
   const sourceChain = sourceChainId ? getChainConfig(sourceChainId) : null
   const targetChain = targetChainId ? getChainConfig(targetChainId) : null
@@ -200,6 +237,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       if (!sourceChain || !targetChain) return false
       if (id === 'layerzero') return Boolean(bridgeAddress) && Boolean(LAYERZERO_EIDS[targetChain.chainId])
       if (id === 'ccip') return Boolean(sourceChain.ccip && targetChain.ccip && sourceChain.contracts.wrappedToken)
+      if (id === 'fastlane') return fastLanePairSupport(sourceChain.chainId, targetChain.chainId).supported
       return Boolean(sourceChain.wormhole && targetChain.wormhole && sourceChain.contracts.wrappedToken)
     },
     [sourceChain, targetChain, bridgeAddress]
@@ -284,12 +322,81 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       }
     }
 
-    setQuotes(next)
+    // 快线报价由独立的防抖刷新维护（见 refreshFastLaneQuote），这里保留不覆盖
+    setQuotes((prev) => ({ ...next, fastlane: prev.fastlane }))
   }, [amount, sourceChain, targetChain, account, bridgeAvailable, bridgeAddress, tokenAddress])
 
   useEffect(() => {
     refreshQuotes()
   }, [refreshQuotes])
+
+  // 快线实时报价（LI.FI）：防抖 800ms，避免每次按键都打聚合器 API（免 key 通道限流紧）。
+  // 链对不可用时（测试网/未开通）不调用报价服务，卡片只显示静态说明，绝不出现编造数字。
+  const refreshFastLaneQuote = useCallback(async () => {
+    const amountWei = parseAmountToWei(amount)
+    if (!sourceChain || !targetChain || amountWei === 0n || !account || !bridgeAvailable('fastlane')) {
+      setFastLaneQuote(null)
+      return
+    }
+    try {
+      const [fromToken, toToken] = resolveFastLaneTokenPair(
+        sourceChain.chainId,
+        targetChain.chainId,
+        tokenAddress || ZeroAddress
+      )
+      const q = await fetchFastLaneQuote({
+        srcChainId: sourceChain.chainId,
+        dstChainId: targetChain.chainId,
+        fromToken,
+        toToken,
+        amountWei,
+        fromAddress: account,
+      })
+      setFastLaneQuote(q)
+      setQuotes((prev) => ({ ...prev, fastlane: formatFastLaneQuoteLine(q) }))
+    } catch {
+      setFastLaneQuote(null)
+      setQuotes((prev) => ({
+        ...prev,
+        fastlane: '实时报价暂时获取失败（聚合器限流或该代币暂无路由），发送前仍会重新报价，报价失败不会执行',
+      }))
+    }
+  }, [amount, sourceChain, targetChain, account, bridgeAvailable, tokenAddress])
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void refreshFastLaneQuote()
+    }, 800)
+    return () => clearTimeout(t)
+  }, [refreshFastLaneQuote])
+
+  // 快线状态轮询（LI.FI /v1/status，统一四态映射）
+  const checkFastLaneStatus = useCallback(async () => {
+    if (!fastlaneTxHash || !sourceChainId || !targetChainId) return
+    try {
+      const s = await fetchFastLaneStatus({
+        txHash: fastlaneTxHash,
+        srcChainId: sourceChainId,
+        dstChainId: targetChainId,
+      })
+      if (s.state === 'Completed')
+        setBridgeStatus(`极速到账已完成${s.dstTxHash ? `：目的链交易 ${s.dstTxHash}` : ''}`)
+      else if (s.state === 'Failed')
+        setBridgeStatus('极速到账状态：未完成/失败，请凭发送交易哈希在 LI.FI Explorer 查询处理')
+      else if (s.state === 'InFlight') setBridgeStatus('极速到账处理中：做市商履约中…')
+      else setBridgeStatus('极速到账已发起，等待履约方接单…')
+    } catch {
+      // 状态查询失败不打断页面，下个周期重试
+    }
+  }, [fastlaneTxHash, sourceChainId, targetChainId])
+
+  useEffect(() => {
+    if (!fastlaneTxHash) return
+    const interval = setInterval(() => {
+      void checkFastLaneStatus()
+    }, 15000)
+    return () => clearInterval(interval)
+  }, [fastlaneTxHash, checkFastLaneStatus])
 
   // LayerZero 状态查询（既有逻辑）
   const checkBridgeStatus = useCallback(async (requestId: string) => {
@@ -431,6 +538,49 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     })
   }
 
+  // 快线执行：发送前重新取一次实时报价（报价过期/失败即中止，绝不用旧报价执行），
+  // 然后按 LI.FI 返回的 transactionRequest 原样签名发送（官方件原样用，胶水只管授权与透传）。
+  const executeFastlane = async (amountWei: bigint) => {
+    await withSigner(async (signer) => {
+      const src = sourceChain!
+      const dst = targetChain!
+      const [fromToken, toToken] = resolveFastLaneTokenPair(
+        src.chainId,
+        dst.chainId,
+        tokenAddress || ZeroAddress
+      )
+      const q = await fetchFastLaneQuote({
+        srcChainId: src.chainId,
+        dstChainId: dst.chainId,
+        fromToken,
+        toToken,
+        amountWei,
+        fromAddress: account!,
+      })
+      const txReq = q.transactionRequest
+      if (!txReq) throw new Error('报价未返回可执行交易，请重新报价后再试')
+      if (fromToken !== ZeroAddress) {
+        const token = new Contract(fromToken, ERC20_ABI, signer)
+        const spender = q.approvalAddress || txReq.to
+        const allowance: bigint = await token.allowance(account, spender)
+        if (allowance < amountWei) {
+          const approveTx = await token.approve(spender, amountWei)
+          await approveTx.wait()
+        }
+      }
+      const tx = await signer.sendTransaction({
+        to: txReq.to,
+        data: txReq.data,
+        value: BigInt(txReq.value || '0'),
+      })
+      const receipt = await tx.wait()
+      if (!receipt || receipt.status !== 1) throw new Error('跨链交易未成功')
+      setFastLaneQuote(q)
+      setFastlaneTxHash(receipt.hash)
+      setBridgeStatus(`极速到账已发起（经 ${q.routeTool} 履约），做市商正在目的链垫付…`)
+    })
+  }
+
   const handleConfirmExecute = useCallback(async () => {
     setShowConfirm(false)
     const amountWei = parseAmountToWei(amount)
@@ -440,6 +590,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     try {
       if (selectedBridge === 'layerzero') await executeLayerzero(amountWei)
       else if (selectedBridge === 'ccip') await executeCcip(amountWei)
+      else if (selectedBridge === 'fastlane') await executeFastlane(amountWei)
       else await executeWormhole(amountWei)
       await fetchBalance()
       setAmount('')
@@ -461,6 +612,14 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       return
     }
     if (!bridgeAvailable(selectedBridge)) {
+      // 快线给出专属拦截文案（测试网不可用 / 仅开通主网方向），不许含糊成「不可用」
+      if (selectedBridge === 'fastlane' && sourceChain && targetChain) {
+        const support = fastLanePairSupport(sourceChain.chainId, targetChain.chainId)
+        if (!support.supported) {
+          setError(fastLaneBlockMessage(support.reason))
+          return
+        }
+      }
       setError('所选桥在当前源链/目标链组合下不可用，请换一家或换链')
       return
     }
@@ -479,7 +638,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   return (
     <div className="cross-chain-bridge">
       <h2>跨链桥</h2>
-      <p className="hint">把代币从一条链转移到另一条链，到达后可在目标链继续交易。本站接了三家桥，费用、时效和安全模型各不相同，由你自己选，没有默认选项。怎么选：① 在意验证层厚实、费用先锁定 → 选 Chainlink CCIP；② 在意费用低、能接受等久一点和偶尔手动收尾 → 选 Wormhole；③ LayerZero 到账较快，但请先看清它卡片上标红的 1-of-1 验证方风险再决定。步骤：选源链与目标链 → 点选一家桥（先看每张卡上的实时报价、预计时效与风险说明）→ 填数量 → 点「发起跨链转移」后会再弹确认框复述费用与风险，确认后在钱包里依次批准即可。前提：已连接钱包，且钱包网络与所选源链一致，钱包里留有少量源链 ETH 付费用与 gas。</p>
+      <p className="hint">把代币从一条链转移到另一条链，到达后可在目标链继续交易。本站接了四条跨链通道：三家消息桥（LayerZero、Chainlink CCIP、Wormhole）和一条主网极速通道（做市商垫付）。费用、时效和安全模型各不相同，由你自己选，没有默认选项。怎么选：① 在意验证层厚实、费用先锁定 → 选 Chainlink CCIP；② 在意费用低、能接受等久一点和偶尔手动收尾 → 选 Wormhole；③ LayerZero 到账较快，但请先看清它卡片上标红的 1-of-1 验证方风险再决定；④ 赶时间、在主网之间转主流资产 → 选极速到账：做市商先在目的链垫付，几分钟到账，费用从到账里扣（仅主网，测试网不可用）。步骤：选源链与目标链 → 点选一条通道（先看每张卡上的实时报价、预计时效与风险说明）→ 填数量 → 点「发起跨链转移」后会再弹确认框复述费用与风险，确认后在钱包里依次批准即可。前提：已连接钱包，且钱包网络与所选源链一致，钱包里留有少量源链 ETH 付费用与 gas。</p>
       <p className="hint">关于 CCIP 与 Wormhole 的代币：这两家桥目前只支持 wTKA（TKA 的 1:1 包装代币）。发起时页面会自动把你的 TKA 按 1:1 换成 wTKA 再跨链（随时可 1:1 换回，不收差价）；目标链收到的是 wTKA，在目标链换回 TKA 后即可交易。LayerZero 通道直接转 TKA。</p>
 
       <ErrorDisplay error={error} onDismiss={() => setError(null)} className="bridge-error" />
@@ -524,6 +683,14 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           {BRIDGE_METAS.map((meta) => {
             const available = bridgeAvailable(meta.id)
             const isSelected = selectedBridge === meta.id
+            const fastlaneSupport =
+              meta.id === 'fastlane' && sourceChain && targetChain
+                ? fastLanePairSupport(sourceChain.chainId, targetChain.chainId)
+                : null
+            const unavailableLabel =
+              fastlaneSupport && !fastlaneSupport.supported && fastlaneSupport.reason === 'testnet'
+                ? '主网功能 · 测试网不可用'
+                : '当前链组合不可用'
             return (
               <div
                 key={meta.id}
@@ -535,7 +702,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
                 <div className="bridge-card-head">
                   <strong>{meta.name}</strong>
                   {isSelected && <span className="bridge-card-badge">已选</span>}
-                  {!available && <span className="bridge-card-badge muted">当前链组合不可用</span>}
+                  {!available && <span className="bridge-card-badge muted">{unavailableLabel}</span>}
                 </div>
                 <p>{quotes[meta.id] || meta.feeSummary}</p>
                 <p>{meta.etaSummary}</p>
@@ -552,7 +719,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
             )
           })}
         </div>
-        {!selectedBridge && <p className="hint">尚未选择桥：请对比三张卡片的费用、时效与风险后点选一家，再继续。</p>}
+        {!selectedBridge && <p className="hint">尚未选择桥：请对比四张卡片的费用、时效与风险后点选一家，再继续。</p>}
       </div>
 
       <div className="bridge-form">
@@ -572,6 +739,10 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
               disabled={loading}
             />
           </div>
+        )}
+
+        {selectedBridge === 'fastlane' && (
+          <p className="hint">极速到账填法：代币地址留空 = 转源链原生币（如 ETH）；填 ERC20 地址时，USDC / WETH 会自动匹配目的链的同名资产，其他代币默认两链同地址。此通道仅主网可用（Ethereum ↔ Base），测试网不发起报价。</p>
         )}
 
         <div className="bridge-field">
@@ -643,6 +814,16 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
               （若长时间未到账，可在该页面获取消息证明 VAA 后按指引手动完成投递）
             </p>
           )}
+          {fastlaneTxHash && (
+            <p>
+              极速到账发送交易：<span className="mono">{fastlaneTxHash}</span>
+              {' · '}
+              <a href="https://explorer.li.fi" target="_blank" rel="noreferrer">
+                在 LI.FI Explorer 查状态
+              </a>
+              （本页也会自动刷新状态；若长时间未到账，不要重复发送，先查清原单状态）
+            </p>
+          )}
         </div>
       )}
 
@@ -688,6 +869,35 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
               <li>跨链转账不可撤销；若消息已发出但长时间未投递，异常时可能需要人工完成投递，不要重复发送同一笔。</li>
               {(selectedBridge === 'ccip' || selectedBridge === 'wormhole') && (
                 <li>本次会先把 TKA 按 1:1 换成 wTKA 再发送，目标链收到的是 wTKA，可 1:1 换回 TKA。</li>
+              )}
+              {selectedBridge === 'fastlane' && fastLaneQuote && (
+                <>
+                  <li>
+                    预计到账：{formatUnits(fastLaneQuote.netReceived, fastLaneQuote.toTokenDecimals)}{' '}
+                    {fastLaneQuote.toTokenSymbol}（最低 {formatUnits(fastLaneQuote.toAmountMin, fastLaneQuote.toTokenDecimals)}{' '}
+                    {fastLaneQuote.toTokenSymbol}，低于最低值不会执行）
+                  </li>
+                  <li>
+                    费用拆分：
+                    {fastLaneQuote.deductedFees.length
+                      ? fastLaneQuote.deductedFees
+                          .map((f) => `${f.name} ${formatUnits(f.amount, f.decimals)} ${f.symbol}`)
+                          .join('；')
+                      : '无'}
+                    （已包含在到账差额中、从到账扣除）；发送 gas{' '}
+                    {fastLaneQuote.gasCosts.length
+                      ? fastLaneQuote.gasCosts
+                          .map((g) => `${formatUnits(g.amount, g.decimals)} ${g.symbol}`)
+                          .join('；')
+                      : '以钱包估算为准'}
+                    （以源链原生币另行支付）
+                  </li>
+                  <li>履约方：{fastLaneQuote.routeTool}（由聚合器 LI.FI 在多家做市商/桥之间选路，以本次报价返回为准）；做市商在目的链先行垫付，你不用等源链最终确认。</li>
+                  <li>回退路径：若无人接单或长时间未到账，不要重复发送；先在本页查状态，未履约可改走其余三家消息桥重新发起（先确认原单状态再发新单）。</li>
+                </>
+              )}
+              {selectedBridge === 'fastlane' && !fastLaneQuote && (
+                <li>发送前会重新获取一次实时报价；报价获取失败将中止发送，不会用旧报价执行。</li>
               )}
             </ul>
             <div className="bridge-confirm-actions">
