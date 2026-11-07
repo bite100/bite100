@@ -43,6 +43,17 @@ export interface ChainConfig {
     // Wormhole 自己的链 ID（与 EVM chainId 不同）
     wormholeChainId: number
   }
+  // 第二十三轮：Chainlink 预言机喂价配置（参考价层；前端只读，不参与结算/签名）
+  chainlinkFeeds?: {
+    // key = 交易对（BASE/QUOTE，如 ETH/USD）；只有真实存在官方喂价的交易对才配，
+    // 测试代币 TKA/TKB 没有任何外部喂价，禁止在此映射到其他资产的价格。
+    [pair: string]: {
+      // AggregatorV3 代理合约地址（官方文档 Price Feed Addresses）
+      address: string
+      // 官方心跳（秒）：无偏差触发时喂价的最长更新间隔；时效阈值按它推导
+      heartbeatSec: number
+    }
+  }
 }
 
 // Sepolia 测试网（2026-11-07 第十五轮重新部署：挂单余额锁定版十合约；见 docs/round15-deployment-2026-11-07.md；
@@ -84,6 +95,11 @@ const SEPOLIA: ChainConfig = {
     nttManager: '0x5a6Da05af0d9eF61BA85f610556357bEb1DC57D1',
     nttTransceiver: '0x1bFb42E93F5860C76ef0E100E063083357b93C8A',
     wormholeChainId: 10002,
+  },
+  // 第二十三轮 Chainlink 喂价（官方文档 Price Feed Addresses / API Reference 示例；
+  // 2026-11-07 实读 description()="ETH / USD"、decimals=8 验证，见 docs/round23-oracle-reference-price-2026-11-07.md）
+  chainlinkFeeds: {
+    'ETH/USD': { address: '0x694AA1769357215DE4FAC081bf1f309aDC325306', heartbeatSec: 3600 },
   },
 }
 
@@ -128,6 +144,11 @@ const BASE_SEPOLIA: ChainConfig = {
     nttManager: '0x9E45CCB3A5fef0E72bB8e97450b7FcF97EFC4d72',
     nttTransceiver: '0x74da43aF57134AFa610ADB8fdA1031594b9a494f',
     wormholeChainId: 10004,
+  },
+  // 第二十三轮 Chainlink 喂价（官方 Price Feed Addresses 的 Base Sepolia ETH/USD 代理；
+  // 2026-11-07 实读 description()="ETH / USD"、decimals=8 验证，心跳 1200s/偏差 0.15%）
+  chainlinkFeeds: {
+    'ETH/USD': { address: '0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1', heartbeatSec: 1200 },
   },
 }
 

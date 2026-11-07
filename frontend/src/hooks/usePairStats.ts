@@ -15,6 +15,8 @@ const POLL_MS = 15000
 
 export interface PairStats {
   lastPrice: number | null
+  /** 最近一笔成交的时间（unix 秒）；无成交为 null（第二十三轮参考价兜底标注用） */
+  lastTradeAt: number | null
   change24hPct: number | null
   high24h: number | null
   low24h: number | null
@@ -26,6 +28,7 @@ export interface PairStats {
 
 const EMPTY: PairStats = {
   lastPrice: null,
+  lastTradeAt: null,
   change24hPct: null,
   high24h: null,
   low24h: null,
@@ -75,6 +78,7 @@ function computeStats(trades: NormTrade[]): PairStats {
 
   return {
     lastPrice,
+    lastTradeAt: last.timestamp,
     change24hPct,
     high24h: high === -Infinity ? null : high,
     low24h: low === Infinity ? null : low,
