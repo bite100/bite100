@@ -1,29 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
-import GridLayout, { verticalCompactor } from 'react-grid-layout'
-import { Paper, Text, Button } from '@mantine/core'
-import { OrderBookWidget } from './OrderBookWidget'
+import { Paper } from '@mantine/core'
+import { OrderBookWidget, type OrderBookRow } from './OrderBookWidget'
 import { KLineChart } from './KLineChart'
 import { LimitOrderFormWidget } from './LimitOrderFormWidget'
+import { PairStatsBar } from './PairStatsBar'
+import { RecentTradesWidget } from './RecentTradesWidget'
+import { TradeTabsPanel } from './TradeTabsPanel'
+import { usePairStats } from '../../hooks/usePairStats'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import type { Signer } from 'ethers'
-import 'react-grid-layout/css/styles.css'
-import 'react-resizable/css/styles.css'
+import './TradeScreen.css'
 
-const LAYOUT_STORAGE_KEY = 'bite100_dashboard_layout'
-
-type LayoutItem = { i: string; x: number; y: number; w: number; h: number; minW?: number; minH?: number }
-const defaultLayout: LayoutItem[] = [
-  { i: 'orderbook', x: 0, y: 0, w: 3, h: 12, minW: 2, minH: 6 },
-  { i: 'chart', x: 3, y: 0, w: 6, h: 12, minW: 4, minH: 8 },
-  { i: 'orderform', x: 9, y: 0, w: 3, h: 12, minW: 2, minH: 6 },
-]
-/** 手机端单列垂直堆叠，避免拖拽误触 */
-const mobileLayout: LayoutItem[] = [
-  { i: 'orderbook', x: 0, y: 0, w: 4, h: 10, minW: 4, minH: 6 },
-  { i: 'chart', x: 0, y: 10, w: 4, h: 10, minW: 4, minH: 6 },
-  { i: 'orderform', x: 0, y: 20, w: 4, h: 10, minW: 4, minH: 6 },
-]
-const MOBILE_BREAKPOINT = 768
+const DEFAULT_PAIR = 'TKA/TKB'
 
 export interface DashboardProps {
   account: string | null
@@ -32,7 +20,7 @@ export interface DashboardProps {
   onShowFullOrderbook?: () => void
 }
 
-/** 从订单簿买卖盘计算中间价（用于推荐价） */
+/** 从订单簿买卖盘计算中间价（用于推荐价与最新价兜底） */
 function computeMidFromBook(
   bids: { price: string }[],
   asks: { price: string }[]
@@ -44,124 +32,74 @@ function computeMidFromBook(
   return mid.toFixed(6)
 }
 
+/**
+ * 交易主屏（第十二轮：布局对标 Hyperliquid，皮肤保留第十一轮浅色极简）。
+ * 固定确定性网格：顶部信息条 / 左侧 K 线 + 页签表格 / 右栏盘口 + 最新成交 / 下单面板。
+ * 此前可拖拽网格（react-grid-layout）按 Ren 指令让位于该固定布局，本地保存的旧布局不再读取。
+ */
 export function Dashboard({ account, getSigner, onShowFullOrderbook }: DashboardProps) {
-  const [layout, setLayout] = useState(defaultLayout)
-  const [width, setWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200)
   const [recommendedPrice, setRecommendedPrice] = useState('')
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LAYOUT_STORAGE_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw) as LayoutItem[]
-        if (Array.isArray(parsed) && parsed.length === defaultLayout.length) setLayout(parsed)
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [])
-
-  useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
+  const [midPrice, setMidPrice] = useState('')
+  const [pricePick, setPricePick] = useState<{ price: string; seq: number }>({ price: '', seq: 0 })
+  const [ordersRefresh, setOrdersRefresh] = useState(0)
+  const stats = usePairStats(DEFAULT_PAIR)
 
   // 进入 Dashboard 时启动 P2P（Bootstrap + DHT），便于挂单时广播
   useEffect(() => {
     p2pOrderBroadcast.start().catch(() => {})
   }, [])
 
-  const onLayoutChange = useCallback((newLayout: ReadonlyArray<LayoutItem>) => {
-    const next: LayoutItem[] = newLayout.map((item) => ({
-      i: item.i,
-      x: item.x,
-      y: item.y,
-      w: item.w,
-      h: item.h,
-      minW: item.minW ?? 2,
-      minH: item.minH ?? 6,
-    }))
-    setLayout(next)
-    try {
-      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(next))
-    } catch {
-      /* ignore */
-    }
+  const handleBookUpdate = useCallback((bids: OrderBookRow[], asks: OrderBookRow[]) => {
+    const mid = computeMidFromBook(bids, asks)
+    setRecommendedPrice(mid)
+    setMidPrice(mid)
   }, [])
 
-  const isMobile = width < MOBILE_BREAKPOINT
-  const cols = width >= 1200 ? 12 : width >= 768 ? 10 : 4
-  const rowHeight = isMobile ? 36 : 32
-  const containerWidth = Math.max(280, width - (isMobile ? 24 : 48))
-  const effectiveLayout = isMobile ? mobileLayout : layout
-  const effectiveDragConfig = isMobile ? { handle: '.mobile-no-drag' } : { handle: '.drag-handle' }
-  const effectiveResizeConfig = isMobile ? { enabled: false } : { enabled: true }
+  const handlePriceClick = useCallback((price: string) => {
+    setPricePick((prev) => ({ price, seq: prev.seq + 1 }))
+  }, [])
 
   return (
-    <GridLayout
-      className={`layout ${isMobile ? 'layout-mobile' : ''}`}
-      width={containerWidth}
-      layout={effectiveLayout}
-      gridConfig={{
-        cols,
-        rowHeight,
-        margin: isMobile ? [6, 6] : [8, 8],
-        containerPadding: null,
-        maxRows: Infinity,
-      }}
-      dragConfig={effectiveDragConfig as { handle: string }}
-      resizeConfig={effectiveResizeConfig as { enabled: boolean }}
-      compactor={verticalCompactor}
-      onLayoutChange={onLayoutChange}
-    >
-      <Paper
-        key="orderbook"
-        p="md"
-        shadow="xs"
-        withBorder
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-          <Text className="drag-handle" size="sm" fw={600} style={{ cursor: 'grab' }}>
-            订单簿
-          </Text>
-          {onShowFullOrderbook && (
-            <Button variant="subtle" size="xs" color="dark" onClick={onShowFullOrderbook}>
-              完整订单簿
-            </Button>
-          )}
+    <div className="trade-screen">
+      <PairStatsBar
+        pair={DEFAULT_PAIR}
+        stats={stats}
+        midPrice={midPrice || undefined}
+        onShowFullOrderbook={onShowFullOrderbook}
+      />
+      <div className="trade-main">
+        <Paper className="trade-card trade-area-chart" p="md" shadow="xs" withBorder>
+          <KLineChart />
+        </Paper>
+
+        <Paper className="trade-card trade-area-tabs" p="md" shadow="xs" withBorder>
+          <TradeTabsPanel account={account} getSigner={getSigner} refreshSignal={ordersRefresh} />
+        </Paper>
+
+        <div className="trade-area-rail">
+          <Paper className="trade-card" p="sm" shadow="xs" withBorder>
+            <OrderBookWidget onBookUpdate={handleBookUpdate} onPriceClick={handlePriceClick} />
+          </Paper>
+          <Paper className="trade-card" p="sm" shadow="xs" withBorder>
+            <RecentTradesWidget />
+          </Paper>
         </div>
-        <OrderBookWidget
-          onBookUpdate={(bids, asks) => setRecommendedPrice(computeMidFromBook(bids, asks))}
-        />
-      </Paper>
-      <Paper
-        key="chart"
-        p="md"
-        shadow="xs"
-        withBorder
-      >
-        <Text className="drag-handle" size="sm" fw={600} style={{ cursor: 'grab' }}>
-          K 线图
-        </Text>
-        <KLineChart />
-      </Paper>
-      <Paper
-        key="orderform"
-        p="md"
-        shadow="xs"
-        withBorder
-        className="dashboard-orderform"
-      >
-        <Text className="drag-handle" size="sm" fw={600} style={{ cursor: isMobile ? 'default' : 'grab' }}>
-          挂单
-        </Text>
-        <LimitOrderFormWidget
-          account={account}
-          getSigner={getSigner}
-          recommendedPrice={recommendedPrice || undefined}
-        />
-      </Paper>
-    </GridLayout>
+
+        <Paper
+          className="trade-card trade-area-side dashboard-orderform"
+          p="md"
+          shadow="xs"
+          withBorder
+        >
+          <LimitOrderFormWidget
+            account={account}
+            getSigner={getSigner}
+            recommendedPrice={recommendedPrice || undefined}
+            externalPrice={pricePick}
+            onSuccess={() => setOrdersRefresh((n) => n + 1)}
+          />
+        </Paper>
+      </div>
+    </div>
   )
 }

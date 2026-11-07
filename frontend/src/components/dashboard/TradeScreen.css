@@ -1,0 +1,268 @@
+/*
+ * 交易主屏样式（第十二轮：布局对标 Hyperliquid）
+ * 皮肤严格沿用第十一轮设计系统：颜色/圆角/阴影一律走 --b100-* token，不新增硬编码色值。
+ */
+
+.trade-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------- 顶部信息条 ---------- */
+.trade-stats {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
+}
+
+.ts-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 110px;
+}
+
+.ts-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ts-value {
+  font-family: var(--b100-font-num);
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.ts-unit {
+  font-size: 0.75rem;
+  color: var(--b100-text-2);
+}
+
+.ts-sub {
+  font-family: var(--b100-font-num);
+}
+
+.ts-action {
+  margin-left: auto;
+}
+
+/* ---------- 主区固定网格 ---------- */
+.trade-main {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 292px 300px;
+  grid-template-areas:
+    'chart rail side'
+    'tabs rail side';
+  align-items: start;
+}
+
+.trade-area-chart {
+  grid-area: chart;
+  min-width: 0;
+}
+
+.trade-area-tabs {
+  grid-area: tabs;
+  min-width: 0;
+}
+
+.trade-area-rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.trade-area-side {
+  grid-area: side;
+  min-width: 0;
+}
+
+/* 中等宽度：右侧两栏并为一列（下单在上、盘口/成交在下），K 线与页签仍占左列 */
+@media (max-width: 1280px) {
+  .trade-main {
+    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-areas:
+      'chart side'
+      'chart rail'
+      'tabs rail';
+  }
+}
+
+/* 移动端单列：K 线 → 下单 → 盘口/成交 → 页签 */
+@media (max-width: 900px) {
+  .trade-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'chart'
+      'side'
+      'rail'
+      'tabs';
+  }
+
+  .trade-stats {
+    gap: 1.25rem;
+  }
+}
+
+/* ---------- 盘口 / 最新成交 ---------- */
+.book-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.book-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  font-size: 0.7rem;
+  color: var(--b100-text-3);
+  padding: 0 6px 4px;
+}
+
+.book-cols span:nth-child(2),
+.book-cols span:nth-child(3) {
+  text-align: right;
+}
+
+.book-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  width: 100%;
+  padding: 2.5px 6px;
+  border: 0;
+  background: transparent;
+  font-family: var(--b100-font-num);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--b100-text);
+  text-align: left;
+}
+
+button.book-row {
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+button.book-row:hover {
+  background: var(--b100-surface-2);
+}
+
+.book-depth {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  right: 0;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.book-depth-ask {
+  background: var(--b100-error-bg);
+}
+
+.book-depth-bid {
+  background: var(--b100-up-bg);
+}
+
+.book-cell {
+  position: relative;
+  z-index: 1;
+}
+
+.book-cell-r {
+  text-align: right;
+}
+
+.book-price {
+  font-weight: 500;
+}
+
+.book-spread {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 6px;
+  margin: 4px 0;
+  border-top: 1px solid var(--b100-border);
+  border-bottom: 1px solid var(--b100-border);
+}
+
+.book-spread-mid {
+  font-family: var(--b100-font-num);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.book-spread-val {
+  font-family: var(--b100-font-num);
+  font-size: 0.72rem;
+  color: var(--b100-text-2);
+}
+
+/* ---------- 下单面板 ---------- */
+.side-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.side-toggle-btn {
+  width: 100%;
+}
+
+.order-total-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: var(--b100-text-2);
+}
+
+.order-total-val {
+  font-family: var(--b100-font-num);
+  color: var(--b100-text);
+  font-weight: 500;
+}
+
+/* ---------- 页签表格 ---------- */
+.trade-table-wrap {
+  overflow-x: auto;
+}
+
+.trade-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.trade-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--b100-text-2);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--b100-border);
+  white-space: nowrap;
+}
+
+.trade-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--b100-border);
+  white-space: nowrap;
+}
+
+.trade-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.trade-table td.num {
+  font-family: var(--b100-font-num);
+}
