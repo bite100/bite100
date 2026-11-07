@@ -89,13 +89,13 @@ export function ServiceWorkerUpdate() {
 
   return (
     <div className="sw-update-banner" role="alert">
-      <span className="sw-update-text">🔄 新版本已就绪，点击刷新以获取最新功能</span>
+      <span className="sw-update-text">新版本已就绪，刷新页面即可更新</span>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button type="button" className="sw-update-btn secondary" onClick={handleDismiss}>
           稍后
         </button>
         <button type="button" className="sw-update-btn" onClick={handleRefresh}>
-          立即刷新
+          刷新
         </button>
       </div>
     </div>

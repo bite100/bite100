@@ -1,7 +1,7 @@
 {
   "name": "比特100",
   "short_name": "比特100",
-  "description": "比特100 去中心化交易所 · 存提 · Swap · 治理 · 订单簿",
+  "description": "比特100：链无关的 P2P 去中心化交易所（测试网）— 交易、兑换、跨链桥与治理",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -36,9 +36,9 @@
   ],
   "shortcuts": [
     {
-      "name": "存提",
-      "short_name": "存提",
-      "description": "存取代币",
+      "name": "资产",
+      "short_name": "资产",
+      "description": "存入与提取代币",
       "url": "/?tab=vault",
       "icons": [
         {
@@ -49,9 +49,9 @@
       ]
     },
     {
-      "name": "Swap",
-      "short_name": "Swap",
-      "description": "AMM 兑换",
+      "name": "兑换",
+      "short_name": "兑换",
+      "description": "AMM 即时兑换",
       "url": "/?tab=swap",
       "icons": [
         {
@@ -64,7 +64,7 @@
     {
       "name": "订单簿",
       "short_name": "订单簿",
-      "description": "限价单撮合",
+      "description": "限价单订单簿",
       "url": "/?tab=orderbook",
       "icons": [
         {

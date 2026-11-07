@@ -111,7 +111,7 @@ export function StandardConnect() {
       if (c) {
         connect({ connector: c })
       } else {
-        throw new Error('未找到注入钱包连接器')
+        throw new Error('未检测到浏览器钱包')
       }
     } catch (e) {
       const err = e as { message?: string; code?: number }
@@ -131,7 +131,7 @@ export function StandardConnect() {
     if (c) {
       connect({ connector: c })
     } else {
-      setInjectedError('WalletConnect 未配置，请在环境变量中设置 VITE_WC_PROJECT_ID')
+      setInjectedError('WalletConnect 暂未配置，请使用浏览器钱包连接')
     }
   }
 
@@ -179,8 +179,8 @@ export function StandardConnect() {
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '0.4rem', width: '100%', padding: '0.5rem 0', borderTop: '1px solid #EDEDEF' }}>
               <div style={{ fontSize: '0.85rem', color: '#a1a1aa', marginBottom: '0.25rem' }}>
                 {detectedWallets.length > 0 && !showAllWallets
-                  ? '选择已安装的钱包（点击后跳转至该 App 打开本页）'
-                  : '选择要使用的钱包（点击后跳转至该 App 打开本页）'}
+                  ? '选择已安装的钱包（将跳转至对应应用打开本页）'
+                  : '选择要使用的钱包（将跳转至对应应用打开本页）'}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
                 {walletOptionsToShow.map((w) => (
@@ -238,7 +238,7 @@ export function StandardConnect() {
       )}
       {!showInjected && !showWC && !mobile && (
         <span style={{ fontSize: '0.9rem', color: '#888' }}>
-          请安装 MetaMask、Phantom 等扩展，或配置 WalletConnect
+          未检测到钱包：请安装 MetaMask、Phantom 等钱包扩展，或使用 WalletConnect 连接
         </span>
       )}
       {errorMessage && (

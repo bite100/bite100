@@ -31,7 +31,7 @@ class GovernanceErrorBoundary extends Component<{ account: string | null; childr
     if (this.state.hasError) return (
       <div className="card vault-section">
         <h2>治理</h2>
-        <p className="hint">治理模块加载异常，请刷新页面。若持续报错，请检查 config.ts 中 GOVERNANCE_ADDRESS 是否正确。</p>
+        <p className="hint">治理模块加载异常，请刷新页面重试。</p>
       </div>
     )
     return this.props.children
@@ -114,7 +114,7 @@ function App() {
 
   const connectionLabel =
     connection.connector?.id === 'walletConnect'
-      ? 'WalletConnect / 钱包 App'
+      ? 'WalletConnect / 钱包应用'
       : connection.connector?.name || '浏览器钱包'
 
   const [ethBalance, setEthBalance] = useState<string>('')
@@ -373,7 +373,7 @@ function App() {
       const amt0 = parseAmount(addLiqAmount0)
       const amt1 = parseAmount(addLiqAmount1)
       if (amt0 === 0n || amt1 === 0n) {
-        setError('请输入 Token0 和 Token1 的数量')
+        setError('请输入 TKA 与 TKB 的数量')
         return
       }
       if (!currentChainConfig || currentChainConfig.contracts.ammPool === '0x0000000000000000000000000000000000000000') {
@@ -469,7 +469,7 @@ function App() {
     <div className="app">
       {!isOnline && (
         <div className="offline-banner" role="status">
-          当前处于离线状态，请检查网络后重试
+          当前处于离线状态，请检查网络连接
         </div>
       )}
       <header className="app-header-top">
@@ -478,7 +478,7 @@ function App() {
           <div>
             <h1>比特100</h1>
             <p className="subtitle">
-              {currentChainConfig?.name || '未知网络'} · P2P 去中心化交易所
+              {currentChainConfig?.name || '未知网络'} · P2P 去中心化交易所 · 测试网
             </p>
           </div>
         </div>
@@ -494,7 +494,7 @@ function App() {
         <div className="card connect-strip">
           <div className="connect-strip-text">
             <h2>连接钱包，开始交易</h2>
-            <p className="hint">行情、盘口与公开数据无需连接即可浏览；下单、存提与领取奖励需要连接钱包。</p>
+            <p className="hint">比特100 是链无关的 P2P 去中心化交易所：资产在哪条链，连接钱包即可交易。行情、盘口与公开数据无需连接即可浏览；下单、存提与领取奖励需要连接钱包。gas 由中继代付、结算时由交易双方对半分摊，无需自备原生代币。当前运行于测试网。</p>
           </div>
           <div className="connect-strip-actions">
             <StandardConnect />
@@ -513,7 +513,7 @@ function App() {
               <span className="value">{connectionLabel}</span>
             </div>
             <div className="row">
-              <span className="label">钱包 ETH 余额</span>
+              <span className="label">钱包余额（ETH）</span>
               <span className="value">{ethBalance} ETH</span>
             </div>
             <button type="button" className="btn secondary" onClick={() => disconnect()} style={{ marginTop: '0.5rem' }}>
@@ -536,12 +536,12 @@ function App() {
 
           {activeTab === 'assets' && (
             <>
-              <PageHead title="资产" desc="向 Vault 存入或提取代币，并查询钱包与 Vault 余额（下单交易使用 Vault 余额）。" />
+              <PageHead title="资产" desc="向 Vault 存入代币用于下单结算，或提取回钱包，并查询钱包与 Vault 两处余额。" />
               {account ? (
             <div className="vault-layout">
               <div className="card vault-section">
                 <h2>代币与 Vault 余额</h2>
-                <p className="hint">输入 ERC20 代币合约地址，或点下方快捷填入。代币地址与 Swap 方向会保存在本机，刷新后仍保留；清除浏览器/缓存会丢失。</p>
+                <p className="hint">输入 ERC20 代币合约地址查询余额，也可使用下方快捷按钮填入当前链的代币。所填地址保存在本机浏览器，刷新后仍会保留。</p>
                 <div className="input-row">
                   <input
                     type="text"
@@ -552,8 +552,8 @@ function App() {
                   />
                 </div>
                 <div className="quick-tokens">
-                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token0); setVaultBalance(''); setWalletTokenBalance('') } }}>Token A (TKA)</button>
-                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token1); setVaultBalance(''); setWalletTokenBalance('') } }}>Token B (TKB)</button>
+                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token0); setVaultBalance(''); setWalletTokenBalance('') } }}>TKA</button>
+                  <button type="button" className="btn-quick" onClick={() => { if (currentChainConfig) { setTokenAddress(currentChainConfig.contracts.token1); setVaultBalance(''); setWalletTokenBalance('') } }}>TKB</button>
                 </div>
                 <button
                   className="btn secondary"
@@ -569,7 +569,7 @@ function App() {
                       <span className="value">{walletTokenBalance}</span>
                     </div>
                     <div className="row result">
-                      <span className="label">可提取余额</span>
+                      <span className="label">Vault 余额（可提取）</span>
                       <span className="value">{vaultBalance}</span>
                     </div>
                   </div>
@@ -579,7 +579,7 @@ function App() {
               <div className="vault-actions-grid">
                 <div className="card vault-section">
                   <h2>存入</h2>
-                  <p className="hint">首次存入需在钱包中确认两次（授权 + 存入），之后可直接存入。需有代币余额。</p>
+                  <p className="hint">存入后代币进入 Vault，可用于下单结算。首次存入需在钱包中确认两次：代币授权与存入。</p>
                   <div className="input-row">
                     <input
                       type="text"
@@ -601,7 +601,7 @@ function App() {
 
                 <div className="card vault-section">
                   <h2>提取</h2>
-                  <p className="hint">提回钱包，不超过可提取余额</p>
+                  <p className="hint">将 Vault 余额提取回钱包，提取数量不超过 Vault 余额。</p>
                   <div className="input-row">
                     <input
                       type="text"
@@ -623,14 +623,14 @@ function App() {
               </div>
             </div>
               ) : (
-                <ConnectGate title="连接钱包后管理资产" desc="存入、提取与余额查询需要连接钱包；行情与公开数据可直接在「交易」「数据」分区浏览。" />
+                <ConnectGate title="连接钱包后管理资产" desc="存入、提取与余额查询需要连接钱包；行情与公开数据可在「交易」「数据」分区直接浏览。" />
               )}
             </>
           )}
 
           {activeTab === 'data' && (
             <>
-              <PageHead title="数据" desc="AMM 池与奖励池的公开链上数据，无需连接钱包即可查看。" />
+              <PageHead title="数据" desc="AMM 流动性池与贡献奖励池的链上公开数据，无需连接钱包即可查看。" />
               <div className="public-data-section">
                 <LiquidityPoolInfo />
                 <RewardPoolInfo />
@@ -654,14 +654,14 @@ function App() {
 
           {activeTab === 'swap' && (
             <>
-              <PageHead title="兑换" desc="通过 AMM 池即时兑换 Token A 与 Token B，或向池子添加流动性。" />
+              <PageHead title="兑换" desc="通过 AMM 流动性池即时兑换 TKA 与 TKB，或向池中添加流动性。" />
               {account ? (
             <div className="swap-page">
               <div className="card vault-section swap-hero">
                 <h2>兑换</h2>
-                <p className="hint">Token A ↔ Token B，0.01% 手续费，单笔最高等值 1 USD。池子需有流动性。</p>
+                <p className="hint">TKA 与 TKB 按池内储备比例即时兑换，手续费 0.01%，从成交金额中扣除；兑换需要池中有充足流动性。</p>
                 <div className="row">
-                  <span className="label">池子储备</span>
+                  <span className="label">池内储备</span>
                   <span className="value mono">TKA: {reserve0} · TKB: {reserve1}</span>
                 </div>
                 <select
@@ -693,17 +693,17 @@ function App() {
                   onClick={handleSwap}
                   disabled={loadingSwap || !swapAmount.trim() || parseAmount(swapAmount) === 0n}
                 >
-                  {loadingSwap ? '处理中…' : 'Swap'}
+                  {loadingSwap ? '处理中…' : '兑换'}
                 </button>
               </div>
 
               <div className="card vault-section">
                 <h2>添加流动性</h2>
-                <p className="hint">向 AMM 池添加 Token A 和 Token B，需有该代币余额</p>
+                <p className="hint">向 AMM 池同时存入 TKA 与 TKB，增加池内流动性深度。</p>
                 <div className="input-row">
                   <input
                     type="text"
-                    placeholder="Token A 数量"
+                    placeholder="TKA 数量"
                     value={addLiqAmount0}
                     onChange={(e) => setAddLiqAmount0(e.target.value)}
                     className="input"
@@ -713,7 +713,7 @@ function App() {
                 <div className="input-row">
                   <input
                     type="text"
-                    placeholder="Token B 数量"
+                    placeholder="TKB 数量"
                     value={addLiqAmount1}
                     onChange={(e) => setAddLiqAmount1(e.target.value)}
                     className="input"
@@ -730,7 +730,7 @@ function App() {
               </div>
             </div>
               ) : (
-                <ConnectGate title="连接钱包后即可兑换" desc="兑换与添加流动性需要用钱包签名；池子储备等公开数据可在「数据」分区查看。" />
+                <ConnectGate title="连接钱包后即可兑换" desc="兑换与添加流动性需要连接钱包签名；池内储备等公开数据可在「数据」分区查看。" />
               )}
             </>
           )}
@@ -770,17 +770,17 @@ function App() {
 
           {activeTab === 'bridge' && (
             <>
-              <PageHead title="跨链桥" desc="通过 LayerZero 在链之间转移代币；跨链操作需要连接钱包。" />
+              <PageHead title="跨链桥" desc="通过 LayerZero 在链之间转移代币，资产到达目标链后可继续交易；发起转移需要连接钱包。" />
               <CrossChainBridge account={account} currentChainId={currentChainId} />
             </>
           )}
 
       <details className="card contracts-details">
-        <summary>合约地址（验证用）</summary>
-        <div className="row"><span className="label">网络</span><span className="value">{currentChainConfig?.name || '未知'}</span></div>
+        <summary>合约地址（链上验证）</summary>
+        <div className="row"><span className="label">当前网络</span><span className="value">{currentChainConfig?.name || '未知网络'}</span></div>
         <div className="row"><span className="label">AMM 池</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{AMM_POOL_ADDRESS}</span></div>
-        <div className="row"><span className="label">Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
-        <div className="row"><span className="label">Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
+        <div className="row"><span className="label">治理合约 Governance</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{GOVERNANCE_ADDRESS}</span></div>
+        <div className="row"><span className="label">结算合约 Settlement</span><span className="value mono" style={{ fontSize: '0.75rem' }}>{SETTLEMENT_ADDRESS}</span></div>
       </details>
 
     </div>

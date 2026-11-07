@@ -107,7 +107,7 @@ describe('formatError', () => {
   })
   it('returns 余额不足 / 授权额度不足 for CALL_EXCEPTION', () => {
     expect(formatError({ message: 'CALL_EXCEPTION insufficient balance' })).toBe('余额不足')
-    expect(formatError({ message: 'CALL_EXCEPTION insufficient allowance' })).toBe('授权额度不足，请先 Approve')
+    expect(formatError({ message: 'CALL_EXCEPTION insufficient allowance' })).toBe('授权额度不足，请先完成代币授权')
   })
   it('truncates long raw message to 80 chars', () => {
     const long = 'x'.repeat(100)

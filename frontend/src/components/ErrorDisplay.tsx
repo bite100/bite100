@@ -46,7 +46,7 @@ export function ErrorDisplay({ error, onRetry, onDismiss, className = '' }: Erro
         )}
       </div>
       {connectHint && (
-        <p className="error-hint">若持续失败，请刷新页面或尝试在 MetaMask、Trust 等钱包 App 内置浏览器中打开</p>
+        <p className="error-hint">若持续失败，请刷新页面，或在 MetaMask、Trust 等钱包应用的内置浏览器中打开本页。</p>
       )}
     </div>
   )

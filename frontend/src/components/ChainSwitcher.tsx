@@ -72,7 +72,7 @@ export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherPr
         disabled={switching}
       >
         {switching ? (
-          <span>切换中...</span>
+          <span>切换中…</span>
         ) : currentChain ? (
           <>
             <span className="chain-name">{currentChain.name}</span>
@@ -88,7 +88,7 @@ export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherPr
           <div className="chain-switcher-overlay" onClick={() => setIsOpen(false)} />
           <div className="chain-switcher-menu">
             <div className="chain-switcher-header">
-              <h3>选择网络</h3>
+              <h3>切换网络</h3>
               <button className="chain-switcher-close" onClick={() => setIsOpen(false)}>×</button>
             </div>
             <div className="chain-switcher-list">
@@ -106,7 +106,7 @@ export function ChainSwitcher({ currentChainId, onChainChange }: ChainSwitcherPr
                     <div className="chain-item-content">
                       <span className="chain-item-name">{chain.name}</span>
                       {isActive && <span className="chain-item-badge">当前</span>}
-                      {!isDeployed && <span className="chain-item-badge warning">待部署</span>}
+                      {!isDeployed && <span className="chain-item-badge warning">未部署</span>}
                     </div>
                     {chain.blockExplorer && (
                       <a

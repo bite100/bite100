@@ -43,7 +43,7 @@ export function AddNetworkButton({
     } catch (e: unknown) {
       const err = e as { code?: number; message?: string }
       if (err.code === 4001) {
-        setError('已取消')
+        setError('已取消添加')
       } else {
         setError(err.message || '添加失败')
       }
