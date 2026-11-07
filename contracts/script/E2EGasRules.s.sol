@@ -80,7 +80,49 @@ contract E2EGasRules is Script {
             console.log("EXP_EXPIRES_AT", ts + fuse);
             console.log("EXP_NONCE", nonce);
             console.log("MODE3 done");
+        } else if (mode == 6) {
+            // 只签名不广播：打印过期订单与对手订单的签名，供运行器用 cast send 发真实交易
+            // （forge script 的 broadcast 模拟 EVM 中 tx.gasprice 恒为 0，依赖 gasprice 的
+            // 扣费逻辑在模拟期必误判 revert——故扣费/结算尝试改走真实交易，见轮次文档）
+            uint256 expTs = vm.envUint("EXP_TIMESTAMP");
+            uint256 expAt = vm.envUint("EXP_EXPIRES_AT");
+            uint256 expNonce = vm.envOr("EXP_NONCE", uint256(1));
+            Settlement.SignedOrder memory exp =
+                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, expTs, expAt, expNonce));
+            Settlement.SignedOrder memory to = _signed(
+                takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t2", 100e18, 100e18, expTs, expTs + 1 days, 1)
+            );
+            console.log("EXP_SIG", vm.toString(exp.signature));
+            console.log("TAKER_SIG", vm.toString(to.signature));
+            console.log("MODE6 done");
+        } else if (mode == 4 || mode == 5) {
+            // MODE=2 的拆分版（单调用广播）：4 = 只做过期结算尝试；5 = 只做归责扣费申报
+            vm.txGasPrice(3_000_000); // 同 MODE=2：模拟期 gas 价
+            uint256 expTs = vm.envUint("EXP_TIMESTAMP");
+            uint256 expAt = vm.envUint("EXP_EXPIRES_AT");
+            uint256 expNonce = vm.envOr("EXP_NONCE", uint256(1));
+            require(block.timestamp > expAt, "E2E: exp order not yet expired");
+            Settlement.SignedOrder memory exp =
+                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, expTs, expAt, expNonce));
+            vm.startBroadcast(deployerKey);
+            if (mode == 4) {
+                Settlement.SignedOrder memory to = _signed(
+                    takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t2", 100e18, 100e18, expTs, expTs + 1 days, 1)
+                );
+                (bool ok,) = address(settlement).call(
+                    abi.encodeWithSelector(Settlement.settleTrade.selector, _fill(exp, to, 100e18, 100e18))
+                );
+                console.log("expired settle attempt succeeded (expect false):", ok);
+                require(!ok, "E2E: expired settle should have reverted");
+            } else {
+                settlement.chargeFailedSettlement(exp, 1, FAIL_GAS_CLAIMED);
+            }
+            vm.stopBroadcast();
+            console.log("MODE done:", mode);
         } else if (mode == 2) {
+            // forge script 本地模拟的 tx.gasprice 默认为 0，会让扣费金额在模拟期算成 0 而误判 revert；
+            // 显式设定模拟 gas 价（链上真实执行仍用交易自身的 gasprice，不受此影响）
+            vm.txGasPrice(3_000_000);
             uint256 expTs = vm.envUint("EXP_TIMESTAMP");
             uint256 expAt = vm.envUint("EXP_EXPIRES_AT");
             uint256 expNonce = vm.envOr("EXP_NONCE", uint256(1));

@@ -182,7 +182,32 @@ Sepolia ≈ 0.04962 ETH、Base Sepolia ≈ 0.009656 ETH（E2E 后见 §5 末）�
 
 ### 5.2 可归责失败（订单过期）
 
-<!-- MODE2_RESULTS -->
+流程：预锁一笔短时过期的 maker 订单 → 到期后真实提交结算（链上 revert，
+原因 `Settlement: order expired`，由 RPC 估算报错与回执双证）→ 节点以**该 revert
+交易回执的真实 gasUsed** 申报 `chargeFailedSettlement(reason=1)`。
+
+**Sepolia**：结算尝试 tx `0x798f42a9…a170`（status 0，gasUsed 107,416 @
+3,000,000 wei）；扣费 tx `0xd627dd3e…0fd8`（status 1）。事件
+`FailedSettlementCharged`：chargedUser = maker、token = TKA（墓碑资产）、
+amount = **644,496,000,000,000** == 107,416 × 3,000,000 × 2000（逐 wei）；
+maker 的 TKA Vault 余额精确减少该额，taker 余额分毫未动（11 项断言全过）。
+
+**Base Sepolia**：结算尝试 tx `0x3fcab284…0327`（status 0，gasUsed 56,677）；
+扣费 tx `0x95bc89d0…5bed`（status 1，effectiveGasPrice 6,000,000 wei）。
+amount = **680,124,000,000,000** == 56,677 × 6,000,000 × 2000（逐 wei）；
+maker 被扣、taker 未动（11 项断言全过）。
+
+执行注记（工具链实测，如实记录）：① 第一笔预锁曾用 90 秒保险丝，低 gas 价下
+锁定 tx 落链超时导致 lock 本身 revert——改为 900 秒并加 MODE=3 补锁后完成；
+② forge script 的 broadcast 模拟 EVM 中 `tx.gasprice` 恒为 0，依赖 gasprice 的
+扣费逻辑在模拟期必然误判 revert（`vm.txGasPrice` 在 broadcast 收集模式下不
+传递）——结算尝试与扣费申报因此改用 cast send 发真实交易，脚本只负责签名
+（MODE=6）。合约逻辑本身经 forge 单测（`vm.txGasPrice(1 gwei)`）与上述真实
+交易双重验证，不受该工具链限制影响。
+
+E2E 总花费（部署 + 全部 E2E 交易）：部署者 Sepolia 0.0497642 → 0.0496107 ETH
+（合计约 0.0001534，其中部署约 0.000140）；Base Sepolia 0.0096973 → 0.0096477
+ETH（合计约 0.0000496，其中部署约 0.0000413）。
 
 ## 6. 前端
 
