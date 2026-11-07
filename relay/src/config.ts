@@ -26,7 +26,7 @@ export const DEFAULT_CHAIN_ID = 11155111
 
 const SEPOLIA: ChainRelayConfig = {
   chainId: 11155111,
-  settlement: '0x9f0636839b6699d530F954F87B939DA6f56c9890',
+  settlement: '0x3efb8F22B925FC659b46680700936243E1f8365E',
   rpcUrl: 'https://ethereum-sepolia.publicnode.com',
   tokens: {
     TKA: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
@@ -44,7 +44,7 @@ const SEPOLIA: ChainRelayConfig = {
 
 const BASE_SEPOLIA: ChainRelayConfig = {
   chainId: 84532,
-  settlement: '0x230887F48960E29066d9D3F593cB68F73Adccc85',
+  settlement: '0x9711644e3E39cec6E099e01cd4029f72244012D1',
   rpcUrl: 'https://sepolia.base.org',
   tokens: {
     TKA: '0xd3f1136Cb3511b4546BDE5dDAC4F0D5a4D5C5D33',
