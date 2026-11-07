@@ -434,6 +434,10 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         require(newIn <= order.amountIn && newOut <= order.amountOut, "Settlement: fill exceeds signed order");
         orderFilledIn[digest] = newIn;
         orderFilledOut[digest] = newOut;
+        // 挂单锁定消费（第十五轮）：把本笔成交折算到订单自身朝向的 (addIn, addOut)
+        // 交给 Vault 按锁定 token 取对应侧消费。未落锁的订单在此 revert——无锁定
+        // 不结算；与本笔划转同事务，结算失败一并回滚。
+        vault.consumeOrderLock(digest, order.tokenIn, addIn, addOut);
     }
 
     /// @notice 内部：订单首次结算消耗 nonce（单调水位）；同一订单的部分成交续结（continuation）跳过；

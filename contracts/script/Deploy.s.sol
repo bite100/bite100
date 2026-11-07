@@ -38,6 +38,8 @@ contract Deploy is ChainGuard {
 
         // 4. Vault 绑定 Settlement
         vault.setSettlement(address(settlement));
+        // 4b. 挂单锁定 locker = 部署/运营身份（第十五轮；主网须换成中继集合，见 docs/order-balance-locking.md）
+        vault.setLocker(deployer, true);
 
         // 5. FeeDistributor：开发者 5% 自动到账，其余 95% 由接收方 claim
         address developer = vm.envOr("DEVELOPER_ADDRESS", deployer);
@@ -66,6 +68,7 @@ contract Deploy is ChainGuard {
         FeeDistributor feeDistributor = new FeeDistributor();
         Settlement settlement = new Settlement(address(vault), address(feeDistributor));
         vault.setSettlement(address(settlement));
+        vault.setLocker(deployer, true); // 挂单锁定 locker = 部署/运营身份（第十五轮）
 
         address developer = vm.envOr("DEVELOPER_ADDRESS", deployer);
         feeDistributor.setDeveloperAddress(developer);
@@ -241,6 +244,7 @@ contract Deploy is ChainGuard {
         FeeDistributor feeDistributor = new FeeDistributor();
         Settlement settlement = new Settlement(address(vault), address(feeDistributor));
         vault.setSettlement(address(settlement));
+        vault.setLocker(deployer, true); // 挂单锁定 locker = 部署/运营身份（第十五轮）
 
         address developer = vm.envOr("DEVELOPER_ADDRESS", deployer);
         feeDistributor.setDeveloperAddress(developer);

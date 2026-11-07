@@ -36,6 +36,7 @@ contract SettlementTest is Test {
         feeDistributor = new FeeDistributor();
         settlement = new Settlement(address(vault), address(feeDistributor));
         vault.setSettlement(address(settlement));
+        vault.setLocker(address(this), true); // 第十五轮：测试合约充当节点 locker，结算前为订单落锁
 
         tokenA.transfer(maker, 1000e18);
         tokenB.transfer(taker, 1000e18);
@@ -82,6 +83,31 @@ contract SettlementTest is Test {
         return Settlement.SignedOrder({order: order, signature: _sign(key, order)});
     }
 
+    // ---------- 挂单锁定辅助（第十五轮） ----------
+
+    function _vaultOrder(Settlement.Order memory o) internal pure returns (VaultOrder memory) {
+        return VaultOrder({
+            orderId: o.orderId, userAddress: o.userAddress, tokenIn: o.tokenIn, tokenOut: o.tokenOut,
+            amountIn: o.amountIn, amountOut: o.amountOut, price: o.price, timestamp: o.timestamp,
+            expiresAt: o.expiresAt, nonce: o.nonce
+        });
+    }
+
+    function _lock(Settlement.SignedOrder memory so, bool payWithTokenIn) internal {
+        vault.lockForOrder(_vaultOrder(so.order), so.signature, payWithTokenIn);
+    }
+
+    function _lockFill(Settlement.Fill memory fill) internal {
+        _lock(fill.makerOrder, true); // maker 为卖方：锁 tokenIn 侧
+        _lock(fill.takerOrder, false); // taker 为买方：锁 tokenOut 侧
+    }
+
+    /// @notice 落锁后结算（成功路径用例的统一入口；无锁订单结算必 revert，见 VaultLocking.t.sol）
+    function _settle(Settlement.Fill memory fill) internal {
+        _lockFill(fill);
+        settlement.settleTrade(fill);
+    }
+
     /// @notice 标准成交：maker 订单与 taker 订单各 100e18/100e18（nonce 均为 0），按给定量结算
     function _stdFill(uint256 fillIn, uint256 fillOut, uint256 gasIn, uint256 gasOut)
         internal
@@ -120,7 +146,7 @@ contract SettlementTest is Test {
     function test_SettleTrade() public {
         // maker 卖 100 tokenA 买 tokenB，taker 卖 tokenB 买 tokenA，1:1 比例；0.01% 双边收取，无 cap
         // feeIn = 0.01e18, feeOut = 0.01e18，maker 收 99.99e18 tokenB，taker 收 99.99e18 tokenA
-        settlement.settleTrade(_stdFill(100e18, 100e18, 0, 0));
+        _settle(_stdFill(100e18, 100e18, 0, 0));
 
         assertEq(vault.balanceOf(address(tokenA), maker), 400e18);
         assertEq(vault.balanceOf(address(tokenB), maker), 99.99e18);
@@ -134,7 +160,7 @@ contract SettlementTest is Test {
         // 设置 tokenA 手续费上限 0.005e18（低于 0.01% 的 100e18），tokenB 无 cap
         settlement.setFeeCap(address(tokenA), 0.005e18);
         // feeIn 按 0.01% 应为 0.01e18，被 cap 为 0.005e18；feeOut = 0.01e18
-        settlement.settleTrade(_stdFill(100e18, 100e18, 0, 0));
+        _settle(_stdFill(100e18, 100e18, 0, 0));
 
         assertEq(vault.balanceOf(address(tokenB), maker), 100e18 - 0.01e18);
         assertEq(vault.balanceOf(address(tokenA), taker), 100e18 - 0.005e18);
@@ -148,6 +174,7 @@ contract SettlementTest is Test {
         uint256 gasIn = 0.5e18;  // 卖方均摊（从 tokenIn 扣给交易所）
         uint256 gasOut = 0.5e18; // 买方均摊（从 tokenOut 扣给交易所）
         Settlement.Fill memory fill = _stdFill(100e18, 100e18, gasIn, gasOut);
+        _lockFill(fill);
         vm.prank(exchange);
         settlement.settleTrade(fill);
 
@@ -165,6 +192,7 @@ contract SettlementTest is Test {
         address whitelistRelayer = makeAddr("whitelistRelayer");
         settlement.setRelayerAllowed(whitelistRelayer, true);
         Settlement.Fill memory fill = _stdFill(100e18, 100e18, 0, 0);
+        _lockFill(fill);
         vm.prank(whitelistRelayer);
         settlement.settleTrade(fill);
         assertEq(vault.balanceOf(address(tokenB), maker), 99.99e18);
@@ -222,6 +250,7 @@ contract SettlementTest is Test {
         uint256 gasIn = 0.25e18;
         uint256 gasOut = 0.25e18; // gasIn + gasOut = 0.5e18 == cap
         Settlement.Fill memory fill = _stdFill(100e18, 100e18, gasIn, gasOut);
+        _lockFill(fill);
         vm.prank(exchange);
         settlement.settleTrade(fill);
         assertEq(tokenA.balanceOf(exchange), 0.25e18);
@@ -270,7 +299,7 @@ contract SettlementTest is Test {
     /// @notice 重放：全额成交后重复提交同一 Fill，累计超签名量被拒
     function test_SettleTrade_ReplayReverts() public {
         Settlement.Fill memory fill = _stdFill(100e18, 100e18, 0, 0);
-        settlement.settleTrade(fill);
+        _settle(fill);
         vm.expectRevert("Settlement: fill exceeds signed order");
         settlement.settleTrade(fill);
     }
@@ -280,6 +309,8 @@ contract SettlementTest is Test {
         Settlement.SignedOrder memory m = _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0));
         Settlement.SignedOrder memory t = _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0));
 
+        _lock(m, true);
+        _lock(t, false);
         settlement.settleTrade(_fillWithOrders(m, t, 60e18, 60e18, 0, 0));
         assertEq(settlement.getCurrentNonce(maker), 1); // 首次结算消耗 nonce 0
         settlement.settleTrade(_fillWithOrders(m, t, 40e18, 40e18, 0, 0));
@@ -292,13 +323,14 @@ contract SettlementTest is Test {
 
     /// @notice nonce 独占：maker 的第二张订单复用 nonce 0（不同 orderId/金额），即使签名合法也无法结算
     function test_SettleTrade_SameNonceDifferentOrderReverts() public {
-        settlement.settleTrade(_stdFill(100e18, 100e18, 0, 0));
+        _settle(_stdFill(100e18, 100e18, 0, 0));
 
         Settlement.Fill memory fill2 = _fillWithOrders(
             _signed(makerKey, _order(maker, "m2", 50e18, 50e18, 0)), // 复用 nonce 0
             _signed(takerKey, _order(taker, "t2", 50e18, 50e18, 1)), // taker 用新 nonce 1
             50e18, 50e18, 0, 0
         );
+        _lockFill(fill2); // 第二张订单同样先落锁，revert 须来自 nonce 独占校验而非缺锁
         vm.expectRevert("Settlement: nonce already used by another order");
         settlement.settleTrade(fill2);
     }
@@ -306,6 +338,7 @@ contract SettlementTest is Test {
     /// @notice 过期订单不可结算
     function test_SettleTrade_ExpiredOrderReverts() public {
         Settlement.Fill memory fill = _stdFill(100e18, 100e18, 0, 0);
+        _lockFill(fill); // 过期前先落锁（过期校验在结算校验链中先于锁消费触发）
         vm.warp(block.timestamp + 2 days); // 订单 expiresAt = 下单 + 1 天
         vm.expectRevert("Settlement: order expired");
         settlement.settleTrade(fill);
@@ -328,6 +361,8 @@ contract SettlementTest is Test {
         Settlement.Fill[] memory fills = new Settlement.Fill[](2);
         fills[0] = f1;
         fills[1] = f2;
+        _lockFill(f1);
+        _lockFill(f2);
         settlement.settleTradesBatch(fills);
 
         // maker 共卖出 100 tokenA；收 tokenB 100 - (0.006 + 0.004) fee = 99.99
@@ -345,6 +380,7 @@ contract SettlementTest is Test {
             _signed(takerKey, _order(taker, "t2", 100e18, 100e18, 1)),
             40e18, 40e18, 0, 0
         );
+        _lockFill(good);
         Settlement.Fill[] memory fills = new Settlement.Fill[](2);
         fills[0] = good;
         fills[1] = bad;
@@ -357,7 +393,7 @@ contract SettlementTest is Test {
     /// @notice 批量重放：已全额结算的 Fill 再次进入批次被拒
     function test_SettleTradesBatch_ReplayReverts() public {
         Settlement.Fill memory fill = _stdFill(100e18, 100e18, 0, 0);
-        settlement.settleTrade(fill);
+        _settle(fill);
         Settlement.Fill[] memory fills = new Settlement.Fill[](1);
         fills[0] = fill;
         vm.expectRevert("Settlement: fill exceeds signed order");
@@ -404,7 +440,7 @@ contract SettlementTest is Test {
         FeeDistributor fd2 = new FeeDistributor();
         settlement.setFeeDistributor(address(fd2));
 
-        settlement.settleTrade(_stdFill(100e18, 100e18, 0, 0));
+        _settle(_stdFill(100e18, 100e18, 0, 0));
 
         assertEq(tokenA.balanceOf(address(fd2)), 0.01e18);
         assertEq(tokenB.balanceOf(address(fd2)), 0.01e18);
