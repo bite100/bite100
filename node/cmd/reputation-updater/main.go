@@ -8,7 +8,6 @@ import (
 	"log"
 	"math/big"
 	"os"
-	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -46,8 +45,8 @@ func main() {
 		log.Fatal("需要提供 -rpc, -contract, -key 参数")
 	}
 
-	// 加载配置
-	cfg, err := config.Load(*configPath)
+	// 加载配置（本工具目前只校验配置可加载，加载结果暂未使用）
+	_, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
@@ -84,7 +83,8 @@ func main() {
 		log.Fatalf("获取 ChainID 失败: %v", err)
 	}
 
-	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, chainID)
+	// 创建交易签名器（合约调用尚未接入，签名器暂未使用）
+	_, err = bind.NewKeyedTransactorWithChainID(privateKey, chainID)
 	if err != nil {
 		log.Fatalf("创建交易签名器失败: %v", err)
 	}
