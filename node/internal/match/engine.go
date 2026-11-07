@@ -265,7 +265,6 @@ func (e *Engine) insertOrderSorted(orders []*storage.Order, isBids bool) {
 	// 找到插入位置
 	newOrder := orders[len(orders)-1]
 	newPrice := bigNew(newOrder.Price)
-	insertIdx := len(orders) - 1
 	
 	for i := len(orders) - 2; i >= 0; i-- {
 		price := bigNew(orders[i].Price)
@@ -277,12 +276,10 @@ func (e *Engine) insertOrderSorted(orders []*storage.Order, isBids bool) {
 		}
 		if shouldSwap {
 			orders[i+1], orders[i] = orders[i], orders[i+1]
-			insertIdx = i
 		} else {
 			break
 		}
 	}
-}
 }
 
 // ReplaceOrderbook 用给定买卖盘替换某交易对的订单簿（用于 1.2 订单簿同步）；跳过已过期订单

@@ -69,7 +69,7 @@ func (l *orderRateLimiter) allowTokenBucket(key string) bool {
 			tokens:     float64(l.limit),
 			lastUpdate: now,
 			capacity:   float64(l.limit),
-			rate:       float64(l.limit) / window.Seconds(),
+			rate:       float64(l.limit) / l.window.Seconds(),
 		}
 		l.tokens[key] = bucket
 	}
@@ -381,9 +381,7 @@ func (s *Server) handleOrderbook(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Cache", "MISS")
 	
 	// 编码并缓存响应
-	var buf []byte
 	if data, err := json.Marshal(response); err == nil {
-		buf = data
 		s.setCachedResponse(cacheKey, data)
 		_, _ = w.Write(data)
 	} else {

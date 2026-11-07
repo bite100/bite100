@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"time"
-	"database/sql"
 )
 
 // RetentionDaysTwoWeeks 数据保留「两周」天数，与概念设计文档一致；retention_months<=0 时使用
