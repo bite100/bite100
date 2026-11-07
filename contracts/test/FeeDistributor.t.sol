@@ -166,6 +166,63 @@ contract FeeDistributorTest is Test {
         fd.setRecipients(new address[](0), new uint16[](0));
     }
 
+    function test_DeveloperShare_DefaultIs1Percent() public {
+        // 默认 100 bps = 1%，与改动前常量行为一致
+        assertEq(fd.developerShareBps(), 100);
+        assertEq(fd.MAX_DEVELOPER_SHARE_BPS(), 500);
+    }
+
+    function test_SetDeveloperShareBps_3Percent() public {
+        fd.setDeveloperAddress(dev);
+        fd.setDeveloperShareBps(300); // 3%
+
+        token.approve(address(fd), 1000e18);
+        fd.receiveFee(address(token), 100e18);
+
+        // 3% = 3e18 给 dev，97e18 进 accumulated
+        assertEq(token.balanceOf(dev), 3e18);
+        assertEq(token.balanceOf(address(fd)), 97e18);
+        assertEq(fd.accumulated(address(token)), 97e18);
+    }
+
+    function test_SetDeveloperShareBps_Zero() public {
+        fd.setDeveloperAddress(dev);
+        fd.setDeveloperShareBps(0);
+
+        token.approve(address(fd), 1000e18);
+        fd.receiveFee(address(token), 100e18);
+
+        assertEq(token.balanceOf(dev), 0);
+        assertEq(token.balanceOf(address(fd)), 100e18);
+        assertEq(fd.accumulated(address(token)), 100e18);
+    }
+
+    function test_SetDeveloperShareBps_MaxBoundary() public {
+        fd.setDeveloperShareBps(500); // 5% 上限，允许
+        assertEq(fd.developerShareBps(), 500);
+    }
+
+    function test_SetDeveloperShareBps_RevertOverCap() public {
+        vm.expectRevert("FeeDistributor: share too high");
+        fd.setDeveloperShareBps(501);
+    }
+
+    function test_SetDeveloperShareBps_RevertNotAuth() public {
+        vm.prank(alice);
+        vm.expectRevert("FeeDistributor: not auth");
+        fd.setDeveloperShareBps(200);
+    }
+
+    function test_SetDeveloperShareBps_Governance() public {
+        address gov = makeAddr("gov");
+        fd.setGovernance(gov);
+
+        vm.prank(gov);
+        fd.setDeveloperShareBps(200);
+
+        assertEq(fd.developerShareBps(), 200);
+    }
+
     function test_ReceiveFee_RevertInvalidInput() public {
         token.approve(address(fd), 100e18);
 

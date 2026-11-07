@@ -73,3 +73,50 @@ taker [0x521c9f09…df0](https://sepolia.etherscan.io/tx/0x521c9f09df7a2b6eebbb6
 - 本次为全新部署，新合约地址与旧线上地址不同；前端仍指向旧地址，本轮未切换（待 Ren 决定）。
 - publicnode 免费入口的 gas 计量与状态传播特性如上，生产化验证建议换专用 RPC。
 - 部署钱包与测试账户均为测试网专用，私钥不在本仓库内。
+
+## 第四轮追加（2026-11-07）：开发者分成方案 B——1% 改治理可调（上限 5%）
+
+Ren 拍板：将 FeeDistributor 写死的开发者分成（原常量 `DEVELOPER_SHARE_BPS = 100`，注释「永久 1%」）
+改为治理可调，保留默认 1%，硬上限 5%。
+
+### 合约改动（contracts/src/FeeDistributor.sol）
+
+- 常量 `DEVELOPER_SHARE_BPS` 改为状态变量 `developerShareBps`（默认 100），另加硬上限常量
+  `MAX_DEVELOPER_SHARE_BPS = 500`。
+- 新增 `setDeveloperShareBps(uint16)`：仅 owner 或 governance 可调用，超过 500 时 revert
+  （`FeeDistributor: share too high`），变更发事件 `DeveloperShareSet(oldBps, newBps)`。
+- `receiveFee` 与 `setRecipients` 的上限计算改读该变量；顺带修正了头部注释中误写的「5%」字样。
+- 测试：新增 7 个用例（默认值、3% 分成、0%、500 边界、501 revert、未授权 revert、governance 可调），
+  forge test **69/69 全绿**（此前基线 62/62）。
+
+### 新 FeeDistributor 部署与配置
+
+| 项目 | 值 / tx |
+|---|---|
+| 新 FeeDistributor | [0xB63a3D858E5230233e4D1B76052387C2274d6e3A](https://sepolia.etherscan.io/address/0xB63a3D858E5230233e4D1B76052387C2274d6e3A) |
+| 部署 tx | [0x1e451d4f…ff90d](https://sepolia.etherscan.io/tx/0x1e451d4fa52f26cf59aa246633c6697beb62faf8b7118ee4f73570835e4ff90d) |
+| setDeveloperAddress → Ren 钱包 `0x047df18eF5484945D33fBddB8D58D382597354d9` | [0x6643caac…337f](https://sepolia.etherscan.io/tx/0x6643caacc88364f3c37e487948c076d7bcac768cca067d9493dafcc89d70337f) |
+| setRecipients（复制旧配置：部署钱包 9900） | [0x822814cb…9388](https://sepolia.etherscan.io/tx/0x822814cba566aa4342f2b126f5104dbf980ae760576f7e828754a10ec1399388) |
+
+旧 FD 的 governance 为零地址（未设），新 FD 同样未设，无需复制。链上读回确认：
+developer = Ren 地址、developerShareBps = 100（默认 1%）、totalShareBps = 9900。
+
+### 链上验证（逐项）
+
+- **可调性**：owner 调 `setDeveloperShareBps(200)` 成功（tx
+  [0x27295caa…23e1](https://sepolia.etherscan.io/tx/0x27295caa7348239effb21bb02fc9a437c27f03cf79688a6380a367a432e223e1)，
+  读回 200），再调回 100（tx
+  [0x31dd21b5…7a17](https://sepolia.etherscan.io/tx/0x31dd21b52d5777bd547fbd056732aa41af6fd91902e89a66c26a4077a17b1c7a)，
+  读回 100）；调 501 在链上直接 revert（`FeeDistributor: share too high`）。
+- **新 FD 分账**：部署钱包授权并直接调用新 FD 的 `receiveFee(TKA, 100)`（tx
+  [0x41cc21ec…53c8](https://sepolia.etherscan.io/tx/0x41cc21ec98486b6c61aa283502b8441c1ba87e8bc5209b38e07cb3b8e9653c8d)）：
+  Ren 地址 TKA 0 → **1**（1% 自动到账），新 FD 留存 **99** TKA、accumulated = 99 TKA，与 99/1 口径一致。
+- **AMMPool 已切换**：`setFeeDistributor(新 FD)` 成功（tx
+  [0xc3263070…0309](https://sepolia.etherscan.io/tx/0xc32630709913b22bf0f2de5951a6abf29434691973c033e007d7415bce369030)），
+  读回 AMMPool.feeDistributor = 新 FD。AMM 路径的手续费自此进入新 FD。
+- **Settlement 未能切换（阻塞项）**：Settlement 的 `feeDistributor` 仅在构造函数中设定，
+  **合约没有 setter**，无法在不重部署 Settlement 的前提下指向新 FD。按任务约束本轮未擅自重部署，
+  Settlement 路径的手续费目前仍进入旧 FD `0xfb458224…768b21`（其 developer 仍为部署钱包）。
+  因此本轮没有重跑 Settlement 的 e2e 结算来验证新 FD（跑了也只会进旧 FD）；新 FD 的分账改用
+  上面的 `receiveFee` 直调完成等效验证。若要全量切换，需 Ren 批准重部署 Settlement
+  （并连带处理 Vault/节点对 Settlement 地址的引用）。

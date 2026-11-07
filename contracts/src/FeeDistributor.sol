@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title FeeDistributor 手续费分配
-/// @notice 接收手续费：开发者固定 5% 自动转至开发者地址；其余按比例由接收方 claim
+/// @notice 接收手续费：开发者分成（默认 1%，治理可调，上限 5%）自动转至开发者地址；其余按比例由接收方 claim
 contract FeeDistributor {
     address public owner;
     /// @notice 治理合约地址，可执行提案设置手续费分成（setRecipients/setDeveloperAddress）
@@ -13,10 +13,12 @@ contract FeeDistributor {
 
     /// @notice 开发者地址，收取手续费的固定 1%，无需手动领取
     address public developerAddress;
-    /// @notice 开发者分成比例（万分比），永久 1%
-    uint16 public constant DEVELOPER_SHARE_BPS = 100;
+    /// @notice 开发者分成比例（万分比），默认 1%（100）；owner 或 governance 可调
+    uint16 public developerShareBps = 100;
+    /// @notice 开发者分成比例硬上限：5%（500）
+    uint16 public constant MAX_DEVELOPER_SHARE_BPS = 500;
 
-    /// 分配对象与比例（万分比，10000 = 100%）；仅针对「扣除开发者 5% 后的剩余部分」
+    /// 分配对象与比例（万分比，10000 = 100%）；仅针对「扣除开发者分成后的剩余部分」
     struct Recipient {
         address account;
         uint16 shareBps; // basis points
@@ -32,6 +34,7 @@ contract FeeDistributor {
     event FeeReceived(address indexed token, uint256 amount);
     event DeveloperPaid(address indexed token, address indexed developer, uint256 amount);
     event DeveloperSet(address indexed developer);
+    event DeveloperShareSet(uint16 oldBps, uint16 newBps);
     event RecipientSet(uint256 index, address account, uint16 shareBps);
     event Claimed(address indexed account, address indexed token, uint256 amount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -71,24 +74,32 @@ contract FeeDistributor {
             emit RecipientSet(i, acct, shareBps[i]);
             unchecked { ++i; }
         }
-        uint256 maxBps = developerAddress == address(0) ? 10000 : (10000 - DEVELOPER_SHARE_BPS);
-        require(_total <= maxBps, "FeeDistributor: share overflow"); // 开发者 1%，其余最多 99%
+        uint256 maxBps = developerAddress == address(0) ? 10000 : (10000 - developerShareBps);
+        require(_total <= maxBps, "FeeDistributor: share overflow"); // 扣除开发者分成后，其余最多 100% - developerShareBps
         totalShareBps = _total;
     }
 
-    /// @notice 设置开发者地址（收取 1% 手续费，每次到账自动转入）；owner 或 governance 可调用
+    /// @notice 设置开发者地址（按 developerShareBps 收取手续费，每次到账自动转入）；owner 或 governance 可调用
     function setDeveloperAddress(address _developer) external onlyOwnerOrGovernance {
         developerAddress = _developer;
         emit DeveloperSet(_developer);
     }
 
-    /// @notice 接收手续费（由 Settlement 或 AMM 转入）：1% 自动转开发者，99% 进入分配池供 claim
+    /// @notice 设置开发者分成比例（万分比）；owner 或 governance 可调用，硬上限 5%（500）
+    function setDeveloperShareBps(uint16 _shareBps) external onlyOwnerOrGovernance {
+        require(_shareBps <= MAX_DEVELOPER_SHARE_BPS, "FeeDistributor: share too high");
+        uint16 oldBps = developerShareBps;
+        developerShareBps = _shareBps;
+        emit DeveloperShareSet(oldBps, _shareBps);
+    }
+
+    /// @notice 接收手续费（由 Settlement 或 AMM 转入）：按 developerShareBps 自动转开发者，其余进入分配池供 claim
     function receiveFee(address token, uint256 amount) external {
         require(token != address(0) && amount > 0, "FeeDistributor: invalid input");
         require(IERC20(token).transferFrom(msg.sender, address(this), amount), "FeeDistributor: transfer failed");
 
         address _dev = developerAddress;
-        uint256 developerAmount = _dev != address(0) ? (amount * DEVELOPER_SHARE_BPS) / 10000 : 0;
+        uint256 developerAmount = _dev != address(0) ? (amount * developerShareBps) / 10000 : 0;
         uint256 toAccumulate;
         if (developerAmount != 0) {
             require(IERC20(token).transfer(_dev, developerAmount), "FeeDistributor: developer transfer failed");
