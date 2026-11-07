@@ -246,6 +246,37 @@ func main() {
 		}
 	}
 
+	// 结算提交（第二十六轮）：撮合成交落库后由提交器异步提交上链。此前
+	// OnTradeExecuted 只落库、SubmitTrade 零调用方，成交从未真正结算——本轮
+	// 补齐。启用条件与挂单锁定同源：chain.rpc_url/settlement 已配置且运营私钥
+	// （VAULT_LOCKER_PRIVATE_KEY，与 locker 同一身份，即被授权的 relayer）在场。
+	var submitter *settlement.Submitter
+	if store != nil && cfg.Chain.RPCURL != "" {
+		settlementAddr := cfg.Chain.Settlement
+		if settlementAddr == "" {
+			settlementAddr = match.CurrentDomain().VerifyingContract
+		}
+		if key := os.Getenv("VAULT_LOCKER_PRIVATE_KEY"); key != "" && settlementAddr != "" {
+			sub, err := settlement.NewSubmitter(settlement.SubmitterConfig{
+				RPCURL:         cfg.Chain.RPCURL,
+				SettlementAddr: settlementAddr,
+				PrivateKeyHex:  key,
+				Store:          store,
+				RebuildOrders: func(t *storage.Trade) error {
+					return rebuildTradeOrders(store, pairTokens, t)
+				},
+			})
+			if err != nil {
+				log.Printf("[settle] 结算提交器构造失败，未启用: %v", err)
+			} else {
+				submitter = sub
+				log.Printf("[settle] 结算提交器已启用（operator=%s settlement=%s）", sub.Operator(), settlementAddr)
+			}
+		} else {
+			log.Printf("[settle] 已配置 rpc 但缺少运营私钥或 settlement 地址，结算提交未启用")
+		}
+	}
+
 	// 8. 订单处理 Handler：新订单入簿并撮合，成交广播
 	handler := &orderMatchHandler{
 		engine:    matchEngine,
@@ -255,6 +286,7 @@ func main() {
 		router:    router,
 		registry:  registry,
 		locker:    locker,
+		submitter: submitter,
 	}
 	subscriber := sync.NewOrderSubscriberWithSecurity(ps, handler, perPeerLimiter, reputation)
 	if err := subscriber.Start(ctx); err != nil {
@@ -271,12 +303,12 @@ func main() {
 				continue
 			}
 			for _, o := range bids {
-				if !storage.OrderExpired(o) && matchEngine.AddOrder(o) {
+				if restoreBookOrder(store, matchEngine, o) {
 					restored++
 				}
 			}
 			for _, o := range asks {
-				if !storage.OrderExpired(o) && matchEngine.AddOrder(o) {
+				if restoreBookOrder(store, matchEngine, o) {
 					restored++
 				}
 			}
@@ -284,6 +316,12 @@ func main() {
 		if restored > 0 {
 			log.Printf("[storage] 订单簿已从本地恢复，共 %d 笔", restored)
 		}
+	}
+
+	// 结算提交器启动：恢复遗留 submitting + 清扫历史未结算成交并补交，随后
+	// 周期清扫兜底（经同步路径落库的成交也由此接管）。
+	if submitter != nil {
+		submitter.Start(ctx)
 	}
 
 	// 订阅节点注册消息（方案 B）
@@ -412,6 +450,83 @@ type orderMatchHandler struct {
 	router    *match.Router
 	registry  *match.Registry
 	locker    *vaultLocker
+	submitter *settlement.Submitter
+}
+
+// recordTrade 成交落库与结算提交的统一入口（第二十六轮）：限价撮合、市价
+// 执行、gossip 成交回调三条路径都经此处——先落库（签名订单 JSON 一并持久化），
+// 再送结算提交器异步上链。此前三处只 InsertTrade 不提交，成交永不结算。
+// 经同步协议（internal/sync）落库的成交不经此处，由提交器周期清扫接管。
+func (h *orderMatchHandler) recordTrade(t *storage.Trade) {
+	if h.store != nil {
+		_ = h.store.InsertTrade(t)
+		// 成交量回写（第二十六轮补丁）：撮合量只存在于引擎内存时，重启后
+		// 已成交订单会原样回簿并被重复撮合。此处按成交表重算回写，双方订
+		// 单的 Filled/Status 自此与成交表一致；重算幂等，gossip 回声无害。
+		for _, oid := range []string{t.MakerOrderID, t.TakerOrderID} {
+			if oid == "" {
+				continue
+			}
+			if _, _, err := h.store.RecomputeOrderFill(oid); err != nil {
+				log.Printf("[storage] 订单 %s 成交量回写失败: %v", oid, err)
+			}
+		}
+	}
+	if h.submitter != nil {
+		h.submitter.Enqueue(t)
+	}
+}
+
+// restoreBookOrder 启动恢复时把一笔库内 open 订单接回撮合引擎（第二十六轮
+// 补丁）：先按成交表重算已成交量——此前已全额成交却仍为 open 的订单（如旧
+// 二进制下撮合后 Filled 从未回写者）直接跳过、不再回簿；部分成交者按剩余
+// 量回簿。返回是否已接回引擎。
+func restoreBookOrder(store *storage.DB, engine *match.Engine, o *storage.Order) bool {
+	if storage.OrderExpired(o) {
+		return false
+	}
+	filled, status, err := store.RecomputeOrderFill(o.OrderID)
+	if err != nil {
+		log.Printf("[storage] 恢复订单 %s 成交量对账失败（按库内值回簿）: %v", o.OrderID, err)
+	} else if status == "filled" {
+		log.Printf("[storage] 恢复订单 %s 已全额成交（filled=%s），跳过回簿", o.OrderID, filled)
+		return false
+	} else {
+		o.Filled = filled
+	}
+	return engine.AddOrder(o)
+}
+
+// rebuildTradeOrders 按成交的 maker/taker 订单 ID 从 orders 表重建签名订单
+// （match.BuildSignedOrder，与撮合时引擎填充同源等价）：供提交器在成交缺失
+// 签名订单时调用——历史成交（本轮之前落库者）与 gossip 成交都没有内存中的
+// 签名订单，全靠这条路径恢复结算材料。
+func rebuildTradeOrders(store *storage.DB, pairs map[string]match.PairTokens, t *storage.Trade) error {
+	pt, ok := pairs[t.Pair]
+	if !ok {
+		return fmt.Errorf("未知交易对 %s", t.Pair)
+	}
+	if t.MakerOrder == nil {
+		o, err := store.GetOrder(t.MakerOrderID)
+		if err != nil {
+			return err
+		}
+		if o == nil {
+			return fmt.Errorf("maker 订单 %s 不在订单库", t.MakerOrderID)
+		}
+		t.MakerOrder = match.BuildSignedOrder(o, &pt)
+	}
+	if t.TakerOrder == nil {
+		o, err := store.GetOrder(t.TakerOrderID)
+		if err != nil {
+			return err
+		}
+		if o == nil {
+			return fmt.Errorf("taker 订单 %s 不在订单库", t.TakerOrderID)
+		}
+		t.TakerOrder = match.BuildSignedOrder(o, &pt)
+	}
+	return nil
 }
 
 // vaultLocker 节点侧挂单锁定驱动（第十五轮）：订单接受时落锁、撤单时释放。
@@ -581,9 +696,7 @@ func (h *orderMatchHandler) processMarketOrderLocally(order *storage.Order) erro
 			if h.ws != nil {
 				h.ws.BroadcastTrade(t)
 			}
-			if h.store != nil {
-				_ = h.store.InsertTrade(t)
-			}
+			h.recordTrade(t)
 		}
 		order.Filled = exec.Executed
 		if exec.FullyFilled {
@@ -647,9 +760,7 @@ func (h *orderMatchHandler) processOrderLocally(order *storage.Order) error {
 				if h.ws != nil {
 					h.ws.BroadcastTrade(t)
 				}
-				if h.store != nil {
-					_ = h.store.InsertTrade(t)
-				}
+				h.recordTrade(t)
 			}
 		}
 	} else if h.ws != nil {
@@ -702,8 +813,6 @@ func (h *orderMatchHandler) OnTradeExecuted(trade *storage.Trade) error {
 	if trade == nil {
 		return nil
 	}
-	if h.store != nil {
-		_ = h.store.InsertTrade(trade)
-	}
+	h.recordTrade(trade)
 	return nil
 }

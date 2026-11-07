@@ -2,6 +2,8 @@ package storage
 
 import (
 	"database/sql"
+	"fmt"
+	"math/big"
 	"strconv"
 	"time"
 )
@@ -67,6 +69,60 @@ func (db *DB) UpdateOrderStatus(orderID, status, filled string) error {
 		status, filled, orderID,
 	)
 	return err
+}
+
+// RecomputeOrderFill 按成交表重算某订单的已成交量并回写（第二十六轮补丁）。
+//
+// 背景：撮合产生的 Filled 此前只存在于引擎内存——processOrderLocally 撮合
+// 的是订单副本，撮合完只 InsertOrder 原单（Filled="0"）；gossip 成交更只
+// 落成交不碰订单。于是已全额成交的订单在库里永远 open，节点重启恢复时原样
+// 回簿、被重复撮合，产出链上必然 revert（fill exceeds signed order）的成交。
+//
+// 本函数是唯一的回写点，由 recordTrade（每笔成交落库后）与启动恢复（回簿
+// 前）共同调用；以成交表为事实源重算而非累加，重复调用/重复落库都不会多算。
+// 返回回写后的 (filled, status)；订单不存在时返回 ("", "", nil)。
+// 已撤单的订单不碰（撤单即终态，其 filled 以撤单时刻为准）。
+func (db *DB) RecomputeOrderFill(orderID string) (string, string, error) {
+	o, err := db.GetOrder(orderID)
+	if err != nil {
+		return "", "", err
+	}
+	if o == nil || o.Status == "cancelled" {
+		if o == nil {
+			return "", "", nil
+		}
+		return o.Filled, o.Status, nil
+	}
+	trades, err := db.ListTradesByOrder(orderID)
+	if err != nil {
+		return "", "", err
+	}
+	sum := new(big.Rat)
+	for _, t := range trades {
+		q, ok := new(big.Rat).SetString(t.Amount)
+		if !ok {
+			return "", "", fmt.Errorf("recompute order fill %s: malformed trade amount %q in trade %s", orderID, t.Amount, t.TradeID)
+		}
+		sum.Add(sum, q)
+	}
+	if sum.Sign() == 0 {
+		return o.Filled, o.Status, nil
+	}
+	amount, ok := new(big.Rat).SetString(o.Amount)
+	if !ok {
+		return "", "", fmt.Errorf("recompute order fill %s: malformed order amount %q", orderID, o.Amount)
+	}
+	filledStr := sum.FloatString(18)
+	status := o.Status
+	if sum.Cmp(amount) >= 0 {
+		status = "filled"
+	} else {
+		status = "partial"
+	}
+	if err := db.UpdateOrderStatus(orderID, status, filledStr); err != nil {
+		return "", "", err
+	}
+	return filledStr, status, nil
 }
 
 // GetOrder 按 orderId 查询

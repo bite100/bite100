@@ -113,6 +113,37 @@ func TestOrderDigestCrossLanguageVector(t *testing.T) {
 	}
 }
 
+// TestSignCancelOrder 撤单签名往返：SignCancelOrder 签名后
+// VerifyCancelSignature 应通过；换时间戳应失败（签名绑定 timestamp）
+func TestSignCancelOrder(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := crypto.PubkeyToAddress(key.PublicKey)
+	orderID := "order_xxx"
+	timestamp := int64(1700000000)
+
+	sig, err := SignCancelOrder(key, orderID, addr.Hex(), timestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := VerifyCancelSignature(orderID, addr.Hex(), sig, timestamp)
+	if err != nil {
+		t.Fatalf("VerifyCancelSignature: %v", err)
+	}
+	if !valid {
+		t.Error("expected valid cancel signature")
+	}
+	valid, err = VerifyCancelSignature(orderID, addr.Hex(), sig, timestamp+1)
+	if err != nil {
+		t.Fatalf("VerifyCancelSignature other-ts: %v", err)
+	}
+	if valid {
+		t.Error("cancel signature must not verify under another timestamp")
+	}
+}
+
 func TestVerifyCancelSignature(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {

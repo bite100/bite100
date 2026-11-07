@@ -26,7 +26,12 @@ CREATE TABLE IF NOT EXISTS trades (
 	amount TEXT NOT NULL,
 	fee TEXT,
 	timestamp INTEGER NOT NULL,
-	tx_hash TEXT
+	tx_hash TEXT,
+	maker_order TEXT,
+	taker_order TEXT,
+	settle_status TEXT NOT NULL DEFAULT 'pending',
+	settle_error TEXT,
+	settle_attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp);
 CREATE INDEX IF NOT EXISTS idx_trades_pair ON trades(pair);
@@ -104,6 +109,21 @@ func Open(dataDir string) (*DB, error) {
 	// 迁移：旧库无 maker 列时补结算字段
 	if _, err := sqlDB.Exec("SELECT maker FROM trades LIMIT 0"); err != nil {
 		for _, col := range []string{"maker TEXT", "taker TEXT", "token_in TEXT", "token_out TEXT", "amount_in TEXT", "amount_out TEXT"} {
+			_, _ = sqlDB.Exec("ALTER TABLE trades ADD COLUMN " + col)
+		}
+	}
+	// 迁移（第二十六轮）：结算接线——签名订单 JSON（启动清扫重建 Fill 必需，此前
+	// MakerOrder/TakerOrder 不落库）与结算状态机列。旧行 settle_status 默认
+	// 'pending'、tx_hash 为空者即历史未结算成交，会被提交器启动清扫接管；
+	// 带 tx_hash 的旧行（如种子数据）在清扫谓词里按已结算排除。
+	if _, err := sqlDB.Exec("SELECT settle_status FROM trades LIMIT 0"); err != nil {
+		for _, col := range []string{
+			"maker_order TEXT",
+			"taker_order TEXT",
+			"settle_status TEXT NOT NULL DEFAULT 'pending'",
+			"settle_error TEXT",
+			"settle_attempts INTEGER NOT NULL DEFAULT 0",
+		} {
 			_, _ = sqlDB.Exec("ALTER TABLE trades ADD COLUMN " + col)
 		}
 	}

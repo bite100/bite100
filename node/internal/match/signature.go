@@ -185,6 +185,31 @@ func SignOrder(key *ecdsa.PrivateKey, so *storage.SignedOrder) (string, error) {
 	return hexutil.Encode(sig), nil
 }
 
+// SignCancelOrder 对撤单请求签名（与 VerifyCancelSignature 配对；此前只有
+// 验签没有签名入口，脚本化撤单——如释放结算失败订单的锁定——只能手写 EIP-712）。
+func SignCancelOrder(key *ecdsa.PrivateKey, orderID, userAddress string, timestamp int64) (string, error) {
+	typedData := apitypes.TypedData{
+		Types:       cancelTypes,
+		PrimaryType: "CancelOrder",
+		Domain:      CurrentDomain(),
+		Message: apitypes.TypedDataMessage{
+			"orderId":     orderID,
+			"userAddress": userAddress,
+			"timestamp":   fmt.Sprintf("%d", timestamp),
+		},
+	}
+	digest, err := typedDataDigest(typedData, "CancelOrder")
+	if err != nil {
+		return "", err
+	}
+	sig, err := crypto.Sign(digest.Bytes(), key)
+	if err != nil {
+		return "", err
+	}
+	sig[64] += 27
+	return hexutil.Encode(sig), nil
+}
+
 // VerifySignedOrder 验证签名订单：恢复签名者并与 UserAddress 比对
 func VerifySignedOrder(so *storage.SignedOrder) (bool, error) {
 	if so.Signature == "" {
