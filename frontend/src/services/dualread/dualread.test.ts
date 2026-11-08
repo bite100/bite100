@@ -13,7 +13,7 @@ import {
   type OrderData,
 } from '../orderSigningTypes'
 import { buildSignedOrderData, computeOrderDigest, hashOrderWithDomain } from './digest'
-import { createRelayBookAdapter, toRawOrder } from './adapters'
+import { createNodeBookAdapter, createRelayBookAdapter, normalizeBookRows, toRawOrder } from './adapters'
 import {
   assembleChainState,
   createChainStateReader,
@@ -609,6 +609,58 @@ describe('公告栏适配器分页完整度', () => {
     expect(res.complete).toBe(false)
     expect(res.bids.length).toBe(100)
     expect(toRawOrder({ orderId: 'x' })).toBeNull()
+  })
+})
+
+describe('第 38 轮：节点定点小数 amount 解析与丢弃计数', () => {
+  const nodeRow = {
+    orderId: 'soak_1',
+    trader: TRADER,
+    pair: PAIR,
+    side: 'buy',
+    price: '2000000000000000000000',
+    amount: '1000000000000000.000000000000000000', // 节点撮合引擎 big.Float.Text('f', 18) 形态
+    filled: '0.000000000000000000',
+    status: 'open',
+    nonce: 0,
+    createdAt: 1700000000,
+    expiresAt: 1700086400,
+    signature: '0xabc',
+  }
+
+  it('全零小数 amount/filled 通过并归一化为整数串', () => {
+    const o = toRawOrder(nodeRow)
+    expect(o).not.toBeNull()
+    expect(o!.amount).toBe('1000000000000000')
+    expect(o!.filled).toBe('0')
+    expect(o!.price).toBe('2000000000000000000000')
+  })
+
+  it('小数部分含非零数字 → 整行判无效（不静默截断）', () => {
+    expect(toRawOrder({ ...nodeRow, amount: '1000000000000000.000000000000000001' })).toBeNull()
+    expect(toRawOrder({ ...nodeRow, amount: '1.5' })).toBeNull()
+  })
+
+  it('纯整数串保持不变', () => {
+    const o = toRawOrder({ ...nodeRow, amount: '1000000000000000000', filled: '0' })
+    expect(o).not.toBeNull()
+    expect(o!.amount).toBe('1000000000000000000')
+  })
+
+  it('normalizeBookRows 计数丢弃；节点适配器 SourceBook 带 rawRows/droppedRows', async () => {
+    const bad = { ...nodeRow, orderId: 'bad', amount: '1.5' }
+    const { orders, droppedRows } = normalizeBookRows([nodeRow, bad])
+    expect(orders.length).toBe(1)
+    expect(droppedRows).toBe(1)
+
+    const adapter = createNodeBookAdapter(async () => ({
+      data: { pair: PAIR, bids: [nodeRow, bad], asks: [] },
+      baseUrl: 'http://node.example',
+    }))
+    const book = await adapter.fetchBook(CHAIN, PAIR)
+    expect(book.bids.length).toBe(1)
+    expect(book.rawRows).toBe(2)
+    expect(book.droppedRows).toBe(1)
   })
 })
 

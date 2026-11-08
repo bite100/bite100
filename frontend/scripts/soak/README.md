@@ -95,6 +95,8 @@ SubmitOutcome 穿线到记账），不再是整批提交完成后的记账时刻
 - `submitted`：一单的提交记账——digest、链、对、角色、方向、创建/提交
   时刻、节点/中继接单成败、是否 side 改写注入样本。
 - `round`：一轮影子评估——`metrics`（与数据页同口径的 11 项指标）、
+  `nodeRawRows`/`nodeDroppedRows`（第 38 轮加法字段：本轮节点源原始
+  行数与被字段规范化丢弃的行数，旧 round 行无此两字段）、
   `filterOutcomes`（valid/unknown/invalid/tradeable 计数）、
   `discovery`（eligible=已提交超 60s 宽限期且至少一源接单的自造单；
   discoveredAny/Both；successRate）、`newFirstSeen`（本轮新发现的
@@ -113,9 +115,10 @@ JSONL 重建 submitted/firstSeen（尾行损坏自动跳过）。
 样本/发现/篡改计数与各链对 500 线的达线状态（`npm run
 test:soak-report` 为其自检）。「有效订单」的唯一计数定义见第 34 轮
 文档 §6.3（第 37 轮补）。注意三处口径事实（与本工具输出对照阅读）：
-① **篡改单不由 runner 的 discoveryStats 计入 eligible，但由
-main.ts 在生成时标记 tampered**（第 12 周期注入；计数定义与工具按
-「排除篡改单」对齐）。② **JSONL 落盘时刻的特殊形态**：服务重启
+① **篡改单由 main.ts 在生成时标记 tampered**（第 12 周期注入）；
+自第 38 轮起，runner 的 discoveryStats 与本汇总工具（report.mjs）
+口径一致，**均排除篡改单、不计入 eligible**（第 38 轮前 runner 未
+排除，是第 37 轮复审「部分关闭」项，本轮已统一）。② **JSONL 落盘时刻的特殊形态**：服务重启
 瞬间的一批 submitted 行共享同一 submittedAt（重启时统一落盘），
 其值不早于真实提交时刻——计数不受影响，传播延迟统计对这批样本
 偏乐观，引用时须注明。③ **tradeable 的时间语义**：cycle 11 的

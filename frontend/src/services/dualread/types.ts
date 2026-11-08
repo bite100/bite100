@@ -44,6 +44,13 @@ export interface SourceBook {
   complete: boolean
   /** 本次拉取完成时刻（ms） */
   fetchedAt: number
+  /**
+   * 本次拉取的原始行数（bids+asks，第 38 轮加法字段）：与 droppedRows
+   * 对照可发现「整源被字段形态吞掉」；旧记录/未计数的适配器缺省 undefined。
+   */
+  rawRows?: number
+  /** 原始行中被 toRawOrder 判无效丢弃的行数（第 38 轮） */
+  droppedRows?: number
 }
 
 /** 订单统一身份 */

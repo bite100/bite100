@@ -20,7 +20,17 @@ import type { RawOrder, SourceBook } from './types'
 export const RELAY_BOOK_SIDE_CAP = 100
 
 function asIntString(v: unknown): string | null {
-  if (typeof v === 'string' && /^-?\d+$/.test(v.trim())) return v.trim()
+  if (typeof v === 'string') {
+    const s = v.trim()
+    if (/^-?\d+$/.test(s)) return s
+    // 定点小数字符串：第 38 轮——节点撮合引擎以 big.Float.Text('f', 18)
+    // 回写 amount/filled（如 "1000000000000000.000000000000000000"），
+    // 小数部分全为零时归一化为整数串；含任何非零数字则判无效返回
+    // null（走既有丢弃路径），绝不静默截断小数。
+    const m = /^(-?\d+)\.(\d+)$/.exec(s)
+    if (m && /^0+$/.test(m[2])) return m[1]
+    return null
+  }
   if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v).toString()
   if (typeof v === 'bigint') return v.toString()
   return null
@@ -32,7 +42,7 @@ function asNumber(v: unknown): number {
   return 0
 }
 
-/** 任意源行 → RawOrder；缺签名/关键字段的行返回 null（调用方计数丢弃，不静默吞） */
+/** 任意源行 → RawOrder；缺签名/关键字段的行返回 null，由调用方经 normalizeBookRows 计数丢弃（见 SourceBook.droppedRows） */
 export function toRawOrder(x: unknown): RawOrder | null {
   if (!x || typeof x !== 'object') return null
   const o = x as Record<string, unknown>
@@ -58,6 +68,22 @@ export function toRawOrder(x: unknown): RawOrder | null {
     signature: typeof o.signature === 'string' ? o.signature : '',
     execType: typeof o.execType === 'string' ? o.execType : undefined,
   }
+}
+
+/**
+ * 一批原始行 → 规范化订单 + 丢弃计数（第 38 轮）：三个取数点（前端节点
+ * 适配器、前端中继适配器、soak 服务端节点适配器）共用，保证「整源被
+ * 字段形态吞掉」时计数可见，不再静默归零。
+ */
+export function normalizeBookRows(rows: unknown[]): { orders: RawOrder[]; droppedRows: number } {
+  const orders: RawOrder[] = []
+  let droppedRows = 0
+  for (const r of rows) {
+    const o = toRawOrder(r)
+    if (o) orders.push(o)
+    else droppedRows += 1
+  }
+  return { orders, droppedRows }
 }
 
 /** 稳定排序：买盘价格降序、卖盘价格升序；同价 createdAt 升序；再以 orderId 兜底保证全序 */
@@ -93,8 +119,12 @@ export function createNodeBookAdapter(get: NodeGetFn = defaultNodeGet): BookAdap
   return {
     async fetchBook(chainId: number, pair: string): Promise<SourceBook> {
       const { data } = await get('/api/orderbook', { pair })
-      const bids = sortBookSide((data?.bids ?? []).map(toRawOrder).filter((r): r is RawOrder => r !== null), 'buy')
-      const asks = sortBookSide((data?.asks ?? []).map(toRawOrder).filter((r): r is RawOrder => r !== null), 'sell')
+      const rawBids = data?.bids ?? []
+      const rawAsks = data?.asks ?? []
+      const nb = normalizeBookRows(rawBids)
+      const na = normalizeBookRows(rawAsks)
+      const bids = sortBookSide(nb.orders, 'buy')
+      const asks = sortBookSide(na.orders, 'sell')
       return {
         source: 'node',
         chainId,
@@ -104,6 +134,8 @@ export function createNodeBookAdapter(get: NodeGetFn = defaultNodeGet): BookAdap
         // 节点 orderbook 接口一次性返回全量开簿，无分页概念
         complete: true,
         fetchedAt: Date.now(),
+        rawRows: rawBids.length + rawAsks.length,
+        droppedRows: nb.droppedRows + na.droppedRows,
       }
     },
   }
@@ -131,8 +163,10 @@ export function createRelayBookAdapter(
       const data = (await res.json()) as { bids?: unknown[]; asks?: unknown[] }
       const rawBids = Array.isArray(data?.bids) ? data.bids : []
       const rawAsks = Array.isArray(data?.asks) ? data.asks : []
-      const bids = sortBookSide(rawBids.map(toRawOrder).filter((r): r is RawOrder => r !== null), 'buy')
-      const asks = sortBookSide(rawAsks.map(toRawOrder).filter((r): r is RawOrder => r !== null), 'sell')
+      const nb = normalizeBookRows(rawBids)
+      const na = normalizeBookRows(rawAsks)
+      const bids = sortBookSide(nb.orders, 'buy')
+      const asks = sortBookSide(na.orders, 'sell')
       return {
         source: 'relay',
         chainId,
@@ -142,6 +176,8 @@ export function createRelayBookAdapter(
         // 单侧返回达上限 100 行 ⇒ 可能被 relay 截断，完整度存疑
         complete: rawBids.length < RELAY_BOOK_SIDE_CAP && rawAsks.length < RELAY_BOOK_SIDE_CAP,
         fetchedAt: Date.now(),
+        rawRows: rawBids.length + rawAsks.length,
+        droppedRows: nb.droppedRows + na.droppedRows,
       }
     },
   }
