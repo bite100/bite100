@@ -7,6 +7,9 @@ import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { sideToSignedValue } from '../../services/orderSigningTypes'
 import { dualSendOrderToRelay } from '../../services/relayDualSend'
+import { FRONTEND_MATCHING_ENABLED } from '../../config/matching'
+import { executeFrontendMatch } from '../../services/matching/execute'
+import type { OrderData } from '../../services/orderSigningTypes'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
 import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
 import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
@@ -100,6 +103,8 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
   const [topUpStep, setTopUpStep] = useState<VaultTopUpStep | null>(null)
   const [balanceTick, setBalanceTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // 阶段 3 块 C：前端撮合结果口径（仅灰度开关开启时出现）
+  const [matchNote, setMatchNote] = useState<string | null>(null)
 
   // 盘口点击带入价格：点击的语义是「按这个价下单」= 限价行为，切回限价单并带入价格
   useEffect(() => {
@@ -328,6 +333,25 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
       // 无节点化阶段 1 双发：主发成功后 best-effort 副发同一订单到公告栏中继（失败不影响下单）
       await dualSendOrderToRelay({ ...order }, CHAIN_ID)
       await p2pOrderBroadcast.publishOrder(order)
+      // 阶段 3 块 C：前端撮合（灰度开关开启时）——广播后在本机以双读
+      // 可成交集即时撮合、用户钱包自提批结算；任何失败都不影响已成功
+      // 的下单（订单留簿走节点路径），结果只以一行口径呈现。
+      if (FRONTEND_MATCHING_ENABLED) {
+        try {
+          const outcome = await executeFrontendMatch({
+            chainId: CHAIN_ID,
+            pair,
+            takerData: orderData as OrderData,
+            takerSignature: signature,
+            signer,
+          })
+          setMatchNote(outcome.message)
+        } catch (e) {
+          setMatchNote(
+            `前端撮合未执行（${e instanceof Error ? e.message.slice(0, 80) : '未知错误'}）；订单已留簿走节点路径。`,
+          )
+        }
+      }
       setPrice('')
       setAmount('')
       setPct(0)
@@ -662,6 +686,16 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
             {error}
           </Text>
         )}
+        {FRONTEND_MATCHING_ENABLED && (
+          <Text size="sm" c="blue" mb={4}>
+            前端撮合已开启：本单签名广播后会立即在本机撮合并由你的钱包提交批结算（整批原子，规则见下方说明）；未成交部分照常留簿走节点撮合。
+          </Text>
+        )}
+        {matchNote && (
+          <Text size="sm" c="dimmed" mb={4} role="status">
+            {matchNote}
+          </Text>
+        )}
         {!account && (
           <div className="order-connect-cta">
             <Text size="sm" c="dimmed">
@@ -700,7 +734,9 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         </Button>
         {ticket && (
           <Text size="xs" c="dimmed" className="ticket-gasnote">
-            下单只需签名，不发链上交易；gas 由中继代付、结算时买卖双方对半分摊，无需自备原生代币。
+            {FRONTEND_MATCHING_ENABLED
+              ? '下单只需签名；前端撮合开启时，结算由你的钱包直接提交（需少量原生代币付 gas，该 gas 结算时由买卖双方对半分摊计量返还）。'
+              : '下单只需签名，不发链上交易；gas 由中继代付、结算时买卖双方对半分摊，无需自备原生代币。'}
           </Text>
         )}
         {ticket ? (
@@ -716,6 +752,11 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
                 （gas 由中继代付、无需自备原生代币，按实际成本买卖双方对半分摊，单方扣除不超过其收到金额的 10%）。
                 因此实际到账会比成交金额少这两项；精确金额以结算上链时的实际 gas 为准。
               </p>
+              {FRONTEND_MATCHING_ENABLED && (
+                <p>
+                  前端撮合（当前已开启）：你的订单签名广播后，页面会在本机立即撮合——只吃经过双读与链上状态双重验证的可成交挂单，按价格-时间优先、成交价取对手挂单价（更优的价格归你）。撮合出的多笔成交会打包成一笔「批结算」由你的钱包直接提交上链：整批原子——提交前先模拟预检，已失效的对手单（已成交/过期/锁释放）会被剔除，剔不干净就整单不提交、订单留簿改走节点撮合，不会只成交一半；单批最多 50 笔，与合约上限一致。市价单同样适用：逐档吃到你的签名保护价为止，余量不成交、自动取消。注意：批结算由你的钱包发交易，需要少量原生代币付 gas；这笔 gas 在结算时按实际成本由买卖双方对半分摊计量（你先付、对方的一半从其成交所得中扣给你），提交失败的 gas 由发起者承担。未成交部分照常挂在盘口走节点撮合。
+                </p>
+              )}
               {orderType === 'market' && (
                 <p>
                   市价单怎么成交：提交后立即按盘口最优价逐档吃单，成交价不会差于你签名的保护价（保护价 = 对手盘最优价按滑点容忍放宽，签名即绑定这个上限/下限，节点不能越过它成交；下单票按演示口径不展示滑点输入，沿用默认 1%）。吃到保护价或盘口深度用尽为止，没成交的部分立即自动取消、不挂到盘口上。锁定与限价单相同：下单时按保护价全额义务锁定 Vault 余额，成交部分由结算消耗，未成交部分与买单的价格改善差额会在结算完成后自动释放。盘口为空时节点会直接拒绝并报错。
@@ -731,6 +772,11 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
             {orderType === 'market' && (
               <Text size="xs" c="dimmed">
                 市价单怎么成交：提交后立即按盘口最优价逐档吃单，成交价不会差于你签名的保护价（保护价 = 对手盘最优价按上面滑点容忍放宽，签名即绑定这个上限/下限，节点不能越过它成交）。吃到保护价或盘口深度用尽为止，没成交的部分立即自动取消、不挂到盘口上。锁定与限价单相同：下单时按保护价全额义务锁定 Vault 余额，成交部分由结算消耗，未成交部分与买单的价格改善差额会在结算完成后自动释放。盘口为空时节点会直接拒绝并报错。
+              </Text>
+            )}
+            {FRONTEND_MATCHING_ENABLED && (
+              <Text size="xs" c="dimmed">
+                前端撮合（当前已开启）：你的订单签名广播后，页面会在本机立即撮合——只吃经过双读与链上状态双重验证的可成交挂单，按价格-时间优先、成交价取对手挂单价（更优的价格归你）。撮合出的多笔成交会打包成一笔「批结算」由你的钱包直接提交上链：整批原子——提交前先模拟预检，已失效的对手单会被剔除，剔不干净就整单不提交、订单留簿改走节点撮合，不会只成交一半；单批最多 50 笔，与合约上限一致。市价单同样适用：逐档吃到你的签名保护价为止，余量自动取消。注意：批结算需要钱包里有少量原生代币付 gas；这笔 gas 在结算时按实际成本由买卖双方对半分摊计量（你先付、对方一半从其成交所得中扣给你），提交失败的 gas 由发起者承担。未成交部分照常走节点撮合。
               </Text>
             )}
             <Text size="xs" c="dimmed">
