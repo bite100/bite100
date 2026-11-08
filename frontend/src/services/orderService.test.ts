@@ -1,6 +1,7 @@
 /**
- * 下单路径双发集成测试（第三十轮）：
- * 节点主发成功 + 中继副发失败 → 下单仍成功；副发开关关 → 不发副发请求。
+ * 下单路径双通道广播集成测试（第三十轮双发 → 阶段 4 双通道语义）：
+ * 节点与中继并行投递，任一通道接单即下单成功，双通道都失败才失败；
+ * 副发开关关 → 不发副发请求，此时成功只由节点通道决定。
  * nodeClient / orderSigning / config 以 mock 代替，relayDualSend 用真实实现。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -43,7 +44,7 @@ const PARAMS = {
   pair: 'BTC/USDT',
 }
 
-describe('submitOrder 双发', () => {
+describe('submitOrder 双通道广播', () => {
   beforeEach(() => {
     relayCfg.url = 'http://relay.test'
     relayCfg.enabled = true
@@ -53,14 +54,14 @@ describe('submitOrder 双发', () => {
     vi.spyOn(console, 'debug').mockImplementation(() => {})
   })
 
-  it('主发成功 + 副发网络失败 → 下单仍成功', async () => {
+  it('节点活 + 中继网络失败 → 下单仍成功', async () => {
     ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('relay down'))
     await expect(submitOrder(PARAMS, signer)).resolves.toBe('ord-test-1')
     expect(nodePostMock).toHaveBeenCalledTimes(1)
     expect(globalThis.fetch).toHaveBeenCalledTimes(1) // 副发确实尝试过
   })
 
-  it('主发成功 + 副发成功 → 下单成功，副发体含同一 orderId 与 chainId', async () => {
+  it('双通道都活 → 下单成功，副发体含同一 orderId 与 chainId', async () => {
     ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true })
     await expect(submitOrder(PARAMS, signer)).resolves.toBe('ord-test-1')
     const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
@@ -74,7 +75,23 @@ describe('submitOrder 双发', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
-  it('主发失败 → 下单失败且不副发（副发只在主发成功后）', async () => {
+  it('节点挂 + 中继接单 → 下单成功（节点失败不再整单失败，副发照常尝试）', async () => {
+    nodePostMock.mockRejectedValue(new Error('node down'))
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true })
+    await expect(submitOrder(PARAMS, signer)).resolves.toBe('ord-test-1')
+    expect(nodePostMock).toHaveBeenCalledTimes(1)
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('双通道都挂 → 下单失败，抛节点侧原始错误', async () => {
+    nodePostMock.mockRejectedValue(new Error('node down'))
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('relay down'))
+    await expect(submitOrder(PARAMS, signer)).rejects.toThrow('node down')
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1) // 中继通道确实尝试过
+  })
+
+  it('节点挂 + 副发开关关 → 下单失败（只剩节点单通道）', async () => {
+    relayCfg.enabled = false
     nodePostMock.mockRejectedValue(new Error('node down'))
     await expect(submitOrder(PARAMS, signer)).rejects.toThrow('node down')
     expect(globalThis.fetch).not.toHaveBeenCalled()

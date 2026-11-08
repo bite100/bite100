@@ -2,11 +2,10 @@ import { useEffect, useState } from 'react'
 import { Paper, Text, Select, NumberInput, Button, Stack, Slider, SegmentedControl } from '@mantine/core'
 import { ethers, Contract } from 'ethers'
 import { formatError, formatTokenAmount, getProvider } from '../../utils'
-import { nodePost } from '../../nodeClient'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { sideToSignedValue } from '../../services/orderSigningTypes'
-import { dualSendOrderToRelay } from '../../services/relayDualSend'
+import { broadcastOrderDualChannel } from '../../services/orderService'
 import { FRONTEND_MATCHING_ENABLED } from '../../config/matching'
 import { executeFrontendMatch } from '../../services/matching/execute'
 import type { OrderData } from '../../services/orderSigningTypes'
@@ -335,9 +334,17 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         // 市价单：签名价格即保护价，execType 是未签名的 IOC 执行指令（节点永不越过保护价）
         ...(orderType === 'market' ? { execType: 'market' } : {}),
       }
-      await nodePost('/api/order', order)
-      // 无节点化阶段 1 双发：主发成功后 best-effort 副发同一订单到公告栏中继（失败不影响下单）
-      await dualSendOrderToRelay({ ...order }, CHAIN_ID)
+      // 阶段 4 双通道广播：同一订单原文并行投递节点与中继，任一接单即
+      // 下单成功（节点停机时订单照样进中继簿）；双通道都失败才报错。
+      const broadcast = await broadcastOrderDualChannel({ ...order }, CHAIN_ID)
+      if (!broadcast.viaNode && !broadcast.viaRelay) {
+        throw broadcast.nodeError instanceof Error
+          ? broadcast.nodeError
+          : new Error('订单广播失败：节点与中继通道均未接单，请稍后重试')
+      }
+      if (!broadcast.viaNode) {
+        setMatchNote('节点通道不可用，已由中继通道广播')
+      }
       await p2pOrderBroadcast.publishOrder(order)
       // 阶段 3 块 C：前端撮合（灰度开关开启时）——广播后在本机以双读
       // 可成交集即时撮合、用户钱包自提批结算；任何失败都不影响已成功
@@ -853,7 +860,7 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
                 </p>
               )}
               <p>
-                限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。Vault 可用不足时不用先去资产页：下单按钮会先在面板内一键补存差额（从钱包存入恰好差额，可能需要授权与存入两次钱包确认），确认到账后自动继续签名下单；补存的钱与普通存入没有区别，随时可在资产页提取。成交后由中继提交链上结算：你不需要自备原生代币付 gas；结算 gas 按实际成本由买卖双方对半分摊、以各自收到的资产扣除（单方扣除不超过其收到金额的 10%，超出部分平台吸收），交易手续费 0.01% 从成交金额中扣除，两条账分开计算。若因你的订单已过期或已被你撤单导致结算失败，失败所耗的 gas 由你承担。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
+                限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。Vault 可用不足时不用先去资产页：下单按钮会先在面板内一键补存差额（从钱包存入恰好差额，可能需要授权与存入两次钱包确认），确认到账后自动继续签名下单；补存的钱与普通存入没有区别，随时可在资产页提取。成交后由中继提交链上结算：你不需要自备原生代币付 gas；结算 gas 按实际成本由买卖双方对半分摊、以各自收到的资产扣除（单方扣除不超过其收到金额的 10%，超出部分平台吸收），交易手续费 0.01% 从成交金额中扣除，两条账分开计算。若因你的订单已过期或已被你撤单导致结算失败，失败所耗的 gas 由你承担。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。订单广播走节点与中继双通道，任一通道接单即下单成功，单个通道暂时不可用不影响下单。
               </p>
             </Text>
           </details>
@@ -870,7 +877,7 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
               </Text>
             )}
             <Text size="xs" c="dimmed">
-              限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。Vault 可用不足时不用先去资产页：下单按钮会先在面板内一键补存差额（从钱包存入恰好差额，可能需要授权与存入两次钱包确认），确认到账后自动继续签名下单；补存的钱与普通存入没有区别，随时可在资产页提取。成交后由中继提交链上结算：你不需要自备原生代币付 gas；结算 gas 按实际成本由买卖双方对半分摊、以各自收到的资产扣除（单方扣除不超过其收到金额的 10%，超出部分平台吸收），交易手续费 0.01% 从成交金额中扣除，两条账分开计算。若因你的订单已过期或已被你撤单导致结算失败，失败所耗的 gas 由你承担。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。
+              限价单按你填写的价格或更优价格成交，例如买单只会以不高于限价的价格买入，未成交部分继续挂在盘口等待成交。下单只需在钱包中签名：签名表示你授权这笔订单，订单本身不上链、不付 gas。下单使用 Vault 余额：订单被节点接受时即按订单义务锁定对应余额（卖单锁卖出币、买单按价格锁买入币），面板上的「可用」已扣除全部挂单锁定，可用不足的订单节点不会接受；成交时锁定按成交量消耗，撤单或订单到期后未成交部分的锁定自动释放，锁定中的余额不能提取。Vault 可用不足时不用先去资产页：下单按钮会先在面板内一键补存差额（从钱包存入恰好差额，可能需要授权与存入两次钱包确认），确认到账后自动继续签名下单；补存的钱与普通存入没有区别，随时可在资产页提取。成交后由中继提交链上结算：你不需要自备原生代币付 gas；结算 gas 按实际成本由买卖双方对半分摊、以各自收到的资产扣除（单方扣除不超过其收到金额的 10%，超出部分平台吸收），交易手续费 0.01% 从成交金额中扣除，两条账分开计算。若因你的订单已过期或已被你撤单导致结算失败，失败所耗的 gas 由你承担。撤单：在下方「当前挂单」中点「撤单」，同样只需签名。订单广播走节点与中继双通道，任一通道接单即下单成功，单个通道暂时不可用不影响下单。
             </Text>
           </>
         )}
