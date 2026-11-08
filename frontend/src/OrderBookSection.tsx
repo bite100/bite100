@@ -13,7 +13,7 @@ import { nodeGet, nodePost } from './nodeClient'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
 import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
 import { sideToSignedValue } from './services/orderSigningTypes'
-import { dualSendOrderToRelay } from './services/relayDualSend'
+import { broadcastOrderDualChannel } from './services/orderService'
 import { verifyOrderSignatureSignedData } from './services/orderVerification'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { ErrorDisplay } from './components/ErrorDisplay'
@@ -396,9 +396,14 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         expiresAt,
         signature,
       }
-      await nodePost('/api/order', order)
-      // 无节点化阶段 1 双发：主发成功后 best-effort 副发同一订单到公告栏中继（失败不影响下单）
-      await dualSendOrderToRelay({ ...order }, CHAIN_ID)
+      // 阶段 4 双通道广播：同一订单原文并行投递节点与中继，任一接单即
+      // 下单成功（节点停机时订单照样进中继簿）；双通道都失败才报错。
+      const broadcast = await broadcastOrderDualChannel({ ...order }, CHAIN_ID)
+      if (!broadcast.viaNode && !broadcast.viaRelay) {
+        throw broadcast.nodeError instanceof Error
+          ? broadcast.nodeError
+          : new Error('订单广播失败：节点与中继通道均未接单，请稍后重试')
+      }
       await p2pOrderBroadcast.publishOrder({ ...order, signature: order.signature ?? '' })
       setPrice('')
       setAmount('')
