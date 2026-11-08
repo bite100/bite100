@@ -18,6 +18,7 @@
 | [market-maker-vault-design.md](market-maker-vault-design.md) | 做市金库设计（第 17 轮 Part C），第 27 轮按此实现 Tier 2 合约金库 | 已上线（设计原件） |
 | [bridge-abstraction.md](bridge-abstraction.md) | 桥抽象层设计：多桥统一接口与选桥口径，第 19/20 轮实现的依据 | 已上线（设计原件） |
 | [nodeless-design-2026-11-07.md](nodeless-design-2026-11-07.md) | 无节点化架构设计（第 24 轮）：中继/落锁/撮合/索引四职能替代与五阶段迁移 | 设计定版，分阶段实施中（阶段 1 已上线；阶段 2 见第 34 轮文档；阶段 3 准入门槛已于第 35 轮修订为合成压测口径） |
+| [mainnet-launch-plan-2026-11-08.md](mainnet-launch-plan-2026-11-08.md) | 主网上线计划（2026-11-08 拍板）：第一批三链 Base 主网 / Kaia / BNB Chain（测试完毕后上线）、部署与 gas 预算口径、Kaia 价格源改接 Pyth、自发测试币互刷验证、执行门槛（桥不开通，多 DVN 硬门槛不变） | 已拍板，待执行（前提：阶段 3 合约轮 + 3A 压测等门槛全过） |
 | [hyperliquid-gap-roadmap.md](hyperliquid-gap-roadmap.md) | 与 Hyperliquid 的差距分析与改进路线图（第 7 轮），后续多轮的排期母本 | 历史记录（路线图，部分条目已被后续轮次改向） |
 
 ## 二、轮次记录（按轮次）
