@@ -13,6 +13,7 @@ import {
   fetchIndexerTrades,
   loadDualTrades,
   mergeTradeSources,
+  normalizeNodeTradeRow,
   type IndexerTrade,
   type NodeTrade,
 } from './tradesDual'
@@ -213,5 +214,108 @@ describe('第 35 轮 D6：loadDualTrades 两源独立失败', () => {
     expect(outcome.indexerFailed).toBe(false)
     expect(outcome.unavailable).toBe(false)
     expect(outcome.result.trades[0].source).toBe('both')
+  })
+})
+
+describe('第 39 轮：双源取数超时（真取消）与 GraphQL errors', () => {
+  const FAST = { nodeTimeoutMs: 50, indexerTimeoutMs: 50 }
+
+  it('索引器永不返回 + 节点正常 → 超时后返回节点数据，且索引器 signal 已真 abort', async () => {
+    let indexerSignal: AbortSignal | undefined
+    const hangIndexer = (signal: AbortSignal) => {
+      indexerSignal = signal
+      return new Promise<IndexerTrade[]>(() => {})
+    }
+    const outcome = await loadDualTrades(async () => [node()], hangIndexer, BASE, FAST)
+    expect(outcome.indexerFailed).toBe(true)
+    expect(outcome.nodeFailed).toBe(false)
+    expect(outcome.unavailable).toBe(false)
+    expect(outcome.result.trades.length).toBe(1)
+    expect(outcome.result.trades[0].source).toBe('node')
+    expect(outcome.result.trades[0].pendingIndex).toBe(true)
+    expect(indexerSignal?.aborted).toBe(true)
+  })
+
+  it('节点永不返回 + 索引器正常 → 超时后返回索引器数据，且节点 signal 已真 abort', async () => {
+    let nodeSignal: AbortSignal | undefined
+    const hangNode = (signal: AbortSignal) => {
+      nodeSignal = signal
+      return new Promise<NodeTrade[]>(() => {})
+    }
+    const outcome = await loadDualTrades(hangNode, async () => [idx()], BASE, FAST)
+    expect(outcome.nodeFailed).toBe(true)
+    expect(outcome.indexerFailed).toBe(false)
+    expect(outcome.unavailable).toBe(false)
+    expect(outcome.result.trades.length).toBe(1)
+    expect(outcome.result.trades[0].source).toBe('envio')
+    expect(nodeSignal?.aborted).toBe(true)
+  })
+
+  it('两源皆永不返回 → 超时后 unavailable（不无限等待）', async () => {
+    const hang = () => new Promise<never>(() => {})
+    const outcome = await loadDualTrades(hang, hang, BASE, FAST)
+    expect(outcome.nodeFailed).toBe(true)
+    expect(outcome.indexerFailed).toBe(true)
+    expect(outcome.unavailable).toBe(true)
+    expect(outcome.result.trades.length).toBe(0)
+  })
+
+  it('fetchIndexerTrades：HTTP 200 但带非空 errors → 抛错（判索引源失败）', async () => {
+    const fetchFn = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ errors: [{ message: 'query execution failed' }] }),
+    })
+    await expect(
+      fetchIndexerTrades(11155111, 'BTC/USDT', 50, fetchFn, 'https://idx.example/graphql'),
+    ).rejects.toThrow('indexer graphql query failed')
+  })
+
+  it('fetchIndexerTrades：errors 为空数组 → 不抛错，按 data 正常返回', async () => {
+    const fetchFn = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ errors: [], data: { Trade: [] } }),
+    })
+    await expect(
+      fetchIndexerTrades(11155111, 'BTC/USDT', 50, fetchFn, 'https://idx.example/graphql'),
+    ).resolves.toEqual([])
+  })
+
+  it('fetchIndexerTrades：AbortSignal 真传进 fetch init', async () => {
+    let seen: AbortSignal | undefined
+    const fetchFn = async (_url: string, init: { signal?: AbortSignal }) => {
+      seen = init.signal
+      return { ok: true, status: 200, json: async () => ({ data: { Trade: [] } }) }
+    }
+    await fetchIndexerTrades(11155111, 'BTC/USDT', 50, fetchFn as never, 'https://idx.example/graphql')
+    expect(seen).toBeInstanceOf(AbortSignal)
+    expect(seen!.aborted).toBe(false)
+  })
+
+  it('fetchIndexerTrades 直接调用：内部超时到点 abort 底层请求并判失败（注入小值）', async () => {
+    const fetchFn = ((_url: string, init: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })) as never
+    await expect(
+      fetchIndexerTrades(11155111, 'BTC/USDT', 50, fetchFn, 'https://idx.example/graphql', 0, {
+        timeoutMs: 30,
+      }),
+    ).rejects.toThrow('aborted')
+  })
+
+  it('TRADES_QUERY 服务端排序带 logIndex 次级键（块 2）', () => {
+    expect(TRADES_QUERY).toContain('order_by: [{ blockTimestamp: desc }, { logIndex: desc }]')
+  })
+
+  it('normalizeNodeTradeRow：字段兜底与 TradeID 别名（块 3 共用映射）', () => {
+    const row = normalizeNodeTradeRow({ TradeID: 'x1', price: '100', timestamp: '1700000000' })
+    expect(row.tradeId).toBe('x1')
+    expect(row.amountIn).toBe('0')
+    expect(row.amountOut).toBe('0')
+    expect(row.timestamp).toBe(1700000000)
+    expect(normalizeNodeTradeRow(null).tradeId).toBe('')
+    expect(normalizeNodeTradeRow(undefined).timestamp).toBe(0)
   })
 })

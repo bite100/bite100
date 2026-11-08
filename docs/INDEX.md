@@ -59,6 +59,7 @@
 | 36 | [round36-direction-trust-2026-11-08.md](round36-direction-trust-2026-11-08.md) | 第 35 轮复审整改：方向不可证过渡期（双读观察与可成交认证分离，SIDE_PROOF_AVAILABLE/SIDE_UNPROVABLE，锁仓降为观察旗标）、ABI 守卫词法结尾检测（N2）、soak 逐单真实提交时刻（N4）+ 交易对全表轮转、阶段 3 准入拆 3A/3B 并记方向过渡规则与解除条件 | 已合并推送（main a0d906a）；推送后 ChatGPT 复审不通过（逐单方向证明门缺失 / Pages 工作流同组互取消），整改见第 37 轮 |
 | 37 | [round37-review-fixes-2026-11-08.md](round37-review-fixes-2026-11-08.md) | 第 36 轮复审五项最小修复：Pages 部署工作流收敛为单一、逐单方向证明门 sideProof、ABI 扫描模板表达式显式失败、3A 覆盖与计数汇总工具（soak report）、文档同步（中继已部署口径 / Kaia 措辞 / 3A 声明与计数定义 / 阶段 3 同步清单） | 待合并（本轮分支 round37-review-fixes；合约/节点/中继零 diff） |
 | 38 | [round38-adapter-fix-2026-11-08.md](round38-adapter-fix-2026-11-08.md) | 节点源零贡献根因修复：双读适配器 asIntString 接受全零小数定点串并归一化（非全零判无效）、normalizeBookRows 丢弃计数接入 SourceBook 与 soak round 记录（nodeRawRows/nodeDroppedRows）、runner discoveryStats 排除篡改单与 report.mjs/§6.3 对齐；第一个 3A 窗口因测量链缺陷中止、新窗口自换包重启起 7 天（§6.3 已补记） | 待合并（本轮分支 round38-adapter-fix；合约/节点/中继零 diff）；换包重启 3A 由主聊天在本轮合并推送后执行 |
+| 39 | [round39-dual-source-hardening-2026-11-08.md](round39-dual-source-hardening-2026-11-08.md) | 成交双源健壮性四项（Envio 接线增量复审整改）：双源取数超时真取消（节点 5s/索引器 8s，AbortController 平台标准）、GraphQL errors 检查、服务端排序补 logIndex 次级键、桌面「成交记录」页签接入同一条双源路径 | 待合并（本轮分支 round39-dual-source-hardening；仅 frontend/ 与 docs/，零新依赖） |
 
 ## 三、分支上的设计文档（未合入 main）
 
