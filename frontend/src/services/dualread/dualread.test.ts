@@ -27,6 +27,7 @@ import {
 } from './evaluate'
 import { ShadowObserver, computeShadowMetrics } from './metrics'
 import { runDualReadRound, type DualReadDeps } from './index'
+import { orderSideProof } from './sideProof'
 import type {
   ChainOrderState,
   ChainSnapshot,
@@ -823,5 +824,62 @@ describe('编排与故障恢复', () => {
     expect(round.views[0].all[0].validity).toBe('UNKNOWN')
     expect(round.views[0].tradeable.length).toBe(0)
     expect(round.metrics?.unknownRatio.rate).toBe(1)
+  })
+})
+
+describe('第 37 轮：逐单方向证明门禁（能力声明不再是唯一开关）', () => {
+  const FUTURE_TYPES = {
+    Order: [
+      ...ORDER_TYPES.Order,
+      { name: 'side', type: 'string' },
+    ],
+  }
+
+  it('(a) 能力被强制为 true、无逐单证明 → 仍带 SIDE_UNPROVABLE、可成交集仍空', async () => {
+    const raw = await signedRaw({ orderId: 'r37a' })
+    const prepared = await prepareCandidates(CHAIN, [
+      book('node', [raw]),
+      book('relay', [raw]),
+    ])
+    const snap = snapshot(new Map([[digestOf(raw), state()]]))
+    const ev = evaluateCandidate(prepared.candidates[0], snap, {
+      sideProofAvailable: true,
+    })
+    expect(ev.validity).toBe('VALID')
+    expect(ev.tradableBlockers).toContain('SIDE_UNPROVABLE')
+    // orderSideProof 对现行类型集恒 false（无方向成员）
+    expect(orderSideProof({ reportedSides: ['buy'] })).toBe(false)
+  })
+
+  it('(b) 未来类型集声明 side 成员且签名值与自报相符 → 证明在单元级通过', () => {
+    expect(
+      orderSideProof({
+        reportedSides: ['buy'],
+        types: FUTURE_TYPES,
+        signedSideValue: 'buy',
+      }),
+    ).toBe(true)
+  })
+
+  it('(c) 方向成员在场但签名值与自报不符 → 证明不成立', () => {
+    expect(
+      orderSideProof({
+        reportedSides: ['buy'],
+        types: FUTURE_TYPES,
+        signedSideValue: 'sell',
+      }),
+    ).toBe(false)
+    // 任一副本自报与签名值不符同样不成立
+    expect(
+      orderSideProof({
+        reportedSides: ['buy', 'sell'],
+        types: FUTURE_TYPES,
+        signedSideValue: 'buy',
+      }),
+    ).toBe(false)
+    // 有成员但无签名值 → 不成立
+    expect(
+      orderSideProof({ reportedSides: ['buy'], types: FUTURE_TYPES }),
+    ).toBe(false)
   })
 })

@@ -190,8 +190,11 @@ REEVALUATE_MS 60s → 30s（FEED_CACHE_MS 仍 30s，实际读链最快 30s/次�
   承载（digest 按链域计算，等价 (chainId, settlementAddress, digest)
   唯一）；查询索引四条（chain+pair / chain+user / chain+order_id /
   expires_at）；过期清理双层（读路径过滤 + cron 每 15 分钟删过期超 1 天）。
-- 中继**仍未部署**：卡 Ren 的 Cloudflare 三步（Workers Paid、限定 API
-  token、经 Secure Vault 给 Account ID + token），与第 30 轮口径一致。
+- 中继**已部署**（第 36 轮后，2026-11-08）：Cloudflare Workers 免费版，
+  https://bit100-relay.q3874758.workers.dev；前端已以 shadow 模式接线；
+  服务端压测已连接该中继。部署由原「Ren 三步」（令牌 + Account ID 经
+  Secure Vault）完成后按 runbook 执行；Workers Paid 按 Ren 指示暂缓，
+  免费版 CPU 风险观察口径不变（第 35/36 轮文档）。
 
 ### 6.2 Settlement 权限事实（2026-11-08 cast 回读，双链现行栈）
 
@@ -233,6 +236,22 @@ relayer 授权）。本轮未改任何合约权限、未改 Settlement 代码。
    可成交集 0」两条零容忍线在过渡期是**自动满足**的，不构成安全
    证据；3A 在过渡期真正考核的是发现成功率、双链分别计数、状态
    一致率与分类准确性四项。
+   **明确声明（第 37 轮补）**：**3A 过渡期通过不代表方向可信认证
+   通过，不授权启用 active，也不代表具备主网可成交认证能力。**
+   **「有效订单」计数定义（第 37 轮补，与 soak 台账口径对齐）**：
+   一张订单计入本链的 500 线，当且仅当它**已提交**（submitted 台账
+   记录存在）、**被至少一源接受**（nodeOk 或 relayOk 为真）、**未被
+   标记篡改**（tampered 排除：其提交路径与正常单不同），且已度过
+   **发现宽限期**（提交后 ≥60 秒，即压测台账的 graceMs）。**订单发现
+   成功率 ≥99%** 由同一批记录计算：分母 = 上述合格订单数（eligible），
+   分子 = 在任一轮 round 记录的 newFirstSeen 中被任一源发现的订单数
+   （discoveredAny）；单列「双源发现率」= discoveredBoth / eligible。
+   **分类准确性**以生成器真值为准（含 tampered 标记与生成器对每单的
+   预期处置）与逐轮落盘的 filterOutcomes 对照报告；其中逐单分类准确
+   性无法从 JSONL 单独导出（round 记录只保留聚合 filterOutcomes），
+   只能报告聚合分类计数与发现率——该缺口已在第 37 轮文档如实登记。
+   汇总工具 = `frontend/scripts/soak/report.mjs`（只读重演台账语义，
+   第 37 轮）。
 2. **阶段 3B — 主网影子观察（第 36 轮新增）**：主网启用 active
    （正式模式）之前，须先在主网以影子模式对**真实订单**连续观察
    **≥7 天**，期间交易路径保持节点单读、双读只观察，并执行同样的
@@ -258,6 +277,16 @@ relayer 授权）。本轮未改任何合约权限、未改 Settlement 代码。
    （新栈地址回填前端/节点/中继/索引器四处配置与各自轮次文档）。
    第 36 轮补记：本包与**方向入签名协议修复、ERC-1271 签名长度
    修复同属阶段 3 合约轮、一次重部署捆绑完成**（见上条解除条件）。
+   **阶段 3 合约轮同步清单（第 37 轮补，来自第 36 轮复审 §6.2）**：
+   「side 入签名」必须在以下各面**原子落地**，不得拆成相互独立的
+   部分提交：① 前端签名构造（ORDER_TYPES/orderSigningTypes）；
+   ② 前端本地验签与 digest 重算（dualread digest.ts）；
+   ③ 节点订单重建与验签（node/）；④ 中继验签（relay/）；
+   ⑤ Settlement 签名校验（contracts Settlement.verifyOrderSignature）；
+   ⑥ Vault 锁仓方向与已签名方向的一致性执行（lockForOrder）；
+   ⑦ ERC-1271 路径（含签名长度门修复与智能钱包签名兼容）；
+   ⑧ 双链部署地址与 ABI 同步回填（前端/节点/中继/索引器四处配置）；
+   ⑨ 历史订单兼容或失效策略（旧协议订单的作废口径与公告）。
 4. 中继已部署且影子层能持续产出上述压测观察数据（第 36 轮补记：
    中继已于 2026-11-08 部署至 Cloudflare Workers 免费版，
    bit100-relay.q3874758.workers.dev；前端已以 shadow 模式接线；
@@ -290,12 +319,16 @@ relayer 授权）。本轮未改任何合约权限、未改 Settlement 代码。
 
 ## 8. 未做 / 待办（如实记录）
 
-- 中继未部署、Envio 未部署：均待 Ren 的账号侧动作（§6.1 / §5），
-  前端默认形态（RELAY_MODE disabled、VITE_INDEXER_URL 未配）与本轮前
-  完全一致。
+- **中继已部署**（2026-11-08；第 37 轮更正本条历史表述）：Cloudflare
+  Workers 免费版 https://bit100-relay.q3874758.workers.dev，前端已以
+  shadow 模式接线（VITE_RELAY_MODE=shadow），服务端压测已连接中继运行。
+- **Envio 索引器仍未部署**：待 Ren 注册 Envio 账号并提供令牌；
+  VITE_INDEXER_URL 尚未设置，成交展示仍为节点单源——与中继状态是两件
+  事，勿混记。
 - 阶段 2 的真实观察数据为零：阶段 3 门槛已于第 35 轮修订为合成压测
-  口径（§6.3 第 1 条），压测工具与首轮冒烟见第 35 轮文档；7 天压测
-  尚未开始计时（待主聊天指令启动）。
+  口径（§6.3 第 1 条），压测工具与首轮冒烟见第 35 轮文档；**压测正式
+  3A 计时已于 2026-11-08 12:12 JST 启动**（第 36 轮口径重启），窗口
+  至 2026-11-15 12:12 JST。
 - Nostr 镜像的前端读取仍未接入（状态区如实标「未知」，沿第 31 轮口径）。
 - `contracts/foundry.lock` 在本轮 M2 验证的 forge build 中被改动，属
   构建副作用，已还原，不入本轮提交。

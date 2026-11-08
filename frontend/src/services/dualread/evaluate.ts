@@ -43,6 +43,7 @@ import { type OrderData } from '../orderSigningTypes'
 import { verifyOrderSignatureSignedData } from '../orderVerification'
 import { buildSignedOrderData, computeOrderDigest } from './digest'
 import { SIDE_PROOF_AVAILABLE, SIDE_UNPROVABLE } from './protocol'
+import { orderSideProof, sideProofInputFromRaws, type SideProofInput } from './sideProof'
 import type {
   BookSource,
   ChainOrderState,
@@ -216,9 +217,21 @@ function clampSub(total: string, used: bigint): string {
 }
 
 /** 单候选状态机评估（chain 为 null 表示 RPC 不可用） */
+export interface EvaluateOptions {
+  /**
+   * 第 37 轮逐单方向证明门禁：能力声明覆盖（测试用；生产恒取
+   * protocol.ts 的 SIDE_PROOF_AVAILABLE）。声明为真也必须再过
+   * sideProof 的逐单证明，缺省证明输入由候选副本构造。
+   */
+  sideProofAvailable?: boolean
+  /** 测试注入的未来协议证明输入（类型集 + 签名方向值夹具） */
+  sideProofInput?: SideProofInput
+}
+
 export function evaluateCandidate(
   c: PreparedCandidate,
   chain: ChainSnapshot | null,
+  opts?: EvaluateOptions,
 ): EvaluatedOrder {
   const sources = Object.keys(c.raws) as BookSource[]
   const conflict = unsignedFieldConflict(c)
@@ -276,10 +289,14 @@ export function evaluateCandidate(
     if (sideMismatch) {
       merged.reasons = [...merged.reasons, 'SIDE_LOCK_MISMATCH']
     }
-    // 可成交认证（第 36 轮）：与观察分类分开。当前协议方向不可证 →
-    // 每单恒带 SIDE_UNPROVABLE 阻断；协议升级轮接入逐单方向证明后，
-    // 此处按证明结果逐单赋值（见 protocol.ts 的解除条件）。
-    merged.tradableBlockers = SIDE_PROOF_AVAILABLE ? [] : [SIDE_UNPROVABLE]
+    // 可成交认证（第 36 轮建立、第 37 轮加逐单门禁）：与观察分类分开。
+    // 阻断移除 ⇔ 能力声明为真 ∧ 本单逐单方向证明通过（sideProof.ts）。
+    // 第 36 轮时仅有能力声明一关，复审指出改常量即可伪造认证；第 37 轮
+    // 起证明恒按现行类型集判定——ORDER_TYPES 无方向成员 ⇒ 证明对任何
+    // 现行订单恒不成立 ⇒ 阻断恒在，与常量取值无关。
+    const capable = opts?.sideProofAvailable ?? SIDE_PROOF_AVAILABLE
+    const proof = orderSideProof(opts?.sideProofInput ?? sideProofInputFromRaws(c.raws))
+    merged.tradableBlockers = capable && proof ? [] : [SIDE_UNPROVABLE]
     if (merged.validity === 'VALID') {
       // D1 上限：仅不完整来源证明、或未签名字段冲突时，「有效」结论
       // 不可信，降为 UNKNOWN（不进可成交集）。
