@@ -46,6 +46,8 @@ jobs:
           VITE_RELAY_URL: ${{ secrets.VITE_RELAY_URL }}
           VITE_RELAY_MODE: ${{ secrets.VITE_RELAY_MODE }}
           VITE_INDEXER_URL: ${{ secrets.VITE_INDEXER_URL }}
+          VITE_LIFI_API_KEY: ${{ secrets.VITE_LIFI_API_KEY }}
+          VITE_LIFI_INTEGRATOR: ${{ secrets.VITE_LIFI_INTEGRATOR }}
         run: npm run build
 
       - name: Upload artifact
