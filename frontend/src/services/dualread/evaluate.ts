@@ -52,7 +52,7 @@ import { getChainConfig } from '../../config/chains'
 import { type OrderData } from '../orderSigningTypes'
 import { verifyOrderSignatureSignedData } from '../orderVerification'
 import { buildSignedOrderData, computeOrderDigest } from './digest'
-import { SIDE_PROOF_AVAILABLE, SIDE_UNPROVABLE } from './protocol'
+import { CHAIN_UNPROVEN, SIDE_PROOF_AVAILABLE, SIDE_UNPROVABLE } from './protocol'
 import { orderSideProof, sideProofInputFromRaws, type SideProofInput } from './sideProof'
 import type {
   BookSource,
@@ -140,7 +140,10 @@ export async function prepareCandidates(
           lifecycle: 'UNKNOWN',
           conflict: false,
           reasons: ['UNBUILDABLE'],
-          tradableBlockers: SIDE_PROOF_AVAILABLE ? [] : [SIDE_UNPROVABLE],
+          // 第 42 轮：不可重构订单同样恒带 CHAIN_UNPROVEN（chainKnown=false 口径一致）
+          tradableBlockers: SIDE_PROOF_AVAILABLE
+            ? [CHAIN_UNPROVEN]
+            : [SIDE_UNPROVABLE, CHAIN_UNPROVEN],
           remainingIn: raw.amount,
           remainingOut: '0',
           lockState: 'unknown',
@@ -313,6 +316,12 @@ export function evaluateCandidate(
     const capable = opts?.sideProofAvailable ?? SIDE_PROOF_AVAILABLE
     const proof = orderSideProof(opts?.sideProofInput ?? sideProofInputFromRaws(c.raws, c.data))
     merged.tradableBlockers = capable && proof ? [] : [SIDE_UNPROVABLE]
+    // 第 42 轮（窗口 1 遗留裁定）：链上未证 ⇒ 恒带 CHAIN_UNPROVEN 阻断，
+    // 使 tradableBlockers 字段本身 fail-closed，不再只依赖 mergeBooks 的
+    // 合取（validity 语义不变，链上未证订单本就恒为 UNKNOWN）。
+    if (!merged.chainKnown && !merged.tradableBlockers.includes(CHAIN_UNPROVEN)) {
+      merged.tradableBlockers = [CHAIN_UNPROVEN, ...merged.tradableBlockers]
+    }
     if (merged.validity === 'VALID') {
       // D1 上限：仅不完整来源证明、或未签名字段冲突时，「有效」结论
       // 不可信，降为 UNKNOWN（不进可成交集）。

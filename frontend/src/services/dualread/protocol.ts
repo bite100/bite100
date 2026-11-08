@@ -23,3 +23,15 @@ export const SIDE_PROOF_AVAILABLE = true
 
 /** 方向不可证时的可成交认证阻断原因码（与 validity 判定原因码分开统计） */
 export const SIDE_UNPROVABLE = 'SIDE_UNPROVABLE'
+
+/**
+ * 链上状态未证时的可成交认证阻断原因码（第 42 轮补，窗口 1 遗留裁定）：
+ * 阶段 3 前 tradableBlockers 只表达方向证明一件事——链上未知
+ * （chainKnown=false）的订单在方向证明通过时该字段为空，fail-closed
+ * 只靠 mergeBooks 把「validity=VALID ∧ 无阻断」做合取这一处实现；
+ * 任何只读本字段的消费方（或未来重构合取）都会把链上未证订单误认
+ * 为无阻断（3A 浸泡窗口 1 的 tradeable 异常计数即此形态）。第 42 轮
+ * 起：chainKnown=false ⇒ 本阻断恒在，字段本身即 fail-closed，
+ * validity 语义（VALID/UNKNOWN/INVALID）不变。
+ */
+export const CHAIN_UNPROVEN = 'CHAIN_UNPROVEN'

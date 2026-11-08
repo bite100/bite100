@@ -354,6 +354,12 @@ describe('状态机（mock 链上快照）', () => {
     const raw = await signedRaw()
     const cand = await prepareOne({ node: raw })
     expect(evaluateCandidate(cand, null).reasons).toContain('CHAIN_UNAVAILABLE')
+    // 第 42 轮：链上未证 ⇒ tradableBlockers 恒含 CHAIN_UNPROVEN（字段本身 fail-closed）
+    const noChain = evaluateCandidate(cand, null)
+    expect(noChain.validity).toBe('UNKNOWN')
+    expect(noChain.chainKnown).toBe(false)
+    expect(noChain.tradableBlockers).toContain('CHAIN_UNPROVEN')
+    expect(mergeBooks(CHAIN, PAIR, { candidates: [cand], unbuildable: [] }, null).tradeable).toEqual([])
     expect(
       evaluateCandidate(cand, snapshot(new Map([[digestOf(raw), state()]]), { stale: true }))
         .validity,
@@ -1083,5 +1089,30 @@ describe('第 40 轮复审骑乘（阶段 3 并入）：负零口径与顶层数
       json: async () => [],
     }))
     await expect(relayAdapter.fetchBook(CHAIN, PAIR)).rejects.toThrow(/top-level array/)
+  })
+})
+
+describe('第 42 轮：chain-unknown 阻断口径（窗口 1 遗留裁定）', () => {
+  it('不可重构订单恒带 CHAIN_UNPROVEN 阻断、永不进可成交集', async () => {
+    const raw = await signedRaw()
+    raw.pair = 'XXX/USDT' // 未知交易对 → buildSignedOrderData 失败 → unbuildable
+    const prepared = await prepareCandidates(CHAIN, [book('node', [raw])])
+    expect(prepared.candidates).toEqual([])
+    expect(prepared.unbuildable).toHaveLength(1)
+    const u = prepared.unbuildable[0]
+    expect(u.chainKnown).toBe(false)
+    expect(u.tradableBlockers).toContain('CHAIN_UNPROVEN')
+    expect(mergeBooks(CHAIN, PAIR, prepared, null).tradeable).toEqual([])
+  })
+
+  it('链上已证的 VALID 单不带 CHAIN_UNPROVEN（口径不误伤正常放行）', async () => {
+    const raw = await signedRaw()
+    const cand = await prepareOne({ node: raw })
+    const ev = evaluateCandidate(
+      cand,
+      snapshot(new Map([[digestOf(raw), state()]])),
+    )
+    expect(ev.chainKnown).toBe(true)
+    expect(ev.tradableBlockers).not.toContain('CHAIN_UNPROVEN')
   })
 })

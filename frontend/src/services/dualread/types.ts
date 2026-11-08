@@ -132,8 +132,9 @@ export interface EvaluatedOrder {
   /**
    * 可成交认证阻断码（第 36 轮）：与 reasons/validity 分开——validity 是
    * 观察分类（状态机评估是否通过），本字段回答「能否认证为可成交」。
-   * 空数组 = 无阻断。当前协议下方向不可证（见 protocol.ts），每单恒为
-   * [SIDE_UNPROVABLE]，可成交集按构造为空。
+   * 空数组 = 无阻断。阶段 3 后方向证明逐单判定（SIDE_UNPROVABLE 只在
+   * 证明不成立时出现）；第 42 轮起链上未证（chainKnown=false）恒带
+   * CHAIN_UNPROVEN，字段本身 fail-closed（见 protocol.ts）。
    */
   tradableBlockers: string[]
   /** 链上权威剩余量（wei 整数字符串）；链上未知时为按源自报推导的诊断值并以 validity=UNKNOWN 标注 */
