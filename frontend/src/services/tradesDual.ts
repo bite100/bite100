@@ -225,6 +225,29 @@ query Bit100Trades($chainId: Int!, $limit: Int!, $offset: Int!, $base: [String!]
   }
 }`
 
+/**
+ * 节点 /api/trades 原始行 → NodeTrade 归一化（第 39 轮抽为共用）：
+ * 「最新成交」（RecentTradesWidget）与桌面「成交记录」页签
+ * （TradeTabsPanel）走同一条双源路径、共用同一映射，避免两处口径漂移。
+ */
+export function normalizeNodeTradeRow(t: unknown): NodeTrade {
+  const o: Record<string, unknown> =
+    t && typeof t === 'object' ? (t as Record<string, unknown>) : {}
+  return {
+    tradeId: String(o.tradeId ?? o.TradeID ?? ''),
+    txHash: String(o.txHash ?? ''),
+    maker: String(o.maker ?? ''),
+    taker: String(o.taker ?? ''),
+    tokenIn: String(o.tokenIn ?? ''),
+    tokenOut: String(o.tokenOut ?? ''),
+    amountIn: String(o.amountIn ?? '0'),
+    amountOut: String(o.amountOut ?? '0'),
+    price: String(o.price ?? '0'),
+    amount: String(o.amount ?? '0'),
+    timestamp: Number(o.timestamp ?? 0),
+  }
+}
+
 /** 节点源取数超时（第 39 轮）：节点在本机/隧道近端，5 秒足够判活 */
 export const NODE_TRADES_TIMEOUT_MS = 5000
 /** 索引器源取数超时（第 39 轮）：Envio GraphQL 跨公网且有冷查询，宽放至 8 秒 */
