@@ -189,6 +189,10 @@ export function mergeTradeSources(
  * 依版本而定，变量同时带配置原样与小写两种形态（_in 集合），客户端再
  * 保留一层精确集合校验作兜底。分页沿用本文件既有 Hasura 口径
  * （order_by + limit + offset）。
+ *
+ * 第 39 轮：服务端排序补次级键 logIndex desc（Hasura 多字段排序）——
+ * 同块多笔成交时分页边界确定，与客户端 merge 的 (timestamp, logIndex)
+ * 排序口径对齐。
  */
 export const TRADES_QUERY = `
 query Bit100Trades($chainId: Int!, $limit: Int!, $offset: Int!, $base: [String!], $quote: [String!]) {
@@ -200,7 +204,7 @@ query Bit100Trades($chainId: Int!, $limit: Int!, $offset: Int!, $base: [String!]
         { _and: [{ tokenIn: { _in: $quote } }, { tokenOut: { _in: $base } }] }
       ]
     }
-    order_by: { blockTimestamp: desc }
+    order_by: [{ blockTimestamp: desc }, { logIndex: desc }]
     limit: $limit
     offset: $offset
   ) {
