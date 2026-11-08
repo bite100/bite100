@@ -19,6 +19,15 @@
 //   8. mixedQuotes        三种引号混排的真实签名
 // 并在产物存在时跑一遍真实 config 的正例（应通过）。
 //
+// 第 36 轮 N2 新增（词法结尾检测；均需真实产物）：
+//   9. commentLineLegit   数组内一行 // ] as const 注释，后接第二条
+//                         合法声明 → 必过，且通过信息须报 2 条声明
+//                         （计数证明两条都被提取、没有静默截断）
+//  10. commentBlockLegit  块注释 /* ] as const */ 变体 → 同上
+//  11. commentLineForged  注释伪结尾后放一条伪造声明 → 必因漂移被拦
+//                         （被拦即证明该声明被提取并参与比对）
+//  12. commentBlockForged 块注释变体 → 同上
+//
 // 用法：仓库根目录或 frontend/ 下 `node frontend/scripts/
 // check-governance-abi.test.mjs`，或 frontend 内
 // `npm run check:abi:selftest`。零依赖，纯 Node。
@@ -68,6 +77,22 @@ const mustPassFixtures = {
     '  `' + SIG_EXECUTED + '`,\n] as const\n',
 }
 
+// 第 36 轮 N2：注释伪结尾夹具。旧 indexOf('] as const') 结尾定位会被
+// 第一条声明后的注释误截断；新词法扫描必须越过注释、数全两条。
+const SIG_FORGED = 'function notInContract() view returns (uint256)'
+const commentLegitFixtures = {
+  commentLineLegit:
+    `export const GOVERNANCE_ABI = [\n  '${SIG_COUNT}',\n  // ] as const\n  '${SIG_VOTE}',\n] as const\n`,
+  commentBlockLegit:
+    `export const GOVERNANCE_ABI = [\n  '${SIG_COUNT}',\n  /* ] as const */\n  '${SIG_VOTE}',\n] as const\n`,
+}
+const commentForgedFixtures = {
+  commentLineForged:
+    `export const GOVERNANCE_ABI = [\n  '${SIG_COUNT}',\n  // ] as const\n  '${SIG_FORGED}',\n] as const\n`,
+  commentBlockForged:
+    `export const GOVERNANCE_ABI = [\n  '${SIG_COUNT}',\n  /* ] as const */\n  '${SIG_FORGED}',\n] as const\n`,
+}
+
 function runChecker(configPath, artifactPath) {
   return spawnSync(process.execPath, [checker], {
     env: {
@@ -102,6 +127,23 @@ function expectPass(name, content) {
     console.log(`自检通过：正例 ${name} 通过主检查`)
   }
 }
+// 正例 + 声明计数断言：主检查是「前端 ⊆ 产物」的子集口径，单看退出码
+// 无法区分「两条都提取」与「第二条被截断、只剩一条也对齐」——必须核
+// 通过信息里的声明总数（N2 防静默截断的计数证明）。
+function expectPassCount(name, content, n) {
+  const p = join(dir, `${name}.ts`)
+  writeFileSync(p, content)
+  const r = runChecker(p, realArtifact)
+  if (r.status !== 0) {
+    failed++
+    console.error(`自检失败：正例 ${name} 未通过主检查\n${r.stdout}\n${r.stderr}`)
+  } else if (!r.stdout.includes(`${n} 条声明`)) {
+    failed++
+    console.error(`自检失败：正例 ${name} 通过但声明计数不是 ${n} 条（疑似静默截断）\n${r.stdout}`)
+  } else {
+    console.log(`自检通过：正例 ${name} 通过主检查且计数 = ${n} 条声明`)
+  }
+}
 
 for (const [name, content] of Object.entries(mustFailFixtures)) {
   expectFail(name, content, stubArtifact)
@@ -112,6 +154,12 @@ if (hasRealArtifact) {
   for (const [name, content] of Object.entries(mustPassFixtures)) {
     expectPass(name, content)
   }
+  for (const [name, content] of Object.entries(commentLegitFixtures)) {
+    expectPassCount(name, content, 2)
+  }
+  for (const [name, content] of Object.entries(commentForgedFixtures)) {
+    expectFail(name, content, realArtifact)
+  }
   const r = runChecker(realConfig, realArtifact)
   if (r.status !== 0) {
     failed++
@@ -120,7 +168,7 @@ if (hasRealArtifact) {
     console.log('自检通过：正例（真实 config.ts）通过主检查')
   }
 } else {
-  console.log('自检跳过产物相关用例（mixedBogus 与三个引号正例、真实 config 正例）：forge 产物不存在（CI 在 forge build 后运行，自检时会带上）')
+  console.log('自检跳过产物相关用例（mixedBogus、引号正例、N2 注释伪结尾四例、真实 config 正例）：forge 产物不存在（CI 在 forge build 后运行，自检时会带上）')
 }
 
 if (failed > 0) {
