@@ -1,15 +1,15 @@
 # yaml-language-server: $schema=./node_modules/envio/evm.schema.json
 # Bit100 Settlement 成交索引器（第 34 轮，无节点阶段 2C；Envio HyperIndex v3）
 #
-# 部署记录来源（唯一口径）：docs/round33-hardening-2026-11-08.md 第 33 轮部署栈。
-# - Sepolia Settlement 0xa3F8cBCDc1533299D37836ea80d5004FF59f9094
-#   CREATE tx 0x97413c8867470dd2aaeaf1816e08ed36f46a95025f6f1f878dca8c3313463414
-#   → 部署块 12087251（2026-11-08 经公共 RPC 回执核对）
-# - Base Sepolia Settlement 0x39037dE0a1d6ca567d50055522f7Ef825dF4FCf9
-#   CREATE tx 0xc8b570c054c3a01c1700bdd0ee26a767b5ebac2db4488c8d86a15ae22d263f01
-#   → 部署块 55881173（同上核对）
+# 部署记录来源（唯一口径）：docs/stage3-cutover-2026-11-08.md（阶段 3 切换部署栈）。
+# - Sepolia Settlement 0xbf2B9635B682Ff30E73028a5b2beEB829873a88f
+#   CREATE tx 0xa4e07bae90e31b892b4a7c89d71a0d376b3c5f26a9992a1d5b9983dd65c0d164
+#   → 部署块 12089723（2026-11-08 经公共 RPC 回执核对）
+# - Base Sepolia Settlement 0x50aFA0d0a407bdeCcdd6b9b3f6d4a68f837F0305
+#   CREATE tx 0x39f5c4ff91f57fe407463de32da145d2ca7f1b26ef4f09d84cfd8784754e7a32
+#   → 部署块 56039239（同上核对）
 # ABI 版本标识：事件签名与 src/lib/settlementAbi.ts 同源于
-# contracts/out/Settlement.sol/Settlement.json（第 33 轮部署栈）。合约重部署后
+# contracts/out/Settlement.sol/Settlement.json（阶段 3 部署栈）。合约重部署后
 # 必须同步更新地址/起始块/本注释三处，并在轮次文档登记。
 # 历史地址（旧轮次 Settlement）禁止抄入本文件——现行地址只认最新轮次文档。
 name: bit100-settlement-indexer
@@ -41,12 +41,12 @@ contracts:
             - hash
 chains:
   - id: 11155111
-    start_block: 12087251
+    start_block: 12089723
     contracts:
       - name: Settlement
-        address: "0xa3F8cBCDc1533299D37836ea80d5004FF59f9094"
+        address: "0xbf2B9635B682Ff30E73028a5b2beEB829873a88f"
   - id: 84532
-    start_block: 55881173
+    start_block: 56039239
     contracts:
       - name: Settlement
-        address: "0x39037dE0a1d6ca567d50055522f7Ef825dF4FCf9"
+        address: "0x50aFA0d0a407bdeCcdd6b9b3f6d4a68f837F0305"

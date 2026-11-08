@@ -21,7 +21,7 @@ const MAKER_ENV =
 // Sepolia 配置（与 relay/src/config.ts 及前端 chains.ts 一致）
 // 签名域的 verifyingContract：必须与 src/config.ts 的 Sepolia settlement 一致
 // （第 34 轮按第 33 轮部署栈更新；改其一必须同步改另一处，演示验签会当场报错）
-const SETTLEMENT = '0xa3F8cBCDc1533299D37836ea80d5004FF59f9094'
+const SETTLEMENT = '0xbf2B9635B682Ff30E73028a5b2beEB829873a88f'
 const BTC = '0x8EDa0025C245B10eA1E10c257674B794C85350f3'
 const USDT = '0x6Ca8cb68Ee5BB15474f1cfFE07B895C974Ab9c6e'
 const CHAIN_ID = 11155111

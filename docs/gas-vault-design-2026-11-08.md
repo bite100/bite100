@@ -103,9 +103,11 @@ gas 库在这条链路里的位置（新增部分）：
   ReentrancyGuard + IERC1271；存款在 `_deposit` 时自动转入交易
   Vault（归属金库地址），赎回走 `_withdraw` 反向路径；
 - **一实例只服务一个交易对**：`totalAssets()` 只计 USDT + 单一
-  `baseToken` 库存，后者按单一 Chainlink feed 折价；`baseToken`、
-  `priceFeed`（构造时定版）、`tradingVault` 均为 immutable/构造
-  参数；
+  `baseToken` 库存，后者按单一 Chainlink feed 折价；`baseToken` 与
+  `tradingVault` 为 immutable；`priceFeed` 是普通状态变量
+  （MakerVault.sol:61），owner 可经 `setPriceFeed`（:162）改指
+  （第 43 轮据第 42 轮复审指正回填：原文「三个参数均 immutable」
+  的说法对 priceFeed 不成立）；
 - **NAV 与喂价强绑定**：feed 过期（>10800s）时 `_baseValueInQuote`
   revert，NAV fail-closed——做市口径下是风控，gas 库口径下是无关
   风险源（gas 库不需要 base 库存，更不需要喂价）；
@@ -118,8 +120,9 @@ gas 库在这条链路里的位置（新增部分）：
 **案一：改造现有 MakerVault 为 gas 库**
 做法：停用签单（清退 signers + 让 isValidSignature 恒失败）、NAV
 改为只计 quote 资产、base 库存清零后不再计入、存款转发路径保留。
-问题：`baseToken/priceFeed` 是 immutable，NAV 公式与喂价检查写在
-`totalAssets/_baseValueInQuote` 里——改造等于重写其承重部分；
+问题：`baseToken` 为 immutable，NAV 公式与喂价检查写死在
+`totalAssets/_baseValueInQuote` 里（`priceFeed` 只有改指地址的
+setter，改不了这套结构）——改造等于重写其承重部分；
 改完的合约仍拖着 4626 份额与旧账（测试网已部署实例还有真实存款
 记录口径），审计面不比新写小；且「改造」需要在已部署合约上做
 状态迁移，测试网栈正处阶段 3 切换前夜，徒增切换变量。

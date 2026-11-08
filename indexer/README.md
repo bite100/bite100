@@ -36,8 +36,8 @@
 
 | 链 | Settlement | 起始块（部署块） |
 | --- | --- | --- |
-| Sepolia 11155111 | `0xa3F8cBCDc1533299D37836ea80d5004FF59f9094` | 12087251 |
-| Base Sepolia 84532 | `0x39037dE0a1d6ca567d50055522f7Ef825dF4FCf9` | 55881173 |
+| Sepolia 11155111 | `0xbf2B9635B682Ff30E73028a5b2beEB829873a88f` | 12089723 |
+| Base Sepolia 84532 | `0x50aFA0d0a407bdeCcdd6b9b3f6d4a68f837F0305` | 56039239 |
 
 合约重部署后必须同步更新地址、起始块与 ABI 子集（`src/lib/settlementAbi.ts`）
 并在轮次文档登记。历史轮次地址禁止抄入。
