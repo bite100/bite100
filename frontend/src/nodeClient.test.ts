@@ -84,6 +84,78 @@ describe('nodeGet', () => {
   })
 })
 
+describe('tryNodes abort 短路（第 40 轮，第 39 轮复审 F1）', () => {
+  it('signal 已 abort 且首次尝试失败 → 只调用一次请求函数并抛错', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const abortErr = new Error('aborted')
+    const calls: string[] = []
+    await expect(
+      tryNodes(
+        async (baseUrl) => {
+          calls.push(baseUrl)
+          throw abortErr
+        },
+        { signal: controller.signal },
+      ),
+    ).rejects.toBe(abortErr)
+    expect(calls).toEqual(['http://node1'])
+  })
+
+  it('signal 尝试途中被取消 → 在当次失败后短路，不试下一节点', async () => {
+    const controller = new AbortController()
+    const calls: string[] = []
+    await expect(
+      tryNodes(
+        async (baseUrl) => {
+          calls.push(baseUrl)
+          controller.abort()
+          throw new Error('aborted')
+        },
+        { signal: controller.signal },
+      ),
+    ).rejects.toThrow('aborted')
+    expect(calls).toEqual(['http://node1'])
+  })
+
+  it('signal 未取消时失败仍回退下一节点（短路不误伤正常回退）', async () => {
+    const controller = new AbortController()
+    const data = { ok: true }
+    const calls: string[] = []
+    const res = await tryNodes(
+      async (baseUrl) => {
+        calls.push(baseUrl)
+        if (baseUrl === 'http://node2') return data
+        throw new Error('down')
+      },
+      { signal: controller.signal },
+    )
+    expect(calls).toEqual(['http://node1', 'http://node2'])
+    expect(res).toEqual({ data, baseUrl: 'http://node2' })
+  })
+})
+
+describe('nodeGet signal 透传（第 40 轮）', () => {
+  beforeEach(() => {
+    globalThis.fetch = vi.fn()
+  })
+
+  it('signal 已 abort 且 fetch 拒绝 → 只发一次请求，不再试下一节点', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('aborted'),
+    )
+    await expect(
+      nodeGet('/api/pairs', undefined, { signal: controller.signal }),
+    ).rejects.toThrow('aborted')
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    expect(globalThis.fetch).toHaveBeenCalledWith('http://node1/api/pairs', {
+      signal: controller.signal,
+    })
+  })
+})
+
 describe('nodePost', () => {
   beforeEach(() => {
     globalThis.fetch = vi.fn()

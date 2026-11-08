@@ -365,6 +365,12 @@ export function buildTradesQueryVariables(
   }
 }
 
+/**
+ * 索引器取数函数契约（第 40 轮，第 39 轮复审 F2）：注入的 FetchFn 必须
+ * 遵守 init.signal——信号取消后应尽快 reject。fetchIndexerTrades 的直
+ * 调路径只靠 signal 取消、不另设竞速兜底；竞速兜底只在 loadDualTrades
+ * 的 callWithTimeout 一层（两者分工，不重复造轮子）。
+ */
 export type FetchFn = (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },

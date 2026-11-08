@@ -251,13 +251,25 @@ describe('第 39 轮：双源取数超时（真取消）与 GraphQL errors', () 
     expect(nodeSignal?.aborted).toBe(true)
   })
 
-  it('两源皆永不返回 → 超时后 unavailable（不无限等待）', async () => {
-    const hang = () => new Promise<never>(() => {})
-    const outcome = await loadDualTrades(hang, hang, BASE, FAST)
+  it('两源皆永不返回 → 超时后 unavailable（不无限等待），且两侧 signal 均已真 abort', async () => {
+    // 第 40 轮（第 39 轮复审测试缺口）：补两侧 signal 的 aborted 断言
+    let nodeSignal: AbortSignal | undefined
+    let indexerSignal: AbortSignal | undefined
+    const hangNode = (signal: AbortSignal) => {
+      nodeSignal = signal
+      return new Promise<never>(() => {})
+    }
+    const hangIndexer = (signal: AbortSignal) => {
+      indexerSignal = signal
+      return new Promise<never>(() => {})
+    }
+    const outcome = await loadDualTrades(hangNode, hangIndexer, BASE, FAST)
     expect(outcome.nodeFailed).toBe(true)
     expect(outcome.indexerFailed).toBe(true)
     expect(outcome.unavailable).toBe(true)
     expect(outcome.result.trades.length).toBe(0)
+    expect(nodeSignal?.aborted).toBe(true)
+    expect(indexerSignal?.aborted).toBe(true)
   })
 
   it('fetchIndexerTrades：HTTP 200 但带非空 errors → 抛错（判索引源失败）', async () => {
