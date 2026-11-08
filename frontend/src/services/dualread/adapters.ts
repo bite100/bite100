@@ -118,13 +118,36 @@ type NodeGetFn = (
 const defaultNodeGet: NodeGetFn = (path, params) =>
   nodeGet<{ pair: string; bids: unknown[]; asks: unknown[] }>(path, params)
 
+/**
+ * 节点订单簿响应的形态校验（第 40 轮，第 38 轮复审 F3）：响应必须是
+ * 对象；bids/asks 缺失（undefined）按空数组处理（正常空盘口），存在
+ * 但不是数组则抛错——按源错误走既有降级，绝不静默当空簿，也不让非
+ * 数组流进 normalizeBookRows。前端节点适配器与 soak runner 的服务端
+ * 节点适配器共用本函数，保证两侧同构。
+ */
+export function requireBookSides(
+  data: unknown,
+  sourceLabel: string,
+): { bids: unknown[]; asks: unknown[] } {
+  if (!data || typeof data !== 'object') {
+    throw new Error(`${sourceLabel} orderbook response is not an object`)
+  }
+  const { bids, asks } = data as { bids?: unknown; asks?: unknown }
+  if (bids !== undefined && !Array.isArray(bids)) {
+    throw new Error(`${sourceLabel} orderbook bids is not an array`)
+  }
+  if (asks !== undefined && !Array.isArray(asks)) {
+    throw new Error(`${sourceLabel} orderbook asks is not an array`)
+  }
+  return { bids: bids ?? [], asks: asks ?? [] }
+}
+
 /** 节点适配器（注入点便于单测；缺省走现行 nodeGet 多节点轮询） */
 export function createNodeBookAdapter(get: NodeGetFn = defaultNodeGet): BookAdapter {
   return {
     async fetchBook(chainId: number, pair: string): Promise<SourceBook> {
       const { data } = await get('/api/orderbook', { pair })
-      const rawBids = data?.bids ?? []
-      const rawAsks = data?.asks ?? []
+      const { bids: rawBids, asks: rawAsks } = requireBookSides(data, 'node')
       const nb = normalizeBookRows(rawBids)
       const na = normalizeBookRows(rawAsks)
       const bids = sortBookSide(nb.orders, 'buy')

@@ -25,6 +25,7 @@ import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import {
   createRelayBookAdapter,
   normalizeBookRows,
+  requireBookSides,
   sortBookSide,
   type BookAdapter,
 } from '../../src/services/dualread/adapters'
@@ -59,9 +60,10 @@ function createDirectNodeAdapter(nodeUrl: string): BookAdapter {
         `${nodeUrl}/api/orderbook?pair=${encodeURIComponent(pair)}`,
       )
       if (!res.ok) throw new Error(`node orderbook http ${res.status}`)
-      const data = (await res.json()) as { bids?: unknown[]; asks?: unknown[] }
-      const rawBids = data?.bids ?? []
-      const rawAsks = data?.asks ?? []
+      const data: unknown = await res.json()
+      // 第 40 轮（第 38 轮复审 F3）：响应形态校验与前端节点适配器共用
+      // requireBookSides——非对象/非数组抛错按源错误处理，缺失字段按空盘口
+      const { bids: rawBids, asks: rawAsks } = requireBookSides(data, 'node')
       // 第 38 轮：与前端共用 normalizeBookRows 规范化 + 丢弃计数
       const nb = normalizeBookRows(rawBids)
       const na = normalizeBookRows(rawAsks)

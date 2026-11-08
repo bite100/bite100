@@ -704,6 +704,39 @@ describe('第 40 轮：asIntString 边界口径（第 38 轮复审 F1/F2，经 t
   })
 })
 
+describe('第 40 轮：节点适配器响应形态校验（第 38 轮复审 F3）', () => {
+  const adapterWith = (data: unknown) =>
+    createNodeBookAdapter(async () => ({
+      data: data as { pair: string; bids: unknown[]; asks: unknown[] },
+      baseUrl: 'http://node.example',
+    }))
+
+  it('bids 存在但不是数组 → 抛错（按源错误处理），不静默当空簿', async () => {
+    await expect(
+      adapterWith({ pair: PAIR, bids: 'oops', asks: [] }).fetchBook(CHAIN, PAIR),
+    ).rejects.toThrow(/bids is not an array/)
+  })
+
+  it('asks 存在但不是数组 → 抛错', async () => {
+    await expect(
+      adapterWith({ pair: PAIR, bids: [], asks: { nope: true } }).fetchBook(CHAIN, PAIR),
+    ).rejects.toThrow(/asks is not an array/)
+  })
+
+  it('响应不是对象 → 抛错', async () => {
+    await expect(adapterWith(null).fetchBook(CHAIN, PAIR)).rejects.toThrow(/not an object/)
+    await expect(adapterWith('oops').fetchBook(CHAIN, PAIR)).rejects.toThrow(/not an object/)
+  })
+
+  it('bids/asks 缺失 → 按空盘口（正常空簿，不抛错）', async () => {
+    const book = await adapterWith({ pair: PAIR }).fetchBook(CHAIN, PAIR)
+    expect(book.bids).toEqual([])
+    expect(book.asks).toEqual([])
+    expect(book.rawRows).toBe(0)
+    expect(book.droppedRows).toBe(0)
+  })
+})
+
 describe('链上读取器（mock transport）', () => {
   it('同区块二次快照复用缓存；部分失败 digest 进 missing', async () => {
     let multicallCalls = 0
