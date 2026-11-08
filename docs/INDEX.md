@@ -58,6 +58,7 @@
 | 35 | [round35-review-fixes-2026-11-08.md](round35-review-fixes-2026-11-08.md) | 第 34 轮复审整改：双读可信边界 D1–D4（完整度入门/锁仓方向证据/零值/钉块）、成交双源 D5/D6、ABI 守卫 M2-R、D8 active 未接线门禁；阶段 3 准入门槛改合成压测口径 + 压测工具（frontend/scripts/soak/）与冒烟实证 | 已合并推送（main 9adf762）；推送后 ChatGPT 复审不通过（N1 锁仓方向证据证伪 / N2 ABI 结尾定位 / N3 双源一致非独立 / N4 压测计时），整改见第 36 轮；压测已于 2026-11-08 启动（第 36 轮口径下只计试运行，3A 正式计数自第 36 轮合并起算） |
 | 36 | [round36-direction-trust-2026-11-08.md](round36-direction-trust-2026-11-08.md) | 第 35 轮复审整改：方向不可证过渡期（双读观察与可成交认证分离，SIDE_PROOF_AVAILABLE/SIDE_UNPROVABLE，锁仓降为观察旗标）、ABI 守卫词法结尾检测（N2）、soak 逐单真实提交时刻（N4）+ 交易对全表轮转、阶段 3 准入拆 3A/3B 并记方向过渡规则与解除条件 | 已合并推送（main a0d906a）；推送后 ChatGPT 复审不通过（逐单方向证明门缺失 / Pages 工作流同组互取消），整改见第 37 轮 |
 | 37 | [round37-review-fixes-2026-11-08.md](round37-review-fixes-2026-11-08.md) | 第 36 轮复审五项最小修复：Pages 部署工作流收敛为单一、逐单方向证明门 sideProof、ABI 扫描模板表达式显式失败、3A 覆盖与计数汇总工具（soak report）、文档同步（中继已部署口径 / Kaia 措辞 / 3A 声明与计数定义 / 阶段 3 同步清单） | 待合并（本轮分支 round37-review-fixes；合约/节点/中继零 diff） |
+| 38 | [round38-adapter-fix-2026-11-08.md](round38-adapter-fix-2026-11-08.md) | 节点源零贡献根因修复：双读适配器 asIntString 接受全零小数定点串并归一化（非全零判无效）、normalizeBookRows 丢弃计数接入 SourceBook 与 soak round 记录（nodeRawRows/nodeDroppedRows）、runner discoveryStats 排除篡改单与 report.mjs/§6.3 对齐；第一个 3A 窗口因测量链缺陷中止、新窗口自换包重启起 7 天（§6.3 已补记） | 待合并（本轮分支 round38-adapter-fix；合约/节点/中继零 diff）；换包重启 3A 由主聊天在本轮合并推送后执行 |
 
 ## 三、分支上的设计文档（未合入 main）
 
