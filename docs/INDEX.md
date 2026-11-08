@@ -63,17 +63,18 @@
 | 38 | [round38-adapter-fix-2026-11-08.md](round38-adapter-fix-2026-11-08.md) | 节点源零贡献根因修复：双读适配器 asIntString 接受全零小数定点串并归一化（非全零判无效）、normalizeBookRows 丢弃计数接入 SourceBook 与 soak round 记录（nodeRawRows/nodeDroppedRows）、runner discoveryStats 排除篡改单与 report.mjs/§6.3 对齐；第一个 3A 窗口因测量链缺陷中止、新窗口自换包重启起 7 天（§6.3 已补记） | 已合并推送（main 1f2731f 批）；新 3A 窗口已于 2026-11-08 13:41 重启，后于同日被负责人叫停作废（浸泡停用），切换前重新跑满 7 天 |
 | 39 | [round39-dual-source-hardening-2026-11-08.md](round39-dual-source-hardening-2026-11-08.md) | 成交双源健壮性四项（Envio 接线增量复审整改）：双源取数超时真取消（节点 5s/索引器 8s，AbortController 平台标准）、GraphQL errors 检查、服务端排序补 logIndex 次级键、桌面「成交记录」页签接入同一条双源路径 | 已合并推送（main 7fbed7b）；推送后复审有条件通过、已关闭 |
 | 40 | [round40-review-followups-2026-11-08.md](round40-review-followups-2026-11-08.md) | 复审跟进批：第 38 轮 F1–F4（asIntString 数字分支安全整数化 + 边界测试、节点适配器形态校验 requireBookSides 前端/runner 共用、droppedRows 口径写明）、Envio 跟进（indexer viem 精确锁 2.57.16）、第 39 轮 F1/测试缺口/F2（tryNodes abort 短路、双挂死双 signal 断言、FetchFn 契约注释）；不重建 soak 包、3A 不受影响 | 已合并推送（main f6a8123）；推送后复审有条件通过，余下三小项已骑乘阶段 3 关闭 |
-| 阶段 3 | [stage3-contract-matching-2026-11-08.md](stage3-contract-matching-2026-11-08.md) | 无节点阶段 3：Route A（side 进 EIP-712 签名，五方同轮同步、跨语言向量一致、SIDE_UNPROVABLE 过渡体制结束）、Settlement 开放提交（模型 B）+ ERC-1271 长度门修复 + 批上限常量 50、Vault 落锁方向只从签名派生（⑥）、前端撮合开启（本地撮合骑 dualread 可成交集、批结算自提+预检剔腿、灰度开关默认关）、同单双路径 anvil 对账四项全过（三套链参数）；含切换 runbook 与第 40 轮复审三小项骑乘 | 已合并推送（main 5b9e523），未部署；前端半复审有条件通过、后端半复审 P0 已由价格修复轮关闭；双链切换待 3A（浸泡已按负责人指示停用，切换前重启跑满 7 天）结案后发令 |
+| 阶段 3 | [stage3-contract-matching-2026-11-08.md](stage3-contract-matching-2026-11-08.md) | 无节点阶段 3：Route A（side 进 EIP-712 签名，五方同轮同步、跨语言向量一致、SIDE_UNPROVABLE 过渡体制结束）、Settlement 开放提交（模型 B）+ ERC-1271 长度门修复 + 批上限常量 50、Vault 落锁方向只从签名派生（⑥）、前端撮合开启（本地撮合骑 dualread 可成交集、批结算自提+预检剔腿、灰度开关默认关）、同单双路径 anvil 对账四项全过（三套链参数）；含切换 runbook 与第 40 轮复审三小项骑乘 | 已合并推送（main 5b9e523），未部署；前端半复审有条件通过、后端半复审 P0 已由价格修复轮关闭；负责人 2026-11-08 18:15 已豁免 3A 并发令直接切换（浸泡保持停用、不重启），按该文 §7 runbook 执行 |
 | 阶段 3 修复 | [stage3-price-fix-2026-11-08.md](stage3-price-fix-2026-11-08.md) | 阶段 3 后端复审 P0 修复：Settlement 限价强制（_accountFill 落账前按签名量交叉相乘校验双方限价，SELL 实收不低于签名价 / BUY 实付不高于签名价，无除法不误杀边界小额，四入口全覆盖，ABI 不变）+ Stage3PriceFix.t.sol 14 例（167→181）；骑乘冻结摘要 Solidity 侧向量断言、GasSavings/Merkle 批入口坏腿回滚、chargeFailedSettlement 计费口径入文档 | 已合并推送（main 84248bb），未部署；推送后定向复审有条件通过、P0 确认关闭（余两条微项并入下一合约轮）；测试网切换硬前置之一已满足 |
-|  第四十二轮 | [round42-weights-gas-vault-2026-11-08.md](round42-weights-gas-vault-2026-11-08.md) | 贡献权重定版落地（合约常量 35/25/20/20 + 四线身份重映射 + 流动性线标度 bug 修复）、挂单时长×深度计量基础（纯函数层 + 离线 CLI 骑 D1/索引器）、gas 库机制设计（MakerVault 去向推荐停用另建）、chain-unknown 阻断口径修复、d97df5a 文档复审回填 | 分支 `round42-weights-gas-vault` 已开发待核验（未合并、未推送）；门禁 forge 185 / 前端 404 全过；合约常量随下一次部署生效 |
+|  第四十二轮 | [round42-weights-gas-vault-2026-11-08.md](round42-weights-gas-vault-2026-11-08.md) | 贡献权重定版落地（合约常量 35/25/20/20 + 四线身份重映射 + 流动性线标度 bug 修复）、挂单时长×深度计量基础（纯函数层 + 离线 CLI 骑 D1/索引器）、gas 库机制设计（MakerVault 去向推荐停用另建）、chain-unknown 阻断口径修复、d97df5a 文档复审回填 | 已合并推送（main 478d472）；门禁 forge 185 / 前端 404 全过；推送后两半复审已回并裁定：C/D 半经主聊天验码裁定有条件通过（其文档修正项骑乘第 43 轮块 B）、A/B/E 半有条件通过（头号 P1 经主聊天验码证伪，计量加固项登记为发奖前置）；合约常量随下一次部署生效 |
 |  第四十一轮 | [round41-crosschain-default-bridge-phase1-2026-11-08.md](round41-crosschain-default-bridge-phase1-2026-11-08.md) | 跨链默认桥第一期实现：预选默认桥（LZ/CCIP/Wormhole）+ 主场链，成交后按默认通道交付回主场链 Vault；设置级常设授权（全量开关可撤销）+ 披露版本化确认 + 一行非阻塞预估 + 三级询问绝不静默换桥 + 失败退回成交链 Vault；合约/relay/节点零改动，26 文件全在 frontend/，新增 43 例（全量 392 过） | 已合并推送（2026-11-08，与文档整理轮同批合并）；双半复审已回并裁定：桥半有条件通过（3 条 P1 待桥加固轮修复）、文档半指正的状态口径问题由第 42 轮修复；§10 测试网真实小额实测合并后补做 |
+| 第四十三轮 | [round43-matching-enablement-2026-11-08.md](round43-matching-enablement-2026-11-08.md) | 前端撮合开启前置清零：多腿 anvil 双路对账（市价吃多档/部分成交余量/陈旧腿与过期腿剪枝/腿数触顶 50+合约硬顶，五场景 32 项断言全过，生产撮合模块对节点引擎）、同价排序差异写入阶段 3 切换 runbook §7.1（口径建议标注待负责人确认）、第 42 轮复审三处文档修正骑乘（INDEX 第三节标题与第 42 轮状态、gas 库设计 immutable 误述）；生产代码零改动 | 分支 `round43-matching-enablement` 已开发待核验（未合并、未推送）；门禁：多腿对账全绿 / 前端 404 / forge 185 |
 
-## 三、分支上的设计文档（未合入 main）
+## 三、设计文档（均已合入 main；本节留分支原件指针）
 
-| 文档 | 所在分支 / worktree | 内容 | 状态 |
+| 文档 | 原始分支 / worktree | 内容 | 状态 |
 |---|---|---|---|
 | round31-mobile-skeleton-2026-11-08.md | 分支 `round31-mobile-skeleton` / `~/workspace/bite100-r31` | 第 31 轮移动端四栏骨架设计定版 + 演示图（docs/round31-assets/） | 设计定版，**已实现并上线**（见第二节第 31 轮条目，main 0adaa1c）；本节仅留分支原件指针 |
-| cross-chain-default-bridge-design-2026-11-08.md | 分支 `crosschain-default-bridge-design` / `~/workspace/bite100-xchain` | 跨链默认桥交易设计：预选默认桥、成交后自动交付、四项拍板已定版 | 设计定版；设计文档已随一期实现合并入 main，一期已合并推送（见第二节第四十一轮条目） |
+| cross-chain-default-bridge-design-2026-11-08.md | 分支 `crosschain-default-bridge-design` / `~/workspace/bite100-xchain` | 跨链默认桥交易设计：预选默认桥、成交后自动交付、四项拍板已定版 | 设计定版；设计文档已随一期实现合并入 main，一期已合并推送（见第二节第四十一轮条目）；本节仅留分支原件指针 |
 
 ## 四、docs 之外的关键文档
 
