@@ -27,7 +27,9 @@ const T_IN = '0x1111111111111111111111111111111111111111'
 const T_OUT = '0x2222222222222222222222222222222222222222'
 const TX = `0x${'cd'.repeat(32)}`
 
-function order(id: string, user: string, nonce: bigint): DecodedOrder {
+// 阶段 3 切换：DecodedOrder 新增 side（默认 1=sell，maker 口径）；
+// calldata 由 encodeFunctionData 按新 ABI 运行时构造，无旧夹具需重生成。
+function order(id: string, user: string, nonce: bigint, side = 1): DecodedOrder {
   return {
     orderId: id,
     userAddress: user,
@@ -39,13 +41,14 @@ function order(id: string, user: string, nonce: bigint): DecodedOrder {
     timestamp: 1700000000n,
     expiresAt: 1700086400n,
     nonce,
+    side,
   }
 }
 
 function batchCalldata(): string {
   const fills = [0n, 1n].map((n) => ({
-    makerOrder: { order: order(`m${n}`, MAKER, n), signature: '0x1234' as `0x${string}` },
-    takerOrder: { order: order(`t${n}`, TAKER, n), signature: '0x5678' as `0x${string}` },
+    makerOrder: { order: order(`m${n}`, MAKER, n, 1), signature: '0x1234' as `0x${string}` },
+    takerOrder: { order: order(`t${n}`, TAKER, n, 0), signature: '0x5678' as `0x${string}` },
     tokenIn: T_IN,
     tokenOut: T_OUT,
     amountIn: 100000000000000000000n,

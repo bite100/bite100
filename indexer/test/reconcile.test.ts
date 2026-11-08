@@ -9,6 +9,11 @@
  * 定位说明：这是「真实链数据回放测试」，不是 Envio Cloud 实时同步 E2E
  *（后者需要 HyperSync token / 账号，属部署阶段，见 README）。
  * 默认 npm test 不跑本文件（describe.skipIf），避免离线环境误红。
+ *
+ * 阶段 3 切换注意（块B-⑧）：下方 CASES 仍指向第 33 轮旧栈地址与旧 E2E tx，
+ * 其 calldata 是旧结构体（无 side），按新 ABI 解码必失败——阶段 3 双链
+ * 重部署后，必须先把 CASES 换成新栈地址 + 新 E2E 结算 tx 才能开
+ * RECONCILE=1；在此之前本文件仅保持类型/ABI 与新规范对齐，不实际运行。
  */
 import { describe, it, expect } from 'vitest'
 import { createTestIndexer } from 'envio'
@@ -66,6 +71,9 @@ const ORDER_DIGEST_ABI = [
           { name: 'timestamp', type: 'uint256' },
           { name: 'expiresAt', type: 'uint256' },
           { name: 'nonce', type: 'uint256' },
+          // 阶段 3 切换：Order 元组末位新增 side（uint8），与新 Settlement
+          // 的 orderDigest(Order) 入参 ABI 对齐
+          { name: 'side', type: 'uint8' },
         ],
       },
     ],

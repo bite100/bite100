@@ -20,6 +20,10 @@ const ORDER_COMPONENTS = [
   { name: 'timestamp', type: 'uint256' },
   { name: 'expiresAt', type: 'uint256' },
   { name: 'nonce', type: 'uint256' },
+  // 阶段 3 切换（块B-⑧）：Order 末位新增 side（uint8，0=buy / 1=sell），
+  // 与 docs/eip712-order-spec.md §2 的元组分量顺序逐字对齐；旧结构体
+  // calldata 按新定义解码会错位/失败，属预期（旧单全部作废，见规范 §9）。
+  { name: 'side', type: 'uint8' },
 ] as const
 
 const SIGNED_ORDER_COMPONENTS = [

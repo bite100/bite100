@@ -37,6 +37,10 @@ function order(over: Partial<DecodedOrder> = {}): DecodedOrder {
     timestamp: 1700000000n,
     expiresAt: 1700086400n,
     nonce: 0n,
+    // 阶段 3 切换：默认 side=1（sell），与规范 §6/§9 新向量口径一致
+    // （冻结向量 side=1 → digest 0xd793…cec0）；本文件 calldata 全部由
+    // encodeFunctionData 按新 ABI 运行时构造，无旧十六进制夹具需重生成。
+    side: 1,
     ...over,
   }
 }
@@ -56,8 +60,15 @@ function fill(maker: DecodedOrder, taker: DecodedOrder) {
 
 describe('orderDigest 规范向量', () => {
   it('与 docs/eip712-order-spec.md §6 期望 digest 逐字一致', () => {
+    // 阶段 3 冻结向量（side=1）：0xd793…cec0；旧向量（无 side）0x6a3c…d2f1 已作废
     expect(orderDigest(order(), 31337, ADDR.settlementVector)).toBe(
-      '0x6a3c557cec5b51cb843652a7a36b96bccc9eecc4eca030745110706cbfc8d2f1',
+      '0xd793d795036c2d1b548120e9e73ea43a608529b4a23f0d3254c263fde391cec0',
+    )
+  })
+
+  it('翻转 side 即换 digest（方向是被签名字段）', () => {
+    expect(orderDigest(order({ side: 0 }), 31337, ADDR.settlementVector)).not.toBe(
+      orderDigest(order({ side: 1 }), 31337, ADDR.settlementVector),
     )
   })
 })
@@ -75,7 +86,7 @@ describe('decodeSettleCalldata + 按序关联', () => {
     expect(fills!.length).toBe(1)
     const d = digestsForFillIndex(fills, 0, 31337, ADDR.settlementVector)
     expect(d?.makerDigest).toBe(
-      '0x6a3c557cec5b51cb843652a7a36b96bccc9eecc4eca030745110706cbfc8d2f1',
+      '0xd793d795036c2d1b548120e9e73ea43a608529b4a23f0d3254c263fde391cec0',
     )
     expect(d?.takerDigest).toBe(
       orderDigest(order({ orderId: 'taker_1', userAddress: ADDR.other }), 31337, ADDR.settlementVector),
@@ -111,6 +122,38 @@ describe('decodeSettleCalldata + 按序关联', () => {
       )
     }
     expect(digestsForFillIndex(fills, 3, 11155111, ADDR.settlementVector)).toBeNull()
+  })
+
+  it('side 随 calldata 解码保留：maker sell=1 / taker buy=0，且 digest 用解码出的 side', () => {
+    const f = fill(
+      order({ side: 1 }),
+      order({ orderId: 'taker_buy', userAddress: ADDR.other, side: 0 }),
+    )
+    const data = encodeFunctionData({
+      abi: SETTLEMENT_WRITE_ABI,
+      functionName: 'settleTrade',
+      args: [f as never],
+    })
+    const fills = decodeSettleCalldata(data)
+    expect(fills).not.toBeNull()
+    expect(fills![0].makerOrder.side).toBe(1)
+    expect(fills![0].takerOrder.side).toBe(0)
+    const d = digestsForFillIndex(fills, 0, 31337, ADDR.settlementVector)
+    expect(d?.takerDigest).toBe(
+      orderDigest(
+        order({ orderId: 'taker_buy', userAddress: ADDR.other, side: 0 }),
+        31337,
+        ADDR.settlementVector,
+      ),
+    )
+    // 若 side 被丢弃/写死，taker digest 会与 side=1 的重算撞上——断言不撞
+    expect(d?.takerDigest).not.toBe(
+      orderDigest(
+        order({ orderId: 'taker_buy', userAddress: ADDR.other, side: 1 }),
+        31337,
+        ADDR.settlementVector,
+      ),
+    )
   })
 
   it('解不出就留空：空输入/垃圾输入/未知 selector 一律 null', () => {

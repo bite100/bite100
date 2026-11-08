@@ -12,7 +12,12 @@
 import { decodeFunctionData, hashTypedData } from 'viem'
 import { SETTLEMENT_WRITE_ABI } from './settlementAbi'
 
-/** EIP-712 订单类型（统一规范唯一事实源 docs/eip712-order-spec.md §5；与前端 orderSigningTypes 同形） */
+/**
+ * EIP-712 订单类型（统一规范唯一事实源 docs/eip712-order-spec.md §2；
+ * 与前端 orderSigningTypes 同形）。
+ * 阶段 3 切换（块B-⑧）：末位新增 side（uint8，0=buy / 1=sell）——类型串
+ * 已变为 Order(...,uint256 nonce,uint8 side)，digest 随之全变，旧单作废。
+ */
 export const ORDER_TYPES = {
   Order: [
     { name: 'orderId', type: 'string' },
@@ -25,6 +30,7 @@ export const ORDER_TYPES = {
     { name: 'timestamp', type: 'uint256' },
     { name: 'expiresAt', type: 'uint256' },
     { name: 'nonce', type: 'uint256' },
+    { name: 'side', type: 'uint8' },
   ],
 } as const
 
@@ -39,6 +45,8 @@ export interface DecodedOrder {
   timestamp: bigint
   expiresAt: bigint
   nonce: bigint
+  /** 订单方向：0=buy / 1=sell（viem 对 uint8 解码为 number） */
+  side: number
 }
 
 export interface DecodedFill {
@@ -109,6 +117,9 @@ export function orderDigest(
       timestamp: order.timestamp,
       expiresAt: order.expiresAt,
       nonce: order.nonce,
+      // side 取自 calldata 解码出的签名订单本身（decodeSettleCalldata 按
+      // 新 ABI 元组定义解码），是 digest 的被签名字段，不可缺省/猜测。
+      side: order.side,
     },
   })
 }
