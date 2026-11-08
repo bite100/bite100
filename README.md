@@ -34,6 +34,8 @@
 - **跨链**：LayerZero OApp 跨链桥接
 - **P2P**：libp2p + 公共 bootstrap + DHT 发现，GossipSub 订单广播
 
+> **金库定位变更（2026-11-08）**：上文「做市金库」定位已改定为 **gas 库**——存款人资金作 gas 垫付周转金，平台只做中介、不自营做市；已部署的 ERC-4626 金库合约去向待 gas 库机制定版后另轮处理，见 `docs/market-maker-vault-design.md` 文首横幅。分成权重因本次改定重算中、尚未拍板。
+
 > **口径说明（第 32 轮补）**：订单经 P2P 网络去中心化传播、资金由用户
 > 签名自托管；但**链上结算目前是许可制**——`Settlement.settleTrade` 只
 > 接受合约 owner 或已登记的 relayer 提交（现行由运营节点的结算提交器
@@ -100,6 +102,7 @@ forge test
 
 ## 文档
 
+- [docs/INDEX.md](docs/INDEX.md) — 全部设计与轮次文档的索引（状态口径与现行地址指向以此为准）
 - [node/README.md](node/README.md) — 节点运行、M1/M2 连通、存储与中继
 - [contracts/README.md](contracts/README.md) — 合约说明与部署
 - [contracts/DEPLOY-SEPOLIA.md](contracts/DEPLOY-SEPOLIA.md) — 测试网部署

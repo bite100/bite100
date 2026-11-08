@@ -7,6 +7,8 @@
 > 已出（`docs/market-maker-vault-design.md`），待 Ren 选托管档位后落地。
 > 下文差距表为编写时点的快照，相关条目以本注记为准。
 
+> **状态标注（2026-11-08 文档整理）**：本文多处口径已继续演进，引用时以下列最新状态为准——① §2.4/§6-3 的 AMM 已于第 17 轮下线（见上注）；② 贡献奖励权重（原文 撮合 40 / 存储 25 / 流动性 20 / 中继 15）已被后续决定取代，终版曾定 50/25/15/10，又因 2026-11-08 金库改定 gas 库**重算中、尚未拍板**；③ 上注的「做市金库」定位同日被取代（金库改 gas 库、不再做市，见 `docs/market-maker-vault-design.md` 文首横幅）。本文保留为第 7 轮路线图历史记录。
+
 > 编写：2026-11-07（代码审计 + 构建验证 + Hyperliquid 公开资料研究后产出）
 > 范围：本仓库 `contracts/`（Foundry/Solidity）、`node/`（Go + libp2p）、`frontend/`（React + wagmi），已部署 Sepolia 测试网。
 > Hyperliquid 资料来源：其核心撮合引擎**闭源**，本文所有关于 Hyperliquid 的描述均来自公开来源——官方文档 docs.hyperliquid.xyz（HyperCore Overview / Order Book / Fees / Oracle / Liquidations / Protocol Vaults / Nonces and API Wallets 等页面，2026-11-07 查阅）与官方 GitHub 组织 github.com/hyperliquid-dex（`node` 仓库仅含部署指南与 GPG 签名的预编译二进制、无节点源码；`contracts` 仓库仅 Bridge2 等桥合约；Python SDK 为 MIT 开源）。不声称读过其核心源码。

@@ -1,5 +1,7 @@
 # 推送到 GitHub 并开启 Pages 部署
 
+> **⚠️ 已被取代（2026-11-08 文档整理标注）：本文件是项目早期（P2P-P2P/p2p 仓库、`D:\P2P` 路径）时期的操作指南，与现行设置不符。** 现行仓库为 **bite100/bite100**，前端部署走 `.github/workflows/frontend-pages.yml`（GitHub Actions → Pages）。本文件仅作历史留存，**勿按此操作**。
+
 按下面顺序做即可：注册/登录 GitHub → 建仓 → 本地推送 → 开启 Pages（GitHub Actions）→ 记下在线地址并更新 README。
 
 ---
