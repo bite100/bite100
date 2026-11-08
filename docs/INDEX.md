@@ -20,7 +20,8 @@
 | [nodeless-design-2026-11-07.md](nodeless-design-2026-11-07.md) | 无节点化架构设计（第 24 轮）：中继/落锁/撮合/索引四职能替代与五阶段迁移 | 设计定版，分阶段实施中（阶段 1、2 已上线；阶段 3 合约轮已合入 main、未部署，切换待 3A；阶段 3 准入门槛已于第 35 轮修订为合成压测口径、第 36 轮拆为 3A 测试网技术准入 / 3B 主网影子观察） |
 | [mainnet-launch-plan-2026-11-08.md](mainnet-launch-plan-2026-11-08.md) | 主网上线计划（2026-11-08 拍板）：第一批三链 Base 主网 / Kaia / BNB Chain（测试完毕后上线）、部署与 gas 预算口径（平台资金只有部署费 + gas 备付金；金库已改定为 gas 库、垫付金来自存款人，平台不放种子）、Kaia 价格源改接 Pyth、自发测试币互刷验证、执行门槛（桥不开通，多 DVN 硬门槛不变） | 已拍板，待执行（前提：阶段 3 合约轮 + 3A 压测等门槛全过） |
 | [hyperliquid-gap-roadmap.md](hyperliquid-gap-roadmap.md) | 与 Hyperliquid 的差距分析与改进路线图（第 7 轮），后续多轮的排期母本 | 历史记录（路线图，部分条目已被后续轮次改向） |
-| [docs-cleanup-2026-11-08.md](docs-cleanup-2026-11-08.md) | 2026-11-08 文档整理轮记录：47 篇全量盘点表、INDEX 对齐明细、取代标注与正文修订清单、疑似重复待决清单 | 现行（整理记录） |
+| [docs-cleanup-2026-11-08.md](docs-cleanup-2026-11-08.md) | 2026-11-08 文档整理轮记录：47 篇全量盘点表、INDEX 对齐明细、取代标注与正文修订清单、疑似重复待决清单 | 现行（整理记录；已合入 main d97df5a，文首有第 42 轮状态回填） |
+| [gas-vault-design-2026-11-08.md](gas-vault-design-2026-11-08.md) | gas 库机制设计：垫付周转金持有/垫付/回收、shortfall 由 gas 库吸收的记账口径、平台极端兜底边界、存款人收益与权重线对应；MakerVault 去向两案对比（推荐停用另建） | 设计定版（第 42 轮）；MakerVault 去向待 Ren 拍板 |
 
 ## 二、轮次记录（按轮次）
 
@@ -40,7 +41,7 @@
 | 16 | [round16-bridge-migration-2026-11-07.md](round16-bridge-migration-2026-11-07.md) | LayerZero 桥迁移到第 15 轮新 TKA，含真实跨链到账 E2E | 历史记录 |
 | 17 | [round17-amm-removal-market-orders-2026-11-07.md](round17-amm-removal-market-orders-2026-11-07.md) | 砍掉 AMM + 市价单落地 + 做市金库设计 + 下单一键补存 | 已上线 |
 | 19 | [round19-three-bridges-2026-11-07.md](round19-three-bridges-2026-11-07.md) | 三桥选择上线：LayerZero + CCIP + Wormhole，桥页知情选择 | 已上线 |
-| 20 | [round20-fastlane-2026-11-07.md](round20-fastlane-2026-11-07.md) | 垫资快线（LI.FI 求解器）接入为第四通道，主网功能、测试网硬阻断 | 已上线（LI.FI key 已于 2026-11-08 取得并存入保险箱、验证有效；待 GitHub 构建密钥接线后主网启用） |
+| 20 | [round20-fastlane-2026-11-07.md](round20-fastlane-2026-11-07.md) | 垫资快线（LI.FI 求解器）接入为第四通道，主网功能、测试网硬阻断 | 已上线（LI.FI key 已于 2026-11-08 取得并存入保险箱、验证有效；待 GitHub 构建密钥接线后主网启用）。注：该 key 经 `VITE_` 变量注入，会进入浏览器构建产物、任何访客可见——按**公开客户端凭据**管理，风险靠 LI.FI 侧额度/限流控制，不按服务端密钥保密 |
 | 21 | [round21-gas-rules-2026-11-07.md](round21-gas-rules-2026-11-07.md) | gas 规则落进结算层：双方对半分摊、失败归发起者 | 已上线 |
 | 22 | [round22-node-deployment-2026-11-07.md](round22-node-deployment-2026-11-07.md) | 双链节点部署上线（VM systemd + 隧道公网入口） | 已上线 |
 | 23 | [round23-oracle-reference-price-2026-11-07.md](round23-oracle-reference-price-2026-11-07.md) | Chainlink 预言机参考价层接入 | 已上线 |
@@ -64,7 +65,7 @@
 | 40 | [round40-review-followups-2026-11-08.md](round40-review-followups-2026-11-08.md) | 复审跟进批：第 38 轮 F1–F4（asIntString 数字分支安全整数化 + 边界测试、节点适配器形态校验 requireBookSides 前端/runner 共用、droppedRows 口径写明）、Envio 跟进（indexer viem 精确锁 2.57.16）、第 39 轮 F1/测试缺口/F2（tryNodes abort 短路、双挂死双 signal 断言、FetchFn 契约注释）；不重建 soak 包、3A 不受影响 | 已合并推送（main f6a8123）；推送后复审有条件通过，余下三小项已骑乘阶段 3 关闭 |
 | 阶段 3 | [stage3-contract-matching-2026-11-08.md](stage3-contract-matching-2026-11-08.md) | 无节点阶段 3：Route A（side 进 EIP-712 签名，五方同轮同步、跨语言向量一致、SIDE_UNPROVABLE 过渡体制结束）、Settlement 开放提交（模型 B）+ ERC-1271 长度门修复 + 批上限常量 50、Vault 落锁方向只从签名派生（⑥）、前端撮合开启（本地撮合骑 dualread 可成交集、批结算自提+预检剔腿、灰度开关默认关）、同单双路径 anvil 对账四项全过（三套链参数）；含切换 runbook 与第 40 轮复审三小项骑乘 | 已合并推送（main 5b9e523），未部署；前端半复审有条件通过、后端半复审 P0 已由价格修复轮关闭；双链切换待 3A（浸泡已按负责人指示停用，切换前重启跑满 7 天）结案后发令 |
 | 阶段 3 修复 | [stage3-price-fix-2026-11-08.md](stage3-price-fix-2026-11-08.md) | 阶段 3 后端复审 P0 修复：Settlement 限价强制（_accountFill 落账前按签名量交叉相乘校验双方限价，SELL 实收不低于签名价 / BUY 实付不高于签名价，无除法不误杀边界小额，四入口全覆盖，ABI 不变）+ Stage3PriceFix.t.sol 14 例（167→181）；骑乘冻结摘要 Solidity 侧向量断言、GasSavings/Merkle 批入口坏腿回滚、chargeFailedSettlement 计费口径入文档 | 已合并推送（main 84248bb），未部署；推送后定向复审有条件通过、P0 确认关闭（余两条微项并入下一合约轮）；测试网切换硬前置之一已满足 |
-|  第四十一轮 | [round41-crosschain-default-bridge-phase1-2026-11-08.md](round41-crosschain-default-bridge-phase1-2026-11-08.md) | 跨链默认桥第一期实现：预选默认桥（LZ/CCIP/Wormhole）+ 主场链，成交后按默认通道交付回主场链 Vault；设置级常设授权（全量开关可撤销）+ 披露版本化确认 + 一行非阻塞预估 + 三级询问绝不静默换桥 + 失败退回成交链 Vault；合约/relay/节点零改动，26 文件全在 frontend/，新增 43 例（全量 392 过） | 已合并推送（2026-11-08，与文档整理轮同批合并）；推送后例行复审待回；§10 测试网真实小额实测合并后补做 |
+|  第四十一轮 | [round41-crosschain-default-bridge-phase1-2026-11-08.md](round41-crosschain-default-bridge-phase1-2026-11-08.md) | 跨链默认桥第一期实现：预选默认桥（LZ/CCIP/Wormhole）+ 主场链，成交后按默认通道交付回主场链 Vault；设置级常设授权（全量开关可撤销）+ 披露版本化确认 + 一行非阻塞预估 + 三级询问绝不静默换桥 + 失败退回成交链 Vault；合约/relay/节点零改动，26 文件全在 frontend/，新增 43 例（全量 392 过） | 已合并推送（2026-11-08，与文档整理轮同批合并）；双半复审已回并裁定：桥半有条件通过（3 条 P1 待桥加固轮修复）、文档半指正的状态口径问题由第 42 轮修复；§10 测试网真实小额实测合并后补做 |
 
 ## 三、分支上的设计文档（未合入 main）
 
