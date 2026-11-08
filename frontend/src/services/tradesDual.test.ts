@@ -8,7 +8,10 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
+  TRADES_QUERY,
+  buildTradesQueryVariables,
   fetchIndexerTrades,
+  loadDualTrades,
   mergeTradeSources,
   type IndexerTrade,
   type NodeTrade,
@@ -135,5 +138,80 @@ describe('fetchIndexerTrades', () => {
     const out = await fetchIndexerTrades(11155111, 'BTC/USDT', 50, fetchFn, 'https://idx.example/graphql')
     expect(out.length).toBe(1)
     expect(out[0].tokenIn).toBe(BTC)
+  })
+})
+
+describe('第 35 轮 D5：交易对过滤下沉到 GraphQL 服务端', () => {
+  const BTC = '0x8EDa0025C245B10eA1E10c257674B794C85350f3'
+  const USDT = '0x6Ca8cb68Ee5BB15474f1cfFE07B895C974Ab9c6e'
+
+  it('查询文本在 where 内按 tokenIn/tokenOut 双向组合过滤本对，并带 offset 分页', () => {
+    expect(TRADES_QUERY).toContain('tokenIn: { _in: $base }')
+    expect(TRADES_QUERY).toContain('tokenOut: { _in: $quote }')
+    expect(TRADES_QUERY).toContain('tokenIn: { _in: $quote }')
+    expect(TRADES_QUERY).toContain('tokenOut: { _in: $base }')
+    expect(TRADES_QUERY).toContain('_or')
+    expect(TRADES_QUERY).toContain('offset: $offset')
+    expect(TRADES_QUERY).toContain('limit: $limit')
+  })
+
+  it('变量构造：地址带原样+小写双形态，limit/offset 透传', () => {
+    const v = buildTradesQueryVariables(11155111, BTC, USDT, 50, 100)
+    expect(v.chainId).toBe(11155111)
+    expect(v.limit).toBe(50)
+    expect(v.offset).toBe(100)
+    expect(v.base).toEqual([BTC, BTC.toLowerCase()])
+    expect(v.quote).toEqual([USDT, USDT.toLowerCase()])
+  })
+
+  it('fetchIndexerTrades 发出的请求体携带按对过滤变量与 offset', async () => {
+    let body: { query: string; variables: Record<string, unknown> } | null = null
+    const fetchFn = async (_url: string, init: { body: string }) => {
+      body = JSON.parse(init.body)
+      return { ok: true, status: 200, json: async () => ({ data: { Trade: [] } }) }
+    }
+    await fetchIndexerTrades(11155111, 'BTC/USDT', 25, fetchFn as never, 'https://idx.example/graphql', 50)
+    expect(body!.query).toBe(TRADES_QUERY)
+    expect(body!.variables).toMatchObject({ chainId: 11155111, limit: 25, offset: 50 })
+    expect(body!.variables.base).toEqual([BTC, BTC.toLowerCase()])
+    expect(body!.variables.quote).toEqual([USDT, USDT.toLowerCase()])
+  })
+})
+
+describe('第 35 轮 D6：loadDualTrades 两源独立失败', () => {
+  const down = () => Promise.reject(new Error('source down'))
+
+  it('节点宕机 → Envio 数据照常展示，nodeFailed 置位、unavailable 不置位', async () => {
+    const outcome = await loadDualTrades(down, async () => [idx()], BASE)
+    expect(outcome.nodeFailed).toBe(true)
+    expect(outcome.indexerFailed).toBe(false)
+    expect(outcome.unavailable).toBe(false)
+    expect(outcome.result.trades.length).toBe(1)
+    expect(outcome.result.trades[0].source).toBe('envio')
+  })
+
+  it('索引宕机 → 节点数据以「待索引」展示，indexerFailed 置位', async () => {
+    const outcome = await loadDualTrades(async () => [node()], down, BASE)
+    expect(outcome.nodeFailed).toBe(false)
+    expect(outcome.indexerFailed).toBe(true)
+    expect(outcome.unavailable).toBe(false)
+    expect(outcome.result.trades.length).toBe(1)
+    expect(outcome.result.trades[0].pendingIndex).toBe(true)
+  })
+
+  it('两源皆宕机 → 空结果 + unavailable（界面据此明示不可用）', async () => {
+    const outcome = await loadDualTrades(down, down, BASE)
+    expect(outcome.nodeFailed).toBe(true)
+    expect(outcome.indexerFailed).toBe(true)
+    expect(outcome.unavailable).toBe(true)
+    expect(outcome.result.trades.length).toBe(0)
+  })
+
+  it('两源正常 → 合并 both，失败标记全清', async () => {
+    const outcome = await loadDualTrades(async () => [node()], async () => [idx()], BASE)
+    expect(outcome.nodeFailed).toBe(false)
+    expect(outcome.indexerFailed).toBe(false)
+    expect(outcome.unavailable).toBe(false)
+    expect(outcome.result.trades[0].source).toBe('both')
   })
 })

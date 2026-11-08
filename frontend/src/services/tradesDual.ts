@@ -181,12 +181,28 @@ export function mergeTradeSources(
   return { trades: out, conflicts }
 }
 
-const TRADES_QUERY = `
-query Bit100Trades($chainId: Int!, $limit: Int!) {
+/**
+ * 第 35 轮 D5：交易对过滤下沉到 GraphQL where（旧实现只按 chainId 拉全链
+ * 最近 N 笔、再在浏览器按代币对筛——热门对会把冷门对挤出窗口，页面误显
+ * 「暂无成交」）。索引实体只有代币地址、无 pair 符号：以 (tokenIn, tokenOut)
+ * 的两个方向组合匹配本对地址集合。地址大小写双保险：Envio 落库大小写
+ * 依版本而定，变量同时带配置原样与小写两种形态（_in 集合），客户端再
+ * 保留一层精确集合校验作兜底。分页沿用本文件既有 Hasura 口径
+ * （order_by + limit + offset）。
+ */
+export const TRADES_QUERY = `
+query Bit100Trades($chainId: Int!, $limit: Int!, $offset: Int!, $base: [String!], $quote: [String!]) {
   Trade(
-    where: { chainId: { _eq: $chainId } }
+    where: {
+      chainId: { _eq: $chainId }
+      _or: [
+        { _and: [{ tokenIn: { _in: $base } }, { tokenOut: { _in: $quote } }] }
+        { _and: [{ tokenIn: { _in: $quote } }, { tokenOut: { _in: $base } }] }
+      ]
+    }
     order_by: { blockTimestamp: desc }
     limit: $limit
+    offset: $offset
   ) {
     id
     chainId
@@ -205,6 +221,71 @@ query Bit100Trades($chainId: Int!, $limit: Int!) {
   }
 }`
 
+export interface DualTradesOutcome {
+  result: MergeResult
+  /** 节点源本轮失败（Envio 数据不受影响，照常展示） */
+  nodeFailed: boolean
+  /** 索引源本轮失败（节点独有行全部标「待索引」展示） */
+  indexerFailed: boolean
+  /** 两源皆失败 → 无数据可用，界面须明示不可用而非「暂无成交」 */
+  unavailable: boolean
+}
+
+/**
+ * 第 35 轮 D6：两源独立取数、独立失败。旧实现先 await 节点、外层 catch
+ * 一把清——节点宕机时 Envio 明明有数据也被整页盖掉，与「配置索引后以
+ * 索引为权威」矛盾。本函数以 allSettled 并发取两源：任一源失败只降级
+ * 该源（失败标记随结果返回供界面明示），合并口径仍走 mergeTradeSources。
+ */
+export async function loadDualTrades(
+  fetchNode: () => Promise<NodeTrade[]>,
+  fetchIndexer: () => Promise<IndexerTrade[]>,
+  baseToken: string,
+): Promise<DualTradesOutcome> {
+  const [n, i] = await Promise.allSettled([fetchNode(), fetchIndexer()])
+  const nodeFailed = n.status === 'rejected'
+  const indexerFailed = i.status === 'rejected'
+  return {
+    result: mergeTradeSources(
+      nodeFailed ? [] : (n as PromiseFulfilledResult<NodeTrade[]>).value,
+      indexerFailed ? [] : (i as PromiseFulfilledResult<IndexerTrade[]>).value,
+      baseToken,
+    ),
+    nodeFailed,
+    indexerFailed,
+    unavailable: nodeFailed && indexerFailed,
+  }
+}
+
+export interface TradesQueryVariables {
+  chainId: number
+  limit: number
+  offset: number
+  /** base 代币地址的大小写变体集合（配置原样 + 小写） */
+  base: string[]
+  /** quote 代币地址的大小写变体集合 */
+  quote: string[]
+}
+
+const caseVariants = (addr: string): string[] => [...new Set([addr, addr.toLowerCase()])]
+
+/** 构造按对过滤的查询变量（纯函数，可单测） */
+export function buildTradesQueryVariables(
+  chainId: number,
+  baseToken: string,
+  quoteToken: string,
+  limit: number,
+  offset: number,
+): TradesQueryVariables {
+  return {
+    chainId,
+    limit,
+    offset,
+    base: caseVariants(baseToken),
+    quote: caseVariants(quoteToken),
+  }
+}
+
 export type FetchFn = (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string },
@@ -216,7 +297,8 @@ const defaultFetch: FetchFn = async (url, init) => {
 }
 
 /**
- * 拉取 Envio 成交（按当前交易对的代币集合过滤——索引实体只有代币地址，
+ * 拉取 Envio 成交：交易对过滤以 GraphQL where 服务端过滤为主（第 35 轮
+ * D5），返回后再做一层客户端精确集合校验作兜底（索引实体只有代币地址、
  * 无 pair 符号；无序集合比对，两个方向都算本对成交）。
  */
 export async function fetchIndexerTrades(
@@ -225,6 +307,7 @@ export async function fetchIndexerTrades(
   limit = 50,
   fetchFn: FetchFn = defaultFetch,
   endpoint: string = INDEXER_URL,
+  offset = 0,
 ): Promise<IndexerTrade[]> {
   if (!endpoint) return []
   const tokens = getPairTokens(chainId, pair)
@@ -232,7 +315,10 @@ export async function fetchIndexerTrades(
   const res = await fetchFn(endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ query: TRADES_QUERY, variables: { chainId, limit } }),
+    body: JSON.stringify({
+      query: TRADES_QUERY,
+      variables: buildTradesQueryVariables(chainId, tokens.base, tokens.quote, limit, offset),
+    }),
   })
   if (!res.ok) throw new Error(`indexer http ${res.status}`)
   const json = (await res.json()) as { data?: { Trade?: unknown[] } }
