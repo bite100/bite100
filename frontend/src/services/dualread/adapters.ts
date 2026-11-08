@@ -31,7 +31,11 @@ function asIntString(v: unknown): string | null {
     if (m && /^0+$/.test(m[2])) return m[1]
     return null
   }
-  if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v).toString()
+  // 数字路径与字符串路径同口径（第 40 轮，第 38 轮复审 F1）：只有安全
+  // 整数才接受；小数与超出安全整数范围的数字一律判无效返回 null——
+  // 绝不 Math.trunc 静默截断，也不带着已丢失的精度过关（此前实现用
+  // Math.trunc，数字 1.5 会被截成 "1"，与字符串 "1.5" 判无效矛盾）。
+  if (typeof v === 'number') return Number.isSafeInteger(v) ? v.toString() : null
   if (typeof v === 'bigint') return v.toString()
   return null
 }

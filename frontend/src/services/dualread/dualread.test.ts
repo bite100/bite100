@@ -664,6 +664,46 @@ describe('第 38 轮：节点定点小数 amount 解析与丢弃计数', () => {
   })
 })
 
+describe('第 40 轮：asIntString 边界口径（第 38 轮复审 F1/F2，经 toRawOrder 入口）', () => {
+  const baseRow = {
+    orderId: 'soak_1',
+    trader: TRADER,
+    pair: PAIR,
+    side: 'buy',
+    price: '2000000000000000000000',
+    filled: '0',
+    status: 'open',
+    nonce: 0,
+    createdAt: 1700000000,
+    expiresAt: 1700086400,
+    signature: '0xabc',
+  }
+
+  const accept: Array<[string, unknown, string]> = [
+    ['负数全零小数 "-123.000"', '-123.000', '-123'],
+    ['前导零全零小数 "000123.000"', '000123.000', '000123'],
+    ['带空白整数串 " 123 "（trim 后接受）', ' 123 ', '123'],
+    ['安全整数上限（数字）', Number.MAX_SAFE_INTEGER, String(Number.MAX_SAFE_INTEGER)],
+    ['超安全整数的字符串形式（原样保留，不丢精度）', '9007199254740993', '9007199254740993'],
+  ]
+  it.each(accept)('%s → 接受', (_name, amount, expected) => {
+    const o = toRawOrder({ ...baseRow, amount })
+    expect(o).not.toBeNull()
+    expect(o!.amount).toBe(expected)
+  })
+
+  const reject: Array<[string, unknown]> = [
+    ['空小数部分 "123."', '123.'],
+    ['正号 "+123"', '+123'],
+    ['非零小数字符串 "1.5"', '1.5'],
+    ['小数数字 1.5（与字符串同口径拒绝，不静默截断）', 1.5],
+    ['超安全整数（数字，已丢精度）', Number.MAX_SAFE_INTEGER + 1],
+  ]
+  it.each(reject)('%s → 整行判无效', (_name, amount) => {
+    expect(toRawOrder({ ...baseRow, amount })).toBeNull()
+  })
+})
+
 describe('链上读取器（mock transport）', () => {
   it('同区块二次快照复用缓存；部分失败 digest 进 missing', async () => {
     let multicallCalls = 0
