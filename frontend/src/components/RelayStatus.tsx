@@ -6,7 +6,7 @@
  * 最小 GraphQL 查询探活。双读影子对比区见文件后半（RELAY_MODE 非 disabled 时）。
  */
 import { useEffect, useState } from 'react'
-import { RELAY_URL, RELAY_MODE } from '../config/relay'
+import { RELAY_URL, RELAY_MODE, RELAY_MODE_REQUESTED, type RelayMode } from '../config/relay'
 import { INDEXER_URL, INDEXER_ENABLED } from '../config/indexer'
 import { useShadowMetrics } from '../hooks/useShadowMetrics'
 import type { Ratio } from '../services/dualread'
@@ -162,6 +162,39 @@ function fmtLatency(median: number | null, samples: number): string {
  * 下只观察、不影响交易页订单簿（仍为节点单读）。阶段 3 的准入线写在区尾，
  * 合成测试与真实观察分开统计——本区数字只来自真实双读轮询。
  */
+/**
+ * 双读模式徽标（第 35 轮 D8 抽成纯展示组件以便渲染测试）：
+ * 请求了 active 但有效模式仍是 shadow（未接线）时，必须明示
+ * 「正式模式尚未接线 · 当前按影子模式运行」，不许宣称合并视图展示中；
+ * 「合并视图展示中」只留给真正接线后的 active。
+ */
+export function ShadowModePill({
+  requested,
+  mode,
+}: {
+  requested: RelayMode
+  mode: RelayMode
+}) {
+  if (requested === 'active' && mode !== 'active') {
+    return <span className="relay-pill">正式模式尚未接线 · 当前按影子模式运行</span>
+  }
+  return (
+    <span className={`relay-pill ${mode === 'active' ? 'relay-ok' : ''}`}>
+      {mode === 'active' ? '合并视图展示中' : '影子模式 · 只观察'}
+    </span>
+  )
+}
+
+/** 三态模式说明（第 35 轮 D8：模式标注变更同轮带页内说明） */
+export function RelayModesExplanation() {
+  return (
+    <p className="relay-detail">
+      三种模式说明：关闭（disabled）只读节点订单簿，不做双读计算；影子（shadow）同时读节点与公告栏、逐单比对并以链上状态复核，但只观察、不影响交易页；正式（active）会把合并视图送进交易页订单簿——该模式尚未接线（无节点阶段
+      3 才实施），当前即使配置为 active，也只按影子模式运行，交易页订单簿仍为节点单读。
+    </p>
+  )
+}
+
 function ShadowSection() {
   const { mode, round, running } = useShadowMetrics()
   const m = round?.metrics ?? null
@@ -174,10 +207,9 @@ function ShadowSection() {
     <div className="relay-item relay-shadow">
       <div className="relay-item-head">
         <b>双读影子对比（无节点阶段 2）</b>
-        <span className={`relay-pill ${mode === 'active' ? 'relay-ok' : ''}`}>
-          {mode === 'active' ? '合并视图展示中' : '影子模式 · 只观察'}
-        </span>
+        <ShadowModePill requested={RELAY_MODE_REQUESTED} mode={mode} />
       </div>
+      <RelayModesExplanation />
       <p className="relay-detail">
         本区把节点订单簿与订单公告栏逐单比对：订单身份按 EIP-712
         摘要在本地重算核对（不信来源自报的摘要），状态用链上金库锁定与

@@ -19,11 +19,22 @@
 //
 // 第 34 轮 M2 加固：解析为空过防护——旧实现以单引号正则抓声明，若
 // config.ts 的引号风格变化（如改双引号）或数组被清空，正则抓到 0 条、
-// 循环不执行、检查会以「0 条一致」空过。现行口径：双引号声明直接报错；
-// 单引号声明数为 0 直接报错；任一声明解析失败直接报错；通过时声明
-// 总数 = 实际比对数。自检：`npm run check:abi:selftest`（负例为空 ABI
-// 与双引号形式）。路径可用环境变量 GOVERNANCE_ABI_CONFIG_PATH /
+// 循环不执行、检查会以「0 条一致」空过。现行口径：声明数为 0 直接
+// 报错；任一声明解析失败直接报错；通过时声明总数 = 实际比对数。
+// 自检：`npm run check:abi:selftest`。
+// 路径可用环境变量 GOVERNANCE_ABI_CONFIG_PATH /
 // GOVERNANCE_ABI_ARTIFACT_PATH 覆盖（自检用）。
+//
+// 第 35 轮 M2-R：混合引号漏检防护——M2 后实现只抓单引号并单独拒绝
+// 双引号，反引号模板字符串声明会被提取与计数对账同时漏掉（合法 TS，
+// 如数组里混入 `function proposalState(...)`）。首选过 TypeScript
+// 编译器 API 走 AST，但实测本仓库的 typescript@^7 主入口只暴露
+// version，经典 createSourceFile API 不存在，仅有 unstable/ 预览 API
+// ——CI 守卫不骑不稳定的预览 API，故按回退路线实现：块内扫描器覆盖
+// 单/双/反引号三种引号（纯字符串字面量一律计数），模板表达式
+// (${...})、转义字符、标识符/展开等非纯字符串元素一律报错，绝不
+// 静默跳过。自检新增：反引号声明、混合引号、混合中藏伪造声明
+// （漏检才会放行）、模板表达式、表达式元素五例。
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -86,22 +97,67 @@ function sigKey(s) {
   return `${s.kind} ${s.name}(${ins}) ${s.mutability} returns (${outs})`
 }
 
-// 去掉块内的 // 行注释（跟踪单引号状态，引号内的 // 不处理；本仓库
-// 的人类可读签名不含斜杠）。注释里可能出现引号，不剔除会污染声明计数。
-function stripLineComments(text) {
-  return text.split('\n').map((line) => {
-    let inQuote = false
-    for (let i = 0; i < line.length - 1; i++) {
-      if (line[i] === "'") inQuote = !inQuote
-      if (!inQuote && line[i] === '/' && line[i + 1] === '/') return line.slice(0, i)
+// 扫描 GOVERNANCE_ABI 数组块，提取全部纯字符串字面量声明（M2-R 回退
+// 路线：不用正则抓引号，逐字符扫描，引号状态/注释状态都严格跟踪）：
+// - 单引号/双引号/反引号三种字面量一律计数（混合风格不漏检）；
+// - 反引号里的 ${...} 模板表达式、任一字面量里的反斜杠转义 → 报错
+//   （本检查只认纯字面量签名，不猜表达式求值结果）；
+// - 字符串之外出现标识符/数字/展开 ... 等非标点内容 → 报错
+//   （数组元素不是纯字符串，提取口径不再适用，绝不静默跳过）；
+// - // 行注释在非字符串状态下整段跳过（注释里的引号不污染计数）。
+function scanStringLiterals(block) {
+  const literals = []
+  let i = block.indexOf('[')
+  if (i < 0) throw new Error('GOVERNANCE_ABI 数组缺少 [')
+  i += 1
+  let junk = ''
+  while (i < block.length) {
+    const ch = block[i]
+    if (ch === '/' && block[i + 1] === '/') {
+      while (i < block.length && block[i] !== '\n') i++
+      continue
     }
-    return line
-  }).join('\n')
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch
+      i++
+      let content = ''
+      let closed = false
+      while (i < block.length) {
+        const c = block[i]
+        if (c === '\\') {
+          throw new Error('GOVERNANCE_ABI 声明含反斜杠转义，本检查只认纯字符串字面量')
+        }
+        if (quote === '`' && c === '$' && block[i + 1] === '{') {
+          throw new Error('GOVERNANCE_ABI 声明含模板表达式 ${...}，本检查只认纯字符串字面量')
+        }
+        if (c === quote) {
+          closed = true
+          i++
+          break
+        }
+        content += c
+        i++
+      }
+      if (!closed) throw new Error('GOVERNANCE_ABI 字符串字面量未闭合')
+      literals.push(content)
+      continue
+    }
+    if (ch === ',' || ch === ']' || /\s/.test(ch)) {
+      i++
+      continue
+    }
+    junk += ch
+    i++
+  }
+  if (junk.trim() !== '') {
+    throw new Error(`GOVERNANCE_ABI 数组含非纯字符串元素（残留内容：${junk.trim().slice(0, 40)}），本检查拒绝静默跳过`)
+  }
+  return literals
 }
 
-// 从 config.ts 的 GOVERNANCE_ABI 数组块提取并解析全部声明（M2 加固点）：
-// 声明总数以块内引号字符串计数为准，任一环节异常都以 exit(1) 失败，
-// 绝不允许「解析到 0 条」时空过。
+// 从 config.ts 的 GOVERNANCE_ABI 数组块提取并解析全部声明（M2/M2-R
+// 加固点）：任一环节异常都以 exit(1) 失败，绝不允许「解析到 0 条」
+// 或「漏检某条」时空过。
 function extractFrontendSigs(configText) {
   const start = configText.indexOf('export const GOVERNANCE_ABI = [')
   if (start < 0) {
@@ -113,13 +169,14 @@ function extractFrontendSigs(configText) {
     console.error('config.ts 中 GOVERNANCE_ABI 数组未以 ] as const 结尾')
     process.exit(1)
   }
-  const block = stripLineComments(configText.slice(start, end))
-  const doubleQuoted = [...block.matchAll(/"([^"]+)"/g)]
-  if (doubleQuoted.length > 0) {
-    console.error(`GOVERNANCE_ABI 含 ${doubleQuoted.length} 条双引号声明，本检查只认单引号口径——引号风格变化不得让检查空过，请改回单引号或同步升级本脚本`)
+  const block = configText.slice(start, end)
+  let rawDecls
+  try {
+    rawDecls = scanStringLiterals(block)
+  } catch (e) {
+    console.error(`GOVERNANCE_ABI 提取失败：${e.message}`)
     process.exit(1)
   }
-  const rawDecls = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1])
   if (rawDecls.length === 0) {
     console.error('GOVERNANCE_ABI 解析到 0 条声明（数组为空或格式已变）——拒绝空过，检查失败')
     process.exit(1)
