@@ -83,6 +83,24 @@ POST /orders 请求体（与节点同形状）：
 不依赖多步事务；将来若要加「状态推进」类逻辑，必须沿用单语句条件 UPDATE
 （带 WHERE 的原子写）或按交易对分库分片，不要假设可以开事务慢慢算。
 
+**第 34 轮 D1 核对记录（2026-11-08，只核对落档，不重构）**：
+
+- **查询计数口径**：`db.batch()` 按**一次查询**计数（一次往返批量执行）；
+  现行代码未用 batch——写入均为单语句（`INSERT OR IGNORE`、按 digest 的
+  条件 UPDATE、scheduled 的一条 DELETE），将来引入批量写入时按此口径估算
+  额度，不要按语句数重复计数；
+- **唯一约束**：`(chainId, settlementAddress, digest)` 的唯一性由
+  `digest TEXT PRIMARY KEY` 天然承载——digest 按链域（chainId +
+  verifyingContract=Settlement）计算，不同链/不同 Settlement 的同一订单
+  必然不同 digest，不需要再加复合唯一索引；
+- **查询索引**：`(chain_id, pair, expires_at)` 支撑订单簿/订单列表、
+  `(chain_id, user_address, expires_at)` 支撑「我的订单」、
+  `(chain_id, order_id)` 支撑按单号查、`(expires_at)` 支撑清理扫描
+  （`migrations/0001_init.sql`，与 §2 上文一致）；
+- **过期清理策略**：双层——读路径一律 `expires_at > now` 过滤（过期单
+  立即不可见）；`scheduled` cron（wrangler.toml 每 15 分钟）物理删除
+  过期超过 1 天的行，只控表体积，不承担下架职责。
+
 ---
 
 ## 3. 验签（双路，与节点两段式同口径）
@@ -178,6 +196,12 @@ ERC-1271 回退的真实链上只读冒烟（`node scripts/verify-1271-live.mjs`
 isValidSignature」回退路径真实打通； mock 版双路逻辑另有 5 个单元用例覆盖
 （通过/拒绝/RPC 出错 fail-closed/EOA 不触 RPC/无 RPC 时合约单被拒）。
 
+**第 34 轮复跑（2026-11-08）**：当前树重跑 `bash scripts/run-demo.sh`
+**9/9 全过**（digest 与第 30 轮不同属正常——签名域已换第 33 轮
+Settlement）；`verify-1271-live.mjs` 的 MakerVault/Settlement 常量同步
+更新到第 33 轮栈后复跑，仍返回布尔裁决 `false`，回退路径对现行栈成立。
+复跑前修的配置漂移见 §7「第 34 轮复核」。
+
 ---
 
 ## 6. 前端使用说明（双发）
@@ -230,7 +254,18 @@ npm test          # unit（node 环境，20 个）+ workers（workerd+本地 D1�
 npm run typecheck # tsc --noEmit
 ```
 
-前端门禁在 `frontend/`：`npm test`（基线 169 + 双发新增 9 = 178 全绿）。
+前端门禁在 `frontend/`：`npm test`（第 34 轮复核时 263 个全绿）。
+
+**第 34 轮复核（2026-11-08，当前树）**：`npm ci` 后测试 32/32 全绿
+（unit 20 + workers 12），wrangler 实装版本 4.158.0（package.json 声明
+^4.45.0）——runbook 里的 `wrangler d1 create / migrations apply /
+secret put / deploy / tail / dev` 命令在该版本下口径无漂移，无需改命令。
+本地演示复跑时发现并修复一处**配置漂移**：`src/config.ts` 的内置
+Settlement 地址停在第 30 轮、`scripts/demo.mjs` 与
+`scripts/verify-1271-live.mjs` 停在第 27 轮，与第 33 轮现行栈三方不一
+导致演示验签失败；已统一更新到第 33 轮地址（见 src/config.ts 头注），
+演示恢复 9/9 全过、1271 实链冒烟仍给出布尔裁决（false，符合预期）。
+教训：每次合约重部署，relay 内置配置与脚本常量必须同轮核对。
 
 ### 部署（Cloudflare，需 Ren 的账号侧动作）
 
@@ -252,23 +287,33 @@ npm run typecheck # tsc --noEmit
    「Account ID」。把凭据交给执行方的方式：设置环境变量
    `CLOUDFLARE_API_TOKEN=<token>` 与 `CLOUDFLARE_ACCOUNT_ID=<account id>`
   （或由 Ren 本人在终端跑下面命令）。
-4. **建 D1 并回填 id**：
+4. **凭据权限复核**（第 34 轮补，部署前逐项打勾，任一不符先修再部署）：
+   - token 是第 2 步的**限定 Custom token**，作用域仅限目标账号，且权限
+     不超过 Workers Scripts Edit + D1 Edit（+ 可选 Workers Tail Read）；
+     **绝不用 Global API Key** 代替；
+   - token 与 Account ID 只经环境变量/Secure Vault 交接，**不写入 Git、
+     不进前端 env（VITE_* 会打进公开构建产物）、不写进仓库任何文件**；
+   - 部署完成后查一遍构建/部署日志，确认没有把 token 或邮差密钥打进
+     日志（`wrangler tail` 与 dashboard 的构建日志各扫一眼）；
+   - token 视为可撤销凭据：泄露或人员变动时在 dashboard 直接 Revoke
+     并按第 2 步重建、重跑第 5–6 步轮换，不改任何代码。
+5. **建 D1 并回填 id**：
    ```bash
    cd relay
    npx wrangler d1 create bit100-relay-orders
    # 把输出的 database_id 填回 wrangler.toml 的 [[d1_databases]] database_id
    ```
-5. **跑 migration + 部署**：
+6. **跑 migration + 部署**：
    ```bash
    npm run db:migrate:remote   # wrangler d1 migrations apply --remote
    npx wrangler secret put NOSTR_POSTMAN_SECRET_HEX   # 粘贴邮差私钥（hex/nsec），不要写进任何文件
    npm run deploy              # wrangler deploy
    ```
-6. **验收**：部署输出 `https://bit100-relay.<子域>.workers.dev`，
+7. **验收**：部署输出 `https://bit100-relay.<子域>.workers.dev`，
    `curl <url>/health` 应回 `{"ok":true,"db":"ok"}`；再用
    `RELAY_URL=<url> node scripts/demo.mjs` 跑一遍全链路（mock 中继那步会
    因 NOSTR_RELAYS 指向生产默认公共中继而走真实镜像，观察 event id 回填）。
-7. **前端开启副发**：按 §6 设置 `VITE_RELAY_URL` 重新构建发布前端。
+8. **前端开启副发**：按 §6 设置 `VITE_RELAY_URL` 重新构建发布前端。
 
 日常运维：`npx wrangler tail` 看实时日志（镜像失败是 warn 级、属预期噪音，
 重点看 5xx 与 `[relay] chain config error`）；改 Settlement 地址优先用

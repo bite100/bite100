@@ -21,6 +21,8 @@
 | chainId | 部署所在链（Sepolia = 11155111；本地 anvil = 31337） |
 | verifyingContract | Settlement 合约地址（Sepolia = `0x9f0636839b6699d530F954F87B939DA6f56c9890`；Base Sepolia = `0x230887F48960E29066d9D3F593cB68F73Adccc85`；第 27 轮起，旧地址 Sepolia `0x549690D6…` / Base `0x6291E0F2…` 已取代） |
 
+> **历史地址提示（第 34 轮注）**：本表及 §8 中的 Settlement 地址为**第 27 轮的历史地址**，仅用于说明域的构成与轮次演变，现行部署早已被后续轮次取代。**现行地址以最新轮次文档为准**（见 `docs/INDEX.md` 的现行部署记录；第 33 轮栈见 `docs/round33-hardening-2026-11-08.md`）。任何实现（前端/节点/中继/索引器）都不得从本文抄取地址，必须从当轮部署记录取值——中继就曾因内置了旧轮次地址导致验签失败（第 34 轮修复）。
+
 合约侧在运行时以 `block.chainid` 与 `address(this)` 计算，天然绑定部署实例；
 前端/节点侧由链配置提供（节点可用 `match.SetDomain` 覆盖，用于本地链）。
 
@@ -155,7 +157,8 @@ reason, gasUsedClaimed)`，由结算调用方（owner/治理/白名单 relayer�
 - **签名域不变**：仍用 §1 的域（name `比特100`、version `1`、chainId、
   verifyingContract = 当前 Settlement 地址）。合约用户不改变域参数；
   Settlement 换地址时域随之切换（第 27 轮：Sepolia
-  `0x9f063683…`、Base Sepolia `0x230887F4…`）。
+  `0x9f063683…`、Base Sepolia `0x230887F4…`——均为历史地址，现行地址
+  以最新轮次文档为准，见 §1 的历史地址提示）。
 - **链上校验（Settlement.verifyOrderSignature）**：先走 EOA `ecrecover`
   快速路径；失败且 `userAddress` 有代码时，走 ERC-1271 回退——
   `SignatureChecker.isValidSignatureNow(userAddress, digest, signature)`

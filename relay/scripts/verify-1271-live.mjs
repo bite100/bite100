@@ -10,8 +10,8 @@ import { createPublicClient, http } from 'viem'
 import { sepolia } from 'viem/chains'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 
-const VAULT = '0xEFD02ae9E90C6d515299953A41c4788F2FceC09f' // Sepolia MakerVault（第 27 轮）
-const SETTLEMENT = '0x9f0636839b6699d530F954F87B939DA6f56c9890'
+const VAULT = '0x41c0f50f9Ff4D895eb33C1590B6DEDCa6C06857a' // Sepolia MakerVault（第 33 轮现行栈，第 34 轮更新）
+const SETTLEMENT = '0xa3F8cBCDc1533299D37836ea80d5004FF59f9094' // Sepolia Settlement（第 33 轮现行栈）
 const BTC = '0x8EDa0025C245B10eA1E10c257674B794C85350f3'
 const USDT = '0x6Ca8cb68Ee5BB15474f1cfFE07B895C974Ab9c6e'
 
