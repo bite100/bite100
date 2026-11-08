@@ -33,3 +33,6 @@ frontend/scripts/soak/dist/
 
 # 第 42 轮挂单计量打包产物
 frontend/scripts/posting-meter/dist/
+
+# 第 43 轮阶段 3 双路 E2E 打包产物
+frontend/scripts/stage3-e2e/dist/
