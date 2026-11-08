@@ -217,8 +217,14 @@ export async function executeFrontendMatch(
   }
 
   // 6) 自提批结算（整批原子；失败 gas 由提交者自担，与发起者自担口径一致）
+  // gasLimit 显式加 25% 缓冲：块 D 对照实测 ethers/钱包的 estimateGas 对
+  // 本批结算存在低估（anvil 上静态模拟通过、按估算值发送却 OOG 回滚），
+  // 不把估算值当上限用。
   try {
-    const tx = await settlement.settleTradesBatch(outcome.kept)
+    const estimated = await settlement.settleTradesBatch.estimateGas(outcome.kept)
+    const tx = await settlement.settleTradesBatch(outcome.kept, {
+      gasLimit: (estimated * 125n) / 100n,
+    })
     const receipt = await tx.wait()
     const keptQty = outcome.kept.reduce(
       (acc, f) => acc + (f.makerOrder.order.side === 1n ? f.amountIn : f.amountOut),
