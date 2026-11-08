@@ -3,8 +3,10 @@
  * - page 形态：「行情」一级页（搜索 / 全部·自选·持有 / 可排序列），点行 → 带交易对跳交易页；
  * - picker 形态：交易页点交易对名打开的选对页（返回头 + 点行即选中返回）。
  *
- * 价格口径（设计 §3.3 写死）：最新价 = 本所最近成交（usePairStats，与交易页同源）；
- * 无成交显示「暂无成交」、涨跌块灰显「--」；价格下方 $ 小字仅在 Chainlink 喂价可用时显示。
+ * 价格口径（设计 §3.3 + 第 34 轮修订）：最新价 = 本所最近成交（usePairStats，
+ * 与交易页同源）；无成交时价格位改显 Chainlink 参考价并标注「参考价」（明确不是
+ * 成交价），参考价也取不到才显示「暂无成交」；涨跌块无成交灰显「--」、成交额
+ * 占位「—」不变。有成交行价格下方 $ 小字仍是 Chainlink 参考价，口径一致。
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Contract, JsonRpcProvider } from 'ethers'
@@ -183,10 +185,48 @@ export function MarketsList({ chainId, account, mode, onSelectPair, onBack }: Ma
         <p className="markets-note">还没有自选，点任意一行右侧的 ☆ 即可收藏。</p>
       )}
       <p className="markets-note">
-        最新价与 24 小时涨跌只按本站成交计算；没有成交过的交易对显示「暂无成交」。价格下方 $ 数字是 Chainlink
+        最新价与 24 小时涨跌只按本站成交计算；没有成交过的交易对，价格位会显示 Chainlink
+        参考价并标注「参考价」，参考价也取不到时才显示「暂无成交」。有成交时价格下方 $ 数字同样是 Chainlink
         参考价（美元），仅供参考，不是本站成交价。
       </p>
     </div>
+  )
+}
+
+/**
+ * 行情行价格格（三态，第 34 轮抽出以便单测）：
+ * - 有成交：主价 = 本所最近成交价；Chainlink 参考价以 $ 小字附在下方；
+ * - 无成交但有参考价：价格位显示参考价（$ 口径与小字一致）并标注「参考价」，
+ *   明确不是成交价（成交额与涨跌仍为占位）；
+ * - 无成交且无参考价：显示「暂无成交」。
+ */
+export function MarketPriceCell({
+  lastPrice,
+  refUsd,
+}: {
+  lastPrice: number | null
+  refUsd: number | null
+}) {
+  if (lastPrice !== null) {
+    return (
+      <span className="markets-price">
+        <span className="num">{fmtMarketPrice(lastPrice)}</span>
+        {refUsd !== null && <span className="markets-ref num">${fmtMarketPrice(refUsd)}</span>}
+      </span>
+    )
+  }
+  if (refUsd !== null) {
+    return (
+      <span className="markets-price">
+        <span className="num">${fmtMarketPrice(refUsd)}</span>
+        <span className="markets-reftag">参考价</span>
+      </span>
+    )
+  }
+  return (
+    <span className="markets-price">
+      <span className="markets-notrade">暂无成交</span>
+    </span>
   )
 }
 
@@ -267,16 +307,7 @@ function MarketRows(props: {
                 {meta.name} · 成交额 {r.volumeQuote !== null ? fmtCompactAmount(r.volumeQuote) : '—'}
               </span>
             </span>
-            <span className="markets-price">
-              {r.lastPrice !== null ? (
-                <>
-                  <span className="num">{fmtMarketPrice(r.lastPrice)}</span>
-                  {r.refUsd !== null && <span className="markets-ref num">${fmtMarketPrice(r.refUsd)}</span>}
-                </>
-              ) : (
-                <span className="markets-notrade">暂无成交</span>
-              )}
-            </span>
+            <MarketPriceCell lastPrice={r.lastPrice} refUsd={r.refUsd} />
             <span
               className={
                 'markets-chg num ' +

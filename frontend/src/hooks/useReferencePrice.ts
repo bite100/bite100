@@ -3,7 +3,10 @@
  * - 链与下单面板的合约地址口径一致（config.ts 的静态 CHAIN_ID），喂价经该链公开 RPC 直读，
  *   不依赖钱包连接（未连接钱包也能看参考价）；
  * - 喂价读数缓存 30 秒：盘口高频刷新不会反复打 RPC；
- * - 每 60 秒重估一次，让「数据过期」判定随时间流逝自动生效。
+ * - 每 30 秒重估一次（第 34 轮由 60 秒缩短），让「数据过期」判定随时间流逝
+ *   及时生效；缓存仍为 30 秒，实际读链最快 30 秒一次，不更激进——
+ *   Sepolia 测试网喂价约每小时才更新一次（实测 ETH/USD 距上次更新约
+ *   50 分钟），勤读无益。
  */
 import { useEffect, useRef, useState } from 'react'
 import { CHAIN_ID } from '../config'
@@ -16,7 +19,7 @@ import {
 import type { MarketBookLevel } from '../components/dashboard/marketOrder'
 
 const FEED_CACHE_MS = 30_000
-const REEVALUATE_MS = 60_000
+const REEVALUATE_MS = 30_000
 
 export type UseReferencePriceResult = ReferencePriceResult | { status: 'loading' }
 

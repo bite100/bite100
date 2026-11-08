@@ -177,3 +177,10 @@
   padding: 18px 2px;
   margin: 0;
 }
+/* 第 34 轮：无成交行价格位的「参考价」标注（与 .markets-ref 小字同层级） */
+.markets-reftag {
+  display: block;
+  font-size: 11px;
+  color: var(--b100-text-3);
+  margin-top: 2px;
+}
