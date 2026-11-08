@@ -176,6 +176,19 @@ function scanStringLiterals(block) {
 // 'bytes32[] calldata proof' 不计深度）。只有深度归零的 ']' 才是
 // 数组结尾；注释里的 '] as const' 字样、字符串内的 ']' 都不算。
 // 返回 ']' 下标；扫描到文本末尾仍未归零返回 -1。
+// 第 37 轮词法边界：findArrayEnd 不识别正则字面量（ECMAScript 的正
+// 则识别依赖语法上下文，逐字符扫描无法可靠区分除法与正则起始），
+// 形如 ${/}/} 的模板表达式内 } 会被误判为 ${} 结束——修复路线不是
+// 补一个假的正则词法器，而是把静默误判改成显式失败：数组区域内
+// 只要出现模板表达式 ${，立即抛出具名错误（TPL_EXPR）；动态表达式
+// 声明本来就会被 scanStringLiterals 拒绝，语义一致。正则字样若出
+// 现在普通字符串字面量内部，字符串帧整体跳过，不受影响（自检证明）。
+// 同轮审计其余静默路径：未闭合的字符串/注释/模板在 EOF 只会让扫描
+// 深度不归零并返回 -1，调用方已 exit(1) 报错，属大声失败，保留。
+class TemplateExpressionInAbiError extends Error {}
+const TPL_EXPR_MSG =
+  'GOVERNANCE_ABI 数组内出现模板表达式 ${...}：本检查不解析动态表达式（正则字面量等词法边界无法逐字符可靠判定），请改写为纯字符串字面量声明'
+
 function findArrayEnd(text, from) {
   let i = text.indexOf('[', from)
   if (i < 0) return -1
@@ -218,9 +231,9 @@ function findArrayEnd(text, from) {
         continue
       }
       if (ch === '$' && nx === '{') {
-        stack.push({ kind: 'code', tplExpr: true, braces: 0 })
-        i += 2
-        continue
+        // 第 37 轮：模板表达式一律显式失败，不再尝试逐字符解析
+        // （正则字面量等边界无法可靠判定，见 findArrayEnd 上方注释）。
+        throw new TemplateExpressionInAbiError(TPL_EXPR_MSG)
       }
       i++
       continue
@@ -283,7 +296,17 @@ function extractFrontendSigs(configText) {
     console.error('config.ts 中找不到 GOVERNANCE_ABI')
     process.exit(2)
   }
-  const end = findArrayEnd(configText, start)
+  const end = (() => {
+    try {
+      return findArrayEnd(configText, start)
+    } catch (e) {
+      if (e instanceof TemplateExpressionInAbiError) {
+        console.error(e.message)
+        process.exit(1)
+      }
+      throw e
+    }
+  })()
   if (end < 0) {
     console.error('config.ts 中 GOVERNANCE_ABI 数组结尾 ] 未找到（词法扫描未归零）')
     process.exit(1)

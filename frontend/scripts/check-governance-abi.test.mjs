@@ -93,6 +93,16 @@ const commentForgedFixtures = {
     `export const GOVERNANCE_ABI = [\n  '${SIG_COUNT}',\n  /* ] as const */\n  '${SIG_FORGED}',\n] as const\n`,
 }
 
+// 第 37 轮词法边界夹具：模板表达式 ${/}/} 必被具名错误拦下（负例，
+// 用桩件即可——findArrayEnd 阶段即失败）；普通字符串内的正则字样
+// 必过（正例，需真实产物比对）；未闭合模板必失败（EOF 扫描不归零）。
+const tplRegexExprFixture =
+  'export const GOVERNANCE_ABI = [\n  `function x() ${/}/.test(y)}`,\n] as const\n'
+const unterminatedTplFixture =
+  'export const GOVERNANCE_ABI = [\n  `function proposalCount() view returns (uint256),\n] as const\n'
+const regexInStringFixture =
+  `export const GOVERNANCE_ABI = [\n  '${SIG_COUNT}', // pattern /}/ inside a plain string is inert: '/}/'\n] as const\n`
+
 function runChecker(configPath, artifactPath) {
   return spawnSync(process.execPath, [checker], {
     env: {
@@ -148,6 +158,9 @@ function expectPassCount(name, content, n) {
 for (const [name, content] of Object.entries(mustFailFixtures)) {
   expectFail(name, content, stubArtifact)
 }
+// 第 37 轮：模板表达式（含正则字样 ${/}/}）与未闭合模板——提取阶段即失败，桩件足够
+expectFail('tplRegexExpr', tplRegexExprFixture, stubArtifact)
+expectFail('unterminatedTpl', unterminatedTplFixture, stubArtifact)
 
 if (hasRealArtifact) {
   expectFail('mixedBogus', mixedBogus, realArtifact)
@@ -160,6 +173,8 @@ if (hasRealArtifact) {
   for (const [name, content] of Object.entries(commentForgedFixtures)) {
     expectFail(name, content, realArtifact)
   }
+  // 第 37 轮：普通字符串字面量内的正则字样不触发模板表达式失败
+  expectPass('regexInString', regexInStringFixture)
   const r = runChecker(realConfig, realArtifact)
   if (r.status !== 0) {
     failed++
