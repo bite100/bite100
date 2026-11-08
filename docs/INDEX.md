@@ -17,7 +17,7 @@
 | [market-orders.md](market-orders.md) | 市价单设计：签名限价保护 + 无签名市价标记、未成交余量自动取消（第 17 轮 Part B） | 已上线 |
 | [market-maker-vault-design.md](market-maker-vault-design.md) | 做市金库设计（第 17 轮 Part C），第 27 轮按此实现 Tier 2 合约金库 | 已上线（设计原件） |
 | [bridge-abstraction.md](bridge-abstraction.md) | 桥抽象层设计：多桥统一接口与选桥口径，第 19/20 轮实现的依据 | 已上线（设计原件） |
-| [nodeless-design-2026-11-07.md](nodeless-design-2026-11-07.md) | 无节点化架构设计（第 24 轮）：中继/落锁/撮合/索引四职能替代与五阶段迁移 | 设计定版，分阶段实施中（阶段 1 已上线） |
+| [nodeless-design-2026-11-07.md](nodeless-design-2026-11-07.md) | 无节点化架构设计（第 24 轮）：中继/落锁/撮合/索引四职能替代与五阶段迁移 | 设计定版，分阶段实施中（阶段 1 已上线；阶段 2 见第 34 轮文档，代码完成待部署观察） |
 | [hyperliquid-gap-roadmap.md](hyperliquid-gap-roadmap.md) | 与 Hyperliquid 的差距分析与改进路线图（第 7 轮），后续多轮的排期母本 | 历史记录（路线图，部分条目已被后续轮次改向） |
 
 ## 二、轮次记录（按轮次）
@@ -53,6 +53,7 @@
 | 31 | [round31-mobile-skeleton-2026-11-08.md](round31-mobile-skeleton-2026-11-08.md) | 移动端骨架重构实现（四栏导航、行情一级页、资产/金库子页等），设计原件见第三节 | 已上线 |
 | 32 | [round32-fixes-2026-11-08.md](round32-fixes-2026-11-08.md) | ChatGPT 审查整改三批：文档清理、签名缓存/满员/DHT/治理 ABI/Vault 记账修复、双链重部署、启用前门禁 | 历史记录（地址已被第 33 轮取代） |
 | 33 | [round33-hardening-2026-11-08.md](round33-hardening-2026-11-08.md) | 安全加固：Vault 重入保护（N1）、订单簿写入路径统一（N2/N3）、NodeRegistry 钱包占用（N4）、双链重部署（**现行合约地址在此**）、门禁补强、CI/ABI 对齐 | 已上线 |
+| 34 | [round34-nodeless-stage2-2026-11-08.md](round34-nodeless-stage2-2026-11-08.md) | 无节点阶段 2：双读基础设施 + 影子指标（阶段 3 准入线）、Envio 索引器 + 成交双源、中继就绪核对与 Settlement 权限事实（阶段 3 定 B 开放提交）；附 M1/M2 修复与行情页无成交行参考价修复 | 本地完成，待合并推送（中继/索引器仍待部署） |
 
 ## 三、分支上的设计文档（未合入 main）
 
