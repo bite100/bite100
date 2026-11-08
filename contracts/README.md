@@ -5,7 +5,7 @@
 跨链桥。现行双测试网技术栈（Vault / Settlement / MakerVault）与地址以
 [`docs/round30-nodeless-stage1-2026-11-08.md`](../docs/round30-nodeless-stage1-2026-11-08.md)
 与 `docs/round30-l2-legb-2026-11-08.md` 为准（第 32 轮因 Vault 记账修复
-再次换栈后以 `docs/round32-fixes-2026-11-08.md` 为准）。
+再次换栈后以 `docs/round32-fixes-2026-11-08.md` 为准；第 33 轮因 Vault 重入加固再次换栈，现行以 `docs/round33-hardening-2026-11-08.md` §4 为准）。
 
 > 历史注记：本文件早期版本描述的「Phase 1 + AMM 池」结构已不存在——
 > AMM 已于第 17 轮移除（合约文件已删除，流动性走订单簿 + 做市金库），
@@ -62,10 +62,10 @@ contracts/
 | **MakerVault** | ERC-4626 做市金库：存款自动进入交易 Vault 做市，份额按 NAV 计价；登记签名者以金库名义（ERC-1271）签单 |
 | **FeeDistributor** | 接收手续费，设置 recipients 与比例，claim 领取 |
 | **ContributorReward** | 双周周期贡献奖励：节点提交 ECDSA 签名的贡献证明，按贡献分占比发放该周期奖励池 |
-| **NodeRewards** | 主网上线激励：devPoints/nodePoints 分配与统一领取。**启用前门禁见 `docs/round32-fixes-2026-11-08.md`「启用前门禁」一节（nodeId 唯一性/真实性校验未落地前不得接入奖励发放；现行 Settlement 的 nodeRewards 指针双链均为零、未启用）** |
+| **NodeRewards** | 主网上线激励：devPoints/nodePoints 分配与统一领取。**启用前门禁见 `docs/round33-hardening-2026-11-08.md` §7（承接第 32 轮口径并补强：N4 钱包占用一致性已在第 33 轮修复，nodeId 唯一性接入与贡献验证未落地前不得接入奖励发放；现行 Settlement 的 nodeRewards 指针双链均为零、未启用）** |
 | **NodeRegistry** | 节点 ID 与奖励钱包的绑定注册表（防作弊、可验证） |
 | **OrderNonceManager** | 管理每个用户的订单 nonce，防止订单重放 |
-| **Governance / GovernanceExtended** | 提案投票（活跃集 = 近 2 周有贡献地址的 Merkle 集，7 天投票 + 2 天时间锁）与多步提案。**接线前门禁见 `docs/round32-fixes-2026-11-08.md`「启用前门禁」一节（活跃集现由提案人自填、未与链上快照绑定；把任何核心合约 owner 交给 Governance 之前必修，现行技术栈 owner 为部署者、Governance 未接线）** |
+| **Governance / GovernanceExtended** | 提案投票（活跃集 = 近 2 周有贡献地址的 Merkle 集，7 天投票 + 2 天时间锁）与多步提案。**接线前门禁见 `docs/round33-hardening-2026-11-08.md` §7（承接第 32 轮口径并补强：NodeRegistry 不记录贡献，选民集门禁须含「可审计的贡献记录与周期快照机制——快照生成者、快照区块、选民资格与 Merkle 根绑定关系」；把任何核心合约 owner 交给 Governance 之前必修，现行技术栈 owner 为部署者、Governance 未接线）** |
 | **TokenRegistry / ChainConfig** | 可交易代币白名单 / 支持的流通链配置，仅 governance 可增删 |
 | **CrossChainBridge** | LayerZero V2 OApp 跨链桥（源链锁定、目标链解锁，扣桥费）；另有 CCIP / Wormhole 通道（官方组件 + WrappedTKA 胶水） |
 | **WrappedTKA** | TKA 的 1:1 包装代币，作为 CCIP / Wormhole 桥的载体代币 |
@@ -82,7 +82,7 @@ forge test        # 注意：勿并发跑两个 forge 进程（共享 out/cache 
 
 现行技术栈的部署与地址见 `docs/round30-nodeless-stage1-2026-11-08.md` /
 `docs/round30-l2-legb-2026-11-08.md`（第 32 轮换栈后见
-`docs/round32-fixes-2026-11-08.md`）。部署脚本为 `script/DeployL2.s.sol`
+`docs/round32-fixes-2026-11-08.md`，第 33 轮换栈后见 `docs/round33-hardening-2026-11-08.md`）。现行部署脚本为 `script/DeployR33.s.sol`
 （一次广播完成 Vault + Settlement + MakerVault 三件套并从旧 Settlement
 复制配置，ChainGuard 按 `TARGET_CHAIN_ID` 护栏）。
 
