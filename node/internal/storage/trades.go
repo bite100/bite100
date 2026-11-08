@@ -10,6 +10,11 @@ import (
 
 // SignedOrder 与合约 Settlement.SignedOrder 对齐的签名订单（EIP-712 统一规范，见 docs/eip712-order-spec.md）。
 // AmountIn/AmountOut/Price 为最小单位整数的十进制字符串（Price 为 1e18 定点缩放）。
+// Side 为阶段 3 新增的签名字段（uint8，置于结构末尾）：0=buy、1=sell，与订单簿
+// Order.Side 字符串一一对应（match.BuildSignedOrder 负责映射）；非法值在验签/
+// 接单路径上 fail-closed 拒绝。注意：阶段 3 之前落库的 trades.maker_order/
+// taker_order JSON 不含 side 字段，反序列化时 Side 恒为零值 0——旧单口径见
+// docs/eip712-order-spec.md §9（旧单全部作废、切换日清理），不得据此结算旧单。
 type SignedOrder struct {
 	OrderID     string `json:"orderId"`
 	UserAddress string `json:"userAddress"`
@@ -21,6 +26,7 @@ type SignedOrder struct {
 	Timestamp   int64  `json:"timestamp"`
 	ExpiresAt   int64  `json:"expiresAt"`
 	Nonce       int64  `json:"nonce"`
+	Side        uint8  `json:"side"`
 	Signature   string `json:"signature"`
 }
 
