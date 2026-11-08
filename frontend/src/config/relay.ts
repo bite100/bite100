@@ -26,3 +26,23 @@ export const RELAY_DUAL_SEND_ENABLED: boolean =
 export function isRelayDualSendActive(): boolean {
   return RELAY_DUAL_SEND_ENABLED && RELAY_URL !== ''
 }
+
+/**
+ * 第 34 轮（无节点阶段 2）双读三态模式：
+ * - disabled：生产订单簿只读节点（现状），不拉公告栏、不算双读。
+ * - shadow：拉公告栏与节点双读、算合并视图与影子指标供观察，
+ *   生产订单簿仍只展示节点数据，行为零变化。
+ * - active：合并视图（经链上状态机过滤后）进入展示。
+ * 缺省 disabled；VITE_RELAY_URL 为空时强制 disabled（无公告栏可读）。
+ * 本轮交付后生产仍置于 disabled/shadow 语义，不得默认 active。
+ * 环境变量：VITE_RELAY_MODE = disabled / shadow / active。
+ */
+export type RelayMode = 'disabled' | 'shadow' | 'active'
+
+export function parseRelayMode(rawMode: unknown, relayUrl: string): RelayMode {
+  if (!relayUrl) return 'disabled'
+  const raw = String(rawMode ?? '').trim().toLowerCase()
+  return raw === 'shadow' || raw === 'active' ? raw : 'disabled'
+}
+
+export const RELAY_MODE: RelayMode = parseRelayMode(import.meta.env.VITE_RELAY_MODE, RELAY_URL)
