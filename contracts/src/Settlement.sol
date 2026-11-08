@@ -36,6 +36,9 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     uint256 public maxGasReimbursePerTrade;
     
     /// @notice Relayer 限流：每个 relayer 地址在时间窗口内的最大调用次数
+    /// @dev 阶段 3 提交者模型 B 后结算路径不再限流（提交开放、滥用靠验签/落锁/
+    /// 累计记账与 revert 自担 gas 约束）；本组状态与信誉机制保留，仅作
+    /// chargeFailedSettlement 申报角色的治理记录与 ABI 兼容，不再有结算路径读取。
     uint256 public relayerRateLimitWindow = 1 hours;
     uint256 public relayerRateLimitMaxCalls = 1000;
     mapping(address => mapping(uint256 => uint256)) private relayerCallCounts; // relayer => timeWindow => count
@@ -66,6 +69,12 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     uint16 public gasDeductCapBps = 1000;
     /// @notice gasDeductCapBps 硬顶：50%
     uint16 public constant MAX_GAS_DEDUCT_CAP_BPS = 5000;
+    /// @notice 批量结算的批大小硬顶（阶段 3 由三处内联字面量收敛为单一常量）：
+    /// 单腿结算是全合约最重的执行路径（双边划转 + 手续费 + gas 补扣），实测量级
+    /// 约 20–30 万 gas/腿，50 腿约 1000–1500 万 gas，稳在常见 3000 万区块上限的
+    /// 一半以内并留足余量；前端市价扫簿的档位上限与本常量对齐（提交层可更小、
+    /// 不得更大）。整批单交易执行，任一腿校验失败整批回滚（原子性）。
+    uint256 public constant MAX_BATCH_SIZE = 50;
     /// @notice 扣费执行段（补扣划转 + 事件）的固定 gas 预算：计量点在补扣之前，其执行成本以此常量计入
     uint256 public constant GAS_CHARGE_OVERHEAD = 85_000;
     /// @notice 净成本校准系数（万分比）：gasleft() 计量为 SSTORE 退款前的毛 gas，提交者实付为退款
@@ -88,6 +97,13 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     uint8 public constant FAIL_ORDER_EXPIRED = 1;
     uint8 public constant FAIL_LOCK_RELEASED = 2;
 
+    /// @notice 订单方向（阶段 3 Route A：side 进入 EIP-712 签名结构，见 docs/eip712-order-spec.md §2）。
+    /// 方向相对签名交易对朝向定义（tokenIn/tokenOut 恒为交易对 Token0/Token1）：
+    /// BUY = 签名者付 tokenOut（amountOut）、收 tokenIn（amountIn）；
+    /// SELL = 签名者付 tokenIn（amountIn）、收 tokenOut（amountOut）。
+    uint8 public constant SIDE_BUY = 0;
+    uint8 public constant SIDE_SELL = 1;
+
     /// @notice 统一订单结构（EIP-712 签名对象）：字段顺序即编码顺序，前端/节点/合约三方规范见 docs/eip712-order-spec.md
     struct Order {
         string orderId;
@@ -100,6 +116,9 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         uint256 timestamp;
         uint256 expiresAt;
         uint256 nonce;
+        /// @notice 方向（SIDE_BUY / SIDE_SELL），阶段 3 起进入签名：结算时合约强制
+        /// 「成交付款侧 == 签名方向派生的付款侧」，Vault 落锁方向同样只从本字段派生。
+        uint8 side;
     }
 
     /// @notice 签名订单（订单 + 其 65 字节 EIP-712 签名）
@@ -127,7 +146,7 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     bytes32 private constant _DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 private constant _ORDER_TYPEHASH =
-        keccak256("Order(string orderId,address userAddress,address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOut,uint256 price,uint256 timestamp,uint256 expiresAt,uint256 nonce)");
+        keccak256("Order(string orderId,address userAddress,address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOut,uint256 price,uint256 timestamp,uint256 expiresAt,uint256 nonce,uint8 side)");
     bytes32 private constant _DOMAIN_NAME_HASH = keccak256(bytes(unicode"比特100"));
     bytes32 private constant _DOMAIN_VERSION_HASH = keccak256(bytes("1"));
 
@@ -398,8 +417,12 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         usdtToken = _usdtToken;
     }
 
-    /// @notice 检查调用者是否为授权结算方（owner、单一 relayer 或白名单 relayer）
-    /// @dev 顺序早返回写法：原链式 || 表达式被 via_ir 内联进各结算入口后会触发 Yul stack-too-deep
+    /// @notice 检查调用者是否为授权方（owner、单一 relayer 或白名单 relayer）。
+    /// @dev 阶段 3 提交者模型 B 后，结算入口（settleTrade / 三个批量入口）已不再
+    /// 调用本函数——提交开放给任意地址。本函数仅剩 chargeFailedSettlement 一个
+    /// 调用点：失败扣费的收款方是申报人本人、其 gas 支出不可链上验证，故申报
+    /// 仍限可信角色。顺序早返回写法：原链式 || 表达式被 via_ir 内联进各结算
+    /// 入口后会触发 Yul stack-too-deep。
     function _isSettlementCaller() internal view returns (bool) {
         if (msg.sender == owner) return true;
         if (isRelayer[msg.sender]) return true;
@@ -611,7 +634,8 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
             order.price,
             order.timestamp,
             order.expiresAt,
-            order.nonce
+            order.nonce,
+            order.side
         ));
         return keccak256(abi.encodePacked("\x19\x01", domainSeparator(), structHash));
     }
@@ -621,12 +645,21 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     /// （第二十七轮：做市金库以合约身份下单，登记签名者代签——MakerVault.isValidSignature
     /// 校验签名者是否登记）。合约路径由 SignatureChecker 经 staticcall 调
     /// isValidSignature，失败返回 false 而非 revert；无代码地址直接返回 false。
+    /// @dev 阶段 3 修复（ERC-1271 签名长度门）：旧实现以「签名长度 != 65 直接
+    /// false」挡在 1271 路径之前，智能钱包的变长签名（如 Safe 的多签聚合签名）
+    /// 永远不可达 1271。现改为：65 字节且 v 合法时先走 ECDSA 恢复快路径
+    /// （EOA 语义与旧实现逐位一致）；其余任何长度/形态，只要 userAddress
+    /// 有代码，一律交给 ERC-1271 判定；无代码地址对非标准签名直接 false。
     function verifyOrderSignature(Order calldata order, bytes calldata signature) public view returns (bool) {
-        if (signature.length != 65) return false;
         bytes32 digest = _orderDigest(order);
-        (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signature);
-        address signer = ecrecover(digest, v, r, s);
-        if (signer != address(0) && signer == order.userAddress) return true;
+        if (signature.length == 65) {
+            uint8 vRaw = uint8(signature[64]);
+            if (vRaw == 27 || vRaw == 28 || vRaw == 0 || vRaw == 1) {
+                (bytes32 r, bytes32 s, uint8 v) = _splitSignature(signature);
+                address signer = ecrecover(digest, v, r, s);
+                if (signer != address(0) && signer == order.userAddress) return true;
+            }
+        }
         if (order.userAddress.code.length == 0) return false;
         return SignatureChecker.isValidSignatureNow(order.userAddress, digest, signature);
     }
@@ -692,6 +725,18 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
             (fill.tokenIn == mo.tokenOut && fill.tokenOut == mo.tokenIn),
             "Settlement: token mismatch"
         );
+        // 方向强制（阶段 3 Route A）：side 已进签名，成交的付款侧必须与签名
+        // 方向派生的付款侧一致——SELL 付 tokenIn、BUY 付 tokenOut。
+        // Fill 口径：tokenIn = maker 付款侧、tokenOut = taker 付款侧。
+        // 旧协议下方向靠簿上自报字段，合约无从校验；自本轮起方向成为
+        // 签名事实，方向相反的成交在链上不可能成立（与 Vault 落锁方向
+        // 派生同源，见 Vault.lockForOrder）。
+        require(mo.side == SIDE_BUY || mo.side == SIDE_SELL, "Settlement: invalid maker side");
+        require(to.side == SIDE_BUY || to.side == SIDE_SELL, "Settlement: invalid taker side");
+        address makerPayToken = mo.side == SIDE_SELL ? mo.tokenIn : mo.tokenOut;
+        address takerPayToken = to.side == SIDE_SELL ? to.tokenIn : to.tokenOut;
+        require(makerPayToken == fill.tokenIn, "Settlement: maker direction mismatch");
+        require(takerPayToken == fill.tokenOut, "Settlement: taker direction mismatch");
         _checkOrderValidity(mo);
         _checkOrderValidity(to);
 
@@ -721,22 +766,22 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     /// @notice 结算一笔成交：双方订单必须为统一规范的 EIP-712 签名订单（docs/eip712-order-spec.md）。
     /// 合约逐项验签、校验累计成交量不超签名量并消耗双方 nonce，中继者只是无须信任的搬运工。
     /// gas 自本轮起由合约计量并对半回收（见 _chargeGasShares）；fill.gasReimburseIn/Out 被忽略。
+    /// @dev 提交者模型 B（阶段 3，Ren 2026-11-08 拍板）：本入口**无调用者限制**——
+    /// 任何地址可提交有效 Fill，安全性全部来自链上强制校验（双方验签、签名方向、
+    /// 落锁消费、累计成交上限、nonce 独占、时效）；无效 Fill 必然 revert，gas 由
+    /// 发起者自担（EVM 原生语义）。gas 对半回收的收款方为实际提交者 msg.sender，
+    /// 即「谁提交谁回收」，与提交者身份无关。旧 A 模型（owner/relayer 白名单 +
+    /// 限流 + 信誉门）自本轮退出结算路径；relayer 角色仅保留给
+    /// chargeFailedSettlement 的归责申报（收款方身份不可链上验证，须可信角色）。
     /// @param fill makerOrder/takerOrder 为双方签名订单；amountIn = maker 卖出 tokenIn 量，amountOut = taker 卖出 tokenOut 量
     function settleTrade(Fill calldata fill) external nonReentrant {
         uint256 gasStart = gasleft();
-        require(_isSettlementCaller(), "Settlement: not auth");
 
         address maker = fill.makerOrder.order.userAddress;
         address taker = fill.takerOrder.order.userAddress;
         require(maker != address(0) && taker != address(0), "Settlement: zero address");
         require(fill.tokenIn != address(0) && fill.tokenOut != address(0), "Settlement: zero token");
         require(fill.amountIn <= type(uint128).max && fill.amountOut <= type(uint128).max, "Settlement: amount overflow");
-
-        // Relayer 限流和信誉检查
-        if (msg.sender != owner) {
-            _checkRelayerRateLimit(msg.sender);
-            _checkRelayerReputation(msg.sender);
-        }
 
         // 验签 + 累计上限 + nonce 消耗（防重放）
         _verifyFill(fill);
@@ -750,11 +795,6 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         uint256 gasUsed = gasStart - gasleft() + _intrinsicGas() + GAS_CHARGE_OVERHEAD;
         gasUsed = (gasUsed * meterKeepBps) / 10_000;
         _chargeGasForFill(fill, feeIn, feeOut, gasUsed);
-
-        // 更新Relayer信誉（成功交易）
-        if (msg.sender != owner) {
-            _updateRelayerReputationSuccess(msg.sender);
-        }
     }
 
     /// @notice 批量结算多笔成交（节省 Gas）；每笔 Fill 与单笔走同一套验签/防重放校验，无例外路径。
@@ -762,14 +802,10 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     /// 逐笔补扣（每笔另加扣费执行常量）——同批同价，归属口径见 docs/round21-gas-rules-2026-11-07.md
     function settleTradesBatch(Fill[] calldata fills) external nonReentrant {
         uint256 gasStart = gasleft();
-        require(_isSettlementCaller(), "Settlement: not auth");
-
-        // Relayer 限流检查（批量调用只计一次）
-        if (msg.sender != owner) {
-            _checkRelayerRateLimit(msg.sender);
-        }
+        // 提交者模型 B（见 settleTrade）：无调用者限制，整批原子——任一腿
+        // _verifyFill/结算失败则整笔交易回滚，已落账的前序腿一并撤销。
         uint256 len = fills.length;
-        require(len > 0 && len <= 50, "Settlement: batch size 1-50");
+        require(len > 0 && len <= MAX_BATCH_SIZE, "Settlement: batch size too large");
 
         uint16 _feeBps = feeBps;
         for (uint256 i = 0; i < len; i++) {
@@ -819,14 +855,9 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         uint256 gasSavingsUsdt6
     ) external nonReentrant {
         uint256 gasStart = gasleft();
-        require(_isSettlementCaller(), "Settlement: not auth");
-
-        // Relayer 限流检查
-        if (msg.sender != owner) {
-            _checkRelayerRateLimit(msg.sender);
-        }
+        // 提交者模型 B（见 settleTrade）：无调用者限制，整批原子。
         uint256 len = fills.length;
-        require(len > 0 && len <= 50, "Settlement: batch size 1-50");
+        require(len > 0 && len <= MAX_BATCH_SIZE, "Settlement: batch size too large");
 
         if (gasSavingsUsdt6 == 0) {
             uint16 _feeBps0 = feeBps;
@@ -939,15 +970,10 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         bytes32[][] calldata proofs
     ) external nonReentrant {
         uint256 gasStart = gasleft();
-        require(_isSettlementCaller(), "Settlement: not auth");
-
-        // Relayer 限流检查
-        if (msg.sender != owner) {
-            _checkRelayerRateLimit(msg.sender);
-        }
+        // 提交者模型 B（见 settleTrade）：无调用者限制，整批原子。
         uint256 len = fills.length;
         require(len == proofs.length, "Settlement: length mismatch");
-        require(len > 0 && len <= 50, "Settlement: batch size 1-50");
+        require(len > 0 && len <= MAX_BATCH_SIZE, "Settlement: batch size too large");
 
         // 验证每个 Fill 的默克尔证明
         for (uint256 i = 0; i < len; i++) {
