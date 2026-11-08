@@ -1,6 +1,14 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Contract, ZeroAddress, AbiCoder, zeroPadValue, formatUnits } from 'ethers'
+import { Contract, ZeroAddress, formatUnits } from 'ethers'
 import { SUPPORTED_CHAINS, getChainConfig } from '../config/chains'
+import {
+  WRAPPED_TOKEN_ABI,
+  messageBridgeAvailable,
+  quoteMessageBridgeFee,
+  executeMessageBridge,
+  wrapTkaExact,
+  fetchLayerZeroStatus,
+} from '../services/bridgeExecutors'
 import {
   fetchFastLaneQuote,
   fetchFastLaneStatus,
@@ -24,101 +32,6 @@ import './CrossChainBridge.css'
 interface CrossChainBridgeProps {
   account: string | null
   currentChainId: number | null
-}
-
-const CROSS_CHAIN_BRIDGE_ABI = [
-  'function bridgeToken(address token, uint256 amount, uint32 dstEid, bytes calldata options) payable returns (uint256 transferId, bytes32 guid)',
-  'function quoteBridgeFee(address token, uint256 amount, uint32 dstEid, address user, bytes calldata options) view returns (uint256 nativeFee, uint256 lzTokenFee)',
-  'function supportedTokens(address token) view returns (bool)',
-  'function tokenMapping(uint32 dstEid, address token) view returns (address)',
-  'function getBridgeStatus(bytes32 guid) view returns (uint8 status, uint256 transferId, uint256 initiatedAt, uint256 completedAt, uint256 attempts)',
-  'function retryBridge(uint256 transferId, bytes calldata options) payable returns (bytes32 guid)',
-  'event BridgeInitiated(bytes32 indexed guid, uint256 indexed transferId, address indexed user, address token, uint256 amount, uint32 dstEid)',
-  'event BridgeStatusUpdated(uint256 indexed transferId, uint8 status, uint256 timestamp)',
-] as const
-
-// WrappedTKA：在 ERC20 之外只需 wrap（TKA -> wTKA，1:1）与 unwrap（烧 WTKA 换回 TKA，无需授权）
-const WRAPPED_TOKEN_ABI = [...ERC20_ABI, 'function wrap(uint256 amount)', 'function unwrap(uint256 amount)'] as const
-
-// Chainlink CCIP 官方 Router（JSON ABI，含 tuple 结构）
-const CCIP_ROUTER_ABI = [
-  {
-    type: 'function',
-    name: 'getFee',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'destinationChainSelector', type: 'uint64' },
-      {
-        name: 'message',
-        type: 'tuple',
-        components: [
-          { name: 'receiver', type: 'bytes' },
-          { name: 'data', type: 'bytes' },
-          {
-            name: 'tokenAmounts',
-            type: 'tuple[]',
-            components: [
-              { name: 'token', type: 'address' },
-              { name: 'amount', type: 'uint256' },
-            ],
-          },
-          { name: 'extraArgs', type: 'bytes' },
-          { name: 'feeToken', type: 'address' },
-        ],
-      },
-    ],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  {
-    type: 'function',
-    name: 'ccipSend',
-    stateMutability: 'payable',
-    inputs: [
-      { name: 'destinationChainSelector', type: 'uint64' },
-      {
-        name: 'message',
-        type: 'tuple',
-        components: [
-          { name: 'receiver', type: 'bytes' },
-          { name: 'data', type: 'bytes' },
-          {
-            name: 'tokenAmounts',
-            type: 'tuple[]',
-            components: [
-              { name: 'token', type: 'address' },
-              { name: 'amount', type: 'uint256' },
-            ],
-          },
-          { name: 'extraArgs', type: 'bytes' },
-          { name: 'feeToken', type: 'address' },
-        ],
-      },
-    ],
-    outputs: [{ name: '', type: 'bytes32' }],
-  },
-] as const
-
-// CCIP ExtraArgs V3 基本编码：tag 0xa69dd4aa + gasLimit(uint32=0) + 最终性(bytes4=0，默认) + 7 字节保留
-const CCIP_EXTRA_ARGS_V3_BASIC = '0xa69dd4aa' + '00'.repeat(15)
-
-// Wormhole 官方 NTT Manager 与核心桥
-const NTT_MANAGER_ABI = [
-  'function transfer(uint256 amount, uint16 recipientChain, bytes32 recipient, bytes32 refundAddress, bool shouldQueue, bytes encodedInstructions) payable returns (uint64 msgId)',
-] as const
-const WORMHOLE_CORE_ABI = ['function messageFee() view returns (uint256)'] as const
-// NTT 单个 Wormhole Transceiver 的标准空指令编码（计数 1 + index 0 + 长度 0）
-const NTT_SINGLE_TRANSCEIVER_INSTRUCTIONS = '0x010000'
-
-// LayerZero EID（Endpoint ID）映射
-const LAYERZERO_EIDS: Record<number, number> = {
-  1: 30101,        // Ethereum Mainnet
-  8453: 30184,     // Base Mainnet
-  42161: 30110,    // Arbitrum One
-  137: 30109,       // Polygon
-  10: 30111,       // Optimism
-  11155111: 40161, // Sepolia
-  84532: 40245,    // Base Sepolia
-  421614: 40231,   // Arbitrum Sepolia
 }
 
 type BridgeId = 'layerzero' | 'ccip' | 'wormhole' | 'fastlane'
@@ -250,12 +163,11 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   const bridgeAvailable = useCallback(
     (id: BridgeId): boolean => {
       if (!sourceChain || !targetChain) return false
-      if (id === 'layerzero') return Boolean(bridgeAddress) && Boolean(LAYERZERO_EIDS[targetChain.chainId])
-      if (id === 'ccip') return Boolean(sourceChain.ccip && targetChain.ccip && sourceChain.contracts.wrappedToken)
       if (id === 'fastlane') return fastLanePairSupport(sourceChain.chainId, targetChain.chainId).supported
-      return Boolean(sourceChain.wormhole && targetChain.wormhole && sourceChain.contracts.wrappedToken)
+      // 三条消息桥的可用性判定与自动交付编排共用 services/bridgeExecutors（第四十一轮抽取）
+      return messageBridgeAvailable(id, { account: account ?? '', sourceChain, targetChain, bridgeAddress })
     },
-    [sourceChain, targetChain, bridgeAddress]
+    [sourceChain, targetChain, bridgeAddress, account]
   )
 
   // 获取余额（按当前所选桥的有效代币）
@@ -311,20 +223,9 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     }
   }, [shortfallWei, wrapEdited])
 
-  /** 精确包裹指定数量：TKA 授权（不足才批）→ wrap。execute 流程的补差额与准备区共用这一步。 */
+  /** 精确包裹指定数量（实现已抽到 services/bridgeExecutors 的 wrapTkaExact，准备区与执行共用） */
   const wrapExact = async (signer: any, exactWei: bigint) => {
-    if (exactWei <= 0n) return
-    const tkaAddress = sourceChain!.contracts.token0
-    const wtkaAddress = sourceChain!.contracts.wrappedToken!
-    const wtka = new Contract(wtkaAddress, WRAPPED_TOKEN_ABI, signer)
-    const tka = new Contract(tkaAddress, ERC20_ABI, signer)
-    const allowance: bigint = await tka.allowance(account, wtkaAddress)
-    if (allowance < exactWei) {
-      const tx = await tka.approve(wtkaAddress, exactWei)
-      await tx.wait()
-    }
-    const wrapTx = await wtka.wrap(exactWei)
-    await wrapTx.wait()
+    await wrapTkaExact(signer, sourceChain!, account!, exactWei)
   }
 
   const handleWrap = async () => {
@@ -385,14 +286,13 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
 
     if (bridgeAvailable('layerzero')) {
       try {
-        const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
         const quoteToken = tokenAddress || sourceChain.contracts.token0
-        const [nativeFee] = await bridge.quoteBridgeFee(
+        const nativeFee = await quoteMessageBridgeFee(
+          'layerzero',
+          { account, sourceChain, targetChain, bridgeAddress },
+          provider,
           quoteToken,
-          amountWei,
-          LAYERZERO_EIDS[targetChain.chainId],
-          account,
-          '0x'
+          amountWei
         )
         next.layerzero = `实时报价：${formatTokenAmount(nativeFee)} ETH（发送时支付）+ 0.1 TKA 桥费（从到账扣除）`
       } catch {
@@ -402,15 +302,13 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
 
     if (bridgeAvailable('ccip') && sourceChain.ccip && targetChain.ccip) {
       try {
-        const router = new Contract(sourceChain.ccip.router, CCIP_ROUTER_ABI, provider)
-        const message = {
-          receiver: AbiCoder.defaultAbiCoder().encode(['address'], [account]),
-          data: '0x',
-          tokenAmounts: [{ token: sourceChain.contracts.wrappedToken!, amount: amountWei }],
-          extraArgs: CCIP_EXTRA_ARGS_V3_BASIC,
-          feeToken: ZeroAddress,
-        }
-        const fee: bigint = await router.getFee(BigInt(targetChain.ccip.chainSelector), message)
+        const fee = await quoteMessageBridgeFee(
+          'ccip',
+          { account, sourceChain, targetChain, bridgeAddress },
+          provider,
+          '',
+          amountWei
+        )
         next.ccip = `实时报价：${formatTokenAmount(fee)} ETH（发送时锁定，不补差价）`
       } catch {
         next.ccip = '实时报价暂时获取失败，发送前仍会重新报价'
@@ -419,8 +317,13 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
 
     if (bridgeAvailable('wormhole') && sourceChain.wormhole) {
       try {
-        const core = new Contract(sourceChain.wormhole.coreBridge, WORMHOLE_CORE_ABI, provider)
-        const fee: bigint = await core.messageFee()
+        const fee = await quoteMessageBridgeFee(
+          'wormhole',
+          { account, sourceChain, targetChain, bridgeAddress },
+          provider,
+          '',
+          amountWei
+        )
         next.wormhole =
           fee === 0n
             ? '实时报价：消息费 0 ETH（另付发送交易的 gas）'
@@ -506,20 +409,19 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     return () => clearInterval(interval)
   }, [fastlaneTxHash, checkFastLaneStatus])
 
-  // LayerZero 状态查询（既有逻辑）
+  // LayerZero 状态查询（读取实现已抽到 services/bridgeExecutors 的 fetchLayerZeroStatus）
   const checkBridgeStatus = useCallback(async (requestId: string) => {
-    if (!bridgeAddress || !requestId) return
-    try {
-      const provider = getProvider()
-      if (!provider) return
-      const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, provider)
-      const [status, , , , attempts] = await bridge.getBridgeStatus(requestId)
-      const statusMap: Record<number, string> = { 0: '待处理', 1: '处理中', 2: '已完成', 3: '失败' }
-      setBridgeStatus(`LayerZero 状态：${statusMap[Number(status)] || '未知'} · 已尝试 ${attempts} 次`)
-    } catch (e) {
-      console.error('查询状态失败:', e)
+    if (!bridgeAddress || !requestId || !sourceChain) return
+    const provider = getProvider()
+    if (!provider) return
+    const res = await fetchLayerZeroStatus(provider, sourceChain, requestId, bridgeAddress)
+    if (!res) {
+      console.error('查询状态失败')
+      return
     }
-  }, [bridgeAddress])
+    const statusMap: Record<number, string> = { 0: '待处理', 1: '处理中', 2: '已完成', 3: '失败' }
+    setBridgeStatus(`LayerZero 状态：${statusMap[res.status] || '未知'} · 已尝试 ${res.attempts} 次`)
+  }, [bridgeAddress, sourceChain])
 
   useEffect(() => {
     if (!bridgeAddress || !lastRequestId) return
@@ -529,110 +431,40 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     return () => clearInterval(interval)
   }, [bridgeAddress, lastRequestId, checkBridgeStatus])
 
-  // CCIP / Wormhole 共用：把 TKA 按 1:1 换成 wTKA（只补差额部分；准备区已就绪时这里直接跳过）
-  const wrapShortfall = async (signer: any, amountWei: bigint) => {
-    const wtkaAddress = sourceChain!.contracts.wrappedToken!
-    const wtka = new Contract(wtkaAddress, WRAPPED_TOKEN_ABI, signer)
-    const current: bigint = await wtka.balanceOf(account)
-    if (current >= amountWei) return
-    await wrapExact(signer, amountWei - current)
-  }
+  // 三条消息桥的执行实现已抽到 services/bridgeExecutors 的 executeMessageBridge，
+  // 与「跨链默认桥」自动交付编排共用同一份代码；本组件只负责把结果落回页面状态。
+  const routeCtx = () => ({
+    account: account!,
+    sourceChain: sourceChain!,
+    targetChain: targetChain!,
+    bridgeAddress,
+  })
 
   const executeLayerzero = async (amountWei: bigint) => {
     await withSigner(async (signer) => {
       if (!bridgeAddress) throw new Error('跨链桥合约地址未配置')
-      const token = new Contract(effectiveToken, ERC20_ABI, signer)
-      const allowance = await token.allowance(account, bridgeAddress)
-      if (allowance < amountWei) {
-        const approveTx = await token.approve(bridgeAddress, amountWei)
-        await approveTx.wait()
+      const res = await executeMessageBridge('layerzero', routeCtx(), signer, effectiveToken, amountWei)
+      if (res.trackingId) {
+        setLastRequestId(res.trackingId)
+        setBridgeStatus('LayerZero 转移已发起，等待目标链确认…')
+      } else {
+        setBridgeStatus('LayerZero 转移已发起，请等待目标链确认')
       }
-      const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, signer)
-      const dstEid = LAYERZERO_EIDS[targetChainId!]
-      if (!dstEid) throw new Error(`目标链 ${targetChainId} 暂不支持跨链（无 LayerZero EID 配置）`)
-      const [nativeFee] = await bridge.quoteBridgeFee(effectiveToken, amountWei, dstEid, account, '0x')
-      const tx = await bridge.bridgeToken(effectiveToken, amountWei, dstEid, '0x', { value: nativeFee })
-      const receipt = await tx.wait()
-      if (receipt.status !== 1) throw new Error('跨链交易未成功')
-      const initiated = receipt.logs.find((log: any) => {
-        try {
-          return bridge.interface.parseLog(log)?.name === 'BridgeInitiated'
-        } catch {
-          return false
-        }
-      })
-      if (initiated) {
-        const parsed = bridge.interface.parseLog(initiated)
-        const requestId = parsed?.args[0]
-        if (requestId) {
-          setLastRequestId(requestId)
-          setBridgeStatus('LayerZero 转移已发起，等待目标链确认…')
-        }
-      }
-      if (!initiated) setBridgeStatus('LayerZero 转移已发起，请等待目标链确认')
     })
   }
 
   const executeCcip = async (amountWei: bigint) => {
     await withSigner(async (signer) => {
-      const src = sourceChain!
-      const dst = targetChain!
-      await wrapShortfall(signer, amountWei)
-      const wtkaAddress = src.contracts.wrappedToken!
-      const router = new Contract(src.ccip!.router, CCIP_ROUTER_ABI, signer)
-      const wtka = new Contract(wtkaAddress, ERC20_ABI, signer)
-      const allowance: bigint = await wtka.allowance(account, src.ccip!.router)
-      if (allowance < amountWei) {
-        const tx = await wtka.approve(src.ccip!.router, amountWei)
-        await tx.wait()
-      }
-      const message = {
-        receiver: AbiCoder.defaultAbiCoder().encode(['address'], [account!]),
-        data: '0x',
-        tokenAmounts: [{ token: wtkaAddress, amount: amountWei }],
-        extraArgs: CCIP_EXTRA_ARGS_V3_BASIC,
-        feeToken: ZeroAddress,
-      }
-      const selector = BigInt(dst.ccip!.chainSelector)
-      const fee: bigint = await router.getFee(selector, message)
-      // 先用静态调用取消息 ID（与真实发送同一状态下计算，结果一致），再正式发送
-      const messageId: string = await router.ccipSend.staticCall(selector, message, { value: fee })
-      const tx = await router.ccipSend(selector, message, { value: fee })
-      const receipt = await tx.wait()
-      if (receipt.status !== 1) throw new Error('跨链交易未成功')
-      setCcipMessageId(messageId)
+      const res = await executeMessageBridge('ccip', routeCtx(), signer, '', amountWei)
+      setCcipMessageId(res.trackingId)
       setBridgeStatus('CCIP 转移已发起，等待 Chainlink 网络投递到目标链…')
     })
   }
 
   const executeWormhole = async (amountWei: bigint) => {
     await withSigner(async (signer) => {
-      const src = sourceChain!
-      const dst = targetChain!
-      await wrapShortfall(signer, amountWei)
-      const wtkaAddress = src.contracts.wrappedToken!
-      const manager = new Contract(src.wormhole!.nttManager, NTT_MANAGER_ABI, signer)
-      const wtka = new Contract(wtkaAddress, ERC20_ABI, signer)
-      const allowance: bigint = await wtka.allowance(account, src.wormhole!.nttManager)
-      if (allowance < amountWei) {
-        const tx = await wtka.approve(src.wormhole!.nttManager, amountWei)
-        await tx.wait()
-      }
-      const core = new Contract(src.wormhole!.coreBridge, WORMHOLE_CORE_ABI, signer)
-      const fee: bigint = await core.messageFee()
-      const recipient = zeroPadValue(account!, 32)
-      const tx = await manager.transfer(
-        amountWei,
-        dst.wormhole!.wormholeChainId,
-        recipient,
-        recipient,
-        false,
-        NTT_SINGLE_TRANSCEIVER_INSTRUCTIONS,
-        { value: fee }
-      )
-      const receipt = await tx.wait()
-      if (receipt.status !== 1) throw new Error('跨链交易未成功')
-      setWormholeTxHash(receipt.hash)
+      const res = await executeMessageBridge('wormhole', routeCtx(), signer, '', amountWei)
+      setWormholeTxHash(res.txHash)
       setBridgeStatus('Wormhole 转移已发起，等待 Guardian 签名与目标链投递…')
     })
   }
