@@ -53,8 +53,8 @@
 | 31 | [round31-mobile-skeleton-2026-11-08.md](round31-mobile-skeleton-2026-11-08.md) | 移动端骨架重构实现（四栏导航、行情一级页、资产/金库子页等），设计原件见第三节 | 已上线 |
 | 32 | [round32-fixes-2026-11-08.md](round32-fixes-2026-11-08.md) | ChatGPT 审查整改三批：文档清理、签名缓存/满员/DHT/治理 ABI/Vault 记账修复、双链重部署、启用前门禁 | 历史记录（地址已被第 33 轮取代） |
 | 33 | [round33-hardening-2026-11-08.md](round33-hardening-2026-11-08.md) | 安全加固：Vault 重入保护（N1）、订单簿写入路径统一（N2/N3）、NodeRegistry 钱包占用（N4）、双链重部署（**现行合约地址在此**）、门禁补强、CI/ABI 对齐 | 已上线 |
-| 34 | [round34-nodeless-stage2-2026-11-08.md](round34-nodeless-stage2-2026-11-08.md) | 无节点阶段 2：双读基础设施 + 影子指标（阶段 3 准入线）、Envio 索引器 + 成交双源、中继就绪核对与 Settlement 权限事实（阶段 3 定 B 开放提交）；附 M1/M2 修复与行情页无成交行参考价修复 | 本地完成，待合并推送（中继/索引器仍待部署） |
-| 35 | [round35-review-fixes-2026-11-08.md](round35-review-fixes-2026-11-08.md) | 第 34 轮复审整改：双读可信边界 D1–D4（完整度入门/锁仓方向证据/零值/钉块）、成交双源 D5/D6、ABI 守卫 M2-R、D8 active 未接线门禁；阶段 3 准入门槛改合成压测口径 + 压测工具（frontend/scripts/soak/）与冒烟实证 | 本地完成，待合并推送（7 天压测待启动；中继/索引器仍待部署） |
+| 34 | [round34-nodeless-stage2-2026-11-08.md](round34-nodeless-stage2-2026-11-08.md) | 无节点阶段 2：双读基础设施 + 影子指标（阶段 3 准入线）、Envio 索引器 + 成交双源、中继就绪核对与 Settlement 权限事实（阶段 3 定 B 开放提交）；附 M1/M2 修复与行情页无成交行参考价修复 | 已合并推送（main 9627125）；推送后 ChatGPT 复审有条件通过，整改见第 35 轮；中继部署已启动（免费版）、索引器待部署 |
+| 35 | [round35-review-fixes-2026-11-08.md](round35-review-fixes-2026-11-08.md) | 第 34 轮复审整改：双读可信边界 D1–D4（完整度入门/锁仓方向证据/零值/钉块）、成交双源 D5/D6、ABI 守卫 M2-R、D8 active 未接线门禁；阶段 3 准入门槛改合成压测口径 + 压测工具（frontend/scripts/soak/）与冒烟实证 | 已合并推送（7 天压测待启动；中继部署已启动、索引器待部署） |
 
 ## 三、分支上的设计文档（未合入 main）
 
