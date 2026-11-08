@@ -22,7 +22,9 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          # 第 33 轮对齐：与 node/go.mod 的 go 1.26.8 一致（此前钉 1.24，
+          # 与 Dockerfile 的 golang:1.26 口径漂移，ChatGPT 复审小项）。
+          go-version: "1.26.8"
           cache-dependency-path: node/go.sum
 
       - name: Vet

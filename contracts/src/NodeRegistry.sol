@@ -50,6 +50,11 @@ contract NodeRegistry {
         address oldWallet = nodeToWallet[nodeId];
         require(oldWallet != address(0), "NodeRegistry: not registered");
         require(msg.sender == oldWallet || msg.sender == owner, "NodeRegistry: not auth");
+        // 第 33 轮 N4：补 register() 已有的占用检查——新钱包已被其它节点
+        // 占用时拒绝，否则 walletToNode 被覆盖后双向映射不一致（旧节点的
+        // nodeToWallet 仍指向该钱包、反查却归本节点）。
+        bytes32 existing = walletToNode[newWallet];
+        require(existing == bytes32(0) || existing == nodeId, "NodeRegistry: wallet bound to other node");
 
         nodeToWallet[nodeId] = newWallet;
         walletToNode[oldWallet] = bytes32(0);
@@ -59,7 +64,16 @@ contract NodeRegistry {
     }
 
     /// @notice owner 可强制设置节点绑定（用于迁移或修复）
+    /// @dev 第 33 轮 N4：写入非零钱包前同样做占用检查（与 register /
+    /// updateWallet 同款）——目标钱包已被其它节点占用时拒绝，强制迁移须先
+    /// 把该钱包从原节点解绑（setNodeWallet(原节点, 0) 或其 updateWallet），
+    /// 不允许一次调用同时「偷」走反向映射。自身旧钱包的反向映射先完整清
+    /// 除再写新映射，保持 nodeToWallet / walletToNode 双向恒一致。
     function setNodeWallet(bytes32 nodeId, address wallet) external onlyOwner {
+        if (wallet != address(0)) {
+            bytes32 existing = walletToNode[wallet];
+            require(existing == bytes32(0) || existing == nodeId, "NodeRegistry: wallet bound to other node");
+        }
         address oldWallet = nodeToWallet[nodeId];
         if (oldWallet != address(0)) {
             walletToNode[oldWallet] = bytes32(0);
