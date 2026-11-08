@@ -1,10 +1,13 @@
 /**
- * 中继状态区（第 31 轮 §12.6）：三项健康只报实情——
+ * 中继状态区（第 31 轮 §12.6，第 34 轮更新）：三项健康只报实情——
  * 主中继（Workers + D1）：未配置 VITE_RELAY_URL 时如实显示「未部署」，不假绿；
- * 配置后探活 /health。Nostr 镜像与 Envio 索引前端尚未接入读取，如实显示「未知」。
+ * 配置后探活 /health。Nostr 镜像前端尚未接入读取，如实显示「未知」。
+ * Envio 索引（第 34 轮）：未配置 VITE_INDEXER_URL 显示「未部署」；配置后以
+ * 最小 GraphQL 查询探活。双读影子对比区见文件后半（RELAY_MODE 非 disabled 时）。
  */
 import { useEffect, useState } from 'react'
 import { RELAY_URL, RELAY_MODE } from '../config/relay'
+import { INDEXER_URL, INDEXER_ENABLED } from '../config/indexer'
 import { useShadowMetrics } from '../hooks/useShadowMetrics'
 import type { Ratio } from '../services/dualread'
 import './RelayStatus.css'
@@ -28,6 +31,10 @@ interface RelayItem {
 export function RelayStatus() {
   const [mainState, setMainState] = useState<HealthState>(RELAY_URL ? 'unknown' : 'undeployed')
   const [mainTime, setMainTime] = useState<string>('—')
+  const [indexerState, setIndexerState] = useState<HealthState>(
+    INDEXER_ENABLED ? 'unknown' : 'undeployed',
+  )
+  const [indexerTime, setIndexerTime] = useState<string>('—')
 
   useEffect(() => {
     if (!RELAY_URL) return
@@ -47,6 +54,37 @@ export function RelayStatus() {
         setMainTime(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
       } catch {
         if (!cancelled) setMainState('bad')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Envio 索引探活：已配置端点时用最小 GraphQL 查询（{__typename}）验可达
+  useEffect(() => {
+    if (!INDEXER_ENABLED) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), 6000)
+        const res = await fetch(INDEXER_URL, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ query: '{ __typename }' }),
+          signal: ctrl.signal,
+        })
+        clearTimeout(timer)
+        if (cancelled) return
+        if (!res.ok) {
+          setIndexerState('bad')
+          return
+        }
+        setIndexerState('ok')
+        setIndexerTime(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+      } catch {
+        if (!cancelled) setIndexerState('bad')
       }
     })()
     return () => {
@@ -77,10 +115,16 @@ export function RelayStatus() {
     },
     {
       name: '链上索引（Envio）',
-      state: 'unknown',
+      state: indexerState,
       detail:
-        '成交与结算的链上索引计划用托管索引服务（Envio），尚未接入；接入后这里会显示最新已索引区块与链头滞后块数。',
-      time: '—',
+        indexerState === 'undeployed'
+          ? '索引器代码已就绪（仓库 indexer/ 目录，双链 Settlement 成交 + gas 分摊），但尚未部署到 Envio Cloud、前端也未配置端点；当前成交记录只读节点 API。部署并配置 VITE_INDEXER_URL 后，成交以链上索引为权威来源。'
+          : indexerState === 'ok'
+            ? '链上索引端点可达，成交记录以索引为权威来源展示，节点独有成交会标「待索引」。'
+            : indexerState === 'bad'
+              ? '链上索引端点探活失败；成交记录暂回退节点数据并标注「待索引」，索引恢复后自动切回。'
+              : '正在探活链上索引端点…',
+      time: indexerState === 'undeployed' ? '—' : indexerTime,
     },
   ]
 
