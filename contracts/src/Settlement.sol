@@ -676,6 +676,35 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         require(order.expiresAt > 0 && block.timestamp <= order.expiresAt, "Settlement: order expired");
     }
 
+    /// @notice 内部：限价强制（阶段 3 价格校验修复轮，P0）：本笔切片在订单自身朝向
+    /// 下的实成交比例不得击穿签名限价。签名价的权威表达是签名量本身
+    /// （order.amountIn / order.amountOut），故直接交叉相乘比较，全程无除法——
+    /// 不经 order.price 的 1e18 定点折算（那是 amountOut/amountIn 的截断商，
+    /// 用它比较会在边界上误杀恰在限价的合法小额切片）。
+    /// - SELL（付 tokenIn、收 tokenOut）：实收比例不得低于签名价
+    ///   addOut/addIn >= amountOut/amountIn ⟺ addOut * amountIn >= addIn * amountOut
+    /// - BUY（付 tokenOut、收 tokenIn）：实付比例不得高于签名价
+    ///   addOut/addIn <= amountOut/amountIn ⟺ addOut * amountIn <= addIn * amountOut
+    /// 乘法溢出时 Solidity 0.8 检查算术直接 revert（失败即关闭，方向安全）；
+    /// 实际金额受结算路径的 uint128 上限约束，乘积稳在 2^256 内。
+    /// gas 报销/手续费是成交额之外的独立扣项，不进本不等式（校验对象是
+    /// fill.amountIn/amountOut 折算出的切片本身）。
+    function _requireSignedLimitPrice(Order calldata order, uint256 addIn, uint256 addOut) internal pure {
+        if (order.side == SIDE_SELL) {
+            require(
+                addOut * order.amountIn >= addIn * order.amountOut,
+                "Settlement: fill breaches signed limit price"
+            );
+        } else {
+            // side 合法性已在 _verifyFill 先行校验（仅 SIDE_BUY / SIDE_SELL），
+            // 此处 else 即 BUY。
+            require(
+                addOut * order.amountIn <= addIn * order.amountOut,
+                "Settlement: fill breaches signed limit price"
+            );
+        }
+    }
+
     /// @notice 内部：把一笔成交折算到某个订单自身方向并累加已结算量，累计超签名量即 revert（防超额重放）
     function _accountFill(bytes32 digest, Order calldata order, Fill calldata fill) internal {
         uint256 addIn;
@@ -687,6 +716,10 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
             addIn = fill.amountOut;
             addOut = fill.amountIn;
         }
+        // 限价强制：先于累计落账校验本笔切片比例（见 _requireSignedLimitPrice）。
+        // 四个结算入口（settleTrade 与三个批量入口）全部经 _verifyFill →
+        // _accountFill 至此，无例外路径。
+        _requireSignedLimitPrice(order, addIn, addOut);
         uint256 newIn = orderFilledIn[digest] + addIn;
         uint256 newOut = orderFilledOut[digest] + addOut;
         require(newIn <= order.amountIn && newOut <= order.amountOut, "Settlement: fill exceeds signed order");
@@ -708,7 +741,7 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         useNonce(order.userAddress, order.nonce);
     }
 
-    /// @notice 内部：校验一笔 Fill 的双方签名订单（验签/同对/时效/累计上限/nonce），全部通过后才落账
+    /// @notice 内部：校验一笔 Fill 的双方签名订单（验签/同对/时效/限价/累计上限/nonce），全部通过后才落账
     function _verifyFill(Fill calldata fill) internal {
         Order calldata mo = fill.makerOrder.order;
         Order calldata to = fill.takerOrder.order;
@@ -768,7 +801,7 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
     /// gas 自本轮起由合约计量并对半回收（见 _chargeGasShares）；fill.gasReimburseIn/Out 被忽略。
     /// @dev 提交者模型 B（阶段 3，Ren 2026-11-08 拍板）：本入口**无调用者限制**——
     /// 任何地址可提交有效 Fill，安全性全部来自链上强制校验（双方验签、签名方向、
-    /// 落锁消费、累计成交上限、nonce 独占、时效）；无效 Fill 必然 revert，gas 由
+    /// 签名限价、落锁消费、累计成交上限、nonce 独占、时效）；无效 Fill 必然 revert，gas 由
     /// 发起者自担（EVM 原生语义）。gas 对半回收的收款方为实际提交者 msg.sender，
     /// 即「谁提交谁回收」，与提交者身份无关。旧 A 模型（owner/relayer 白名单 +
     /// 限流 + 信誉门）自本轮退出结算路径；relayer 角色仅保留给
