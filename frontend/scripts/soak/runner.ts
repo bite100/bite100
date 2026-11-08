@@ -167,7 +167,9 @@ export class SoakLedger {
       role: gen.role,
       side: gen.side,
       createdAt: gen.createdAt,
-      submittedAt: Date.now(),
+      // 第 36 轮 N4：用提交路径在发起瞬间打的点（outcome.submittedAt），
+      // 不再以记账时刻冒充提交时刻。JSONL 字段名不变、口径变真。
+      submittedAt: outcome.submittedAt,
       nodeOk: outcome.node,
       relayOk: outcome.relay,
       tampered,

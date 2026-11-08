@@ -49,6 +49,7 @@ export {
   deriveSideFromLock,
 } from './evaluate'
 export { ShadowObserver, computeShadowMetrics } from './metrics'
+export { SIDE_PROOF_AVAILABLE, SIDE_UNPROVABLE } from './protocol'
 export type { ShadowMetrics, BookSideDiff, Ratio } from './metrics'
 
 export interface DualReadDeps {

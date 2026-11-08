@@ -14,6 +14,7 @@
  */
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { DEFAULT_PAIR, TRADE_PAIRS } from '../../src/config/pairs'
 import {
   generateBatch,
   loadWallets,
@@ -30,8 +31,11 @@ const OUT =
   join(homedir(), 'workspace', 'soak-data', 'soak-metrics.jsonl')
 const GAP_MS = Number(process.env.SOAK_SUBMIT_GAP_MS ?? 2000)
 const INTERVAL_SEC = Number(process.env.SOAK_INTERVAL_SEC ?? 600)
-const PAIR = 'BTC/USDT'
-const PRICE = '2000'
+// 交易对一律取前端既有配置（src/config/pairs 的 TRADE_PAIRS），不另立
+// 平行表：第 36 轮起 run 模式按周期轮转全部已配置交易对（3A 门槛要求
+// 订单流覆盖全部交易对；第 35 轮 as-built 只跑了 BTC/USDT 一对）。
+// 评估轮次每轮覆盖全部交易对（发现记账须跟上轮转签发的单）。
+const PRICE = '2000' // 合成定价：全部交易对同一内部一致价格（压测测状态机保真，不测价格真实性）
 
 function chainCfgs(): SoakChainConfig[] {
   return [
@@ -40,40 +44,46 @@ function chainCfgs(): SoakChainConfig[] {
       nodeUrl:
         process.env.SOAK_NODE_URL_11155111 ?? 'https://node.aaxx123456.trade',
       relayUrl: RELAY_URL,
-      pairs: [PAIR],
+      pairs: [...TRADE_PAIRS],
     },
     {
       chainId: 84532,
       nodeUrl:
         process.env.SOAK_NODE_URL_84532 ?? 'https://node-base.aaxx123456.trade',
       relayUrl: RELAY_URL,
-      pairs: [PAIR],
+      pairs: [...TRADE_PAIRS],
     },
   ]
 }
 
 /** 冒烟批次：双链都覆盖买卖两侧中钱包资金能落锁的方向（见 generator 预检） */
-function smokeSpecs(chainId: number): OrderSpec[] {
+function smokeSpecs(chainId: number, pair: string = DEFAULT_PAIR): OrderSpec[] {
   if (chainId === 11155111) {
     return [
-      { role: 'maker', pair: PAIR, side: 'sell', amount: '0.001', price: PRICE },
-      { role: 'maker', pair: PAIR, side: 'buy', amount: '0.001', price: PRICE },
-      { role: 'taker', pair: PAIR, side: 'buy', amount: '0.001', price: PRICE },
+      { role: 'maker', pair, side: 'sell', amount: '0.001', price: PRICE },
+      { role: 'maker', pair, side: 'buy', amount: '0.001', price: PRICE },
+      { role: 'taker', pair, side: 'buy', amount: '0.001', price: PRICE },
     ]
   }
   return [
-    { role: 'maker', pair: PAIR, side: 'buy', amount: '0.001', price: PRICE },
-    { role: 'taker', pair: PAIR, side: 'buy', amount: '0.0005', price: PRICE },
+    { role: 'maker', pair, side: 'buy', amount: '0.001', price: PRICE },
+    { role: 'taker', pair, side: 'buy', amount: '0.0005', price: PRICE },
   ]
 }
 
-/** 持续压测的轮转批次（含偶发短存活单制造过期场景） */
+/**
+ * 持续压测的轮转批次：交易对按周期在 TRADE_PAIRS 全表轮转（双链同
+ * 周期同对），每周期每链的单量与构成与第 35 轮一致（Sepolia 3 /
+ * Base 2，含偶发短存活单制造过期场景）；某对在某链未登记或钱包无
+ * 可落锁余额时由 generator 预检跳过并在日志给出原因。
+ */
 function cycleSpecs(chainId: number, cycle: number): OrderSpec[] {
-  const specs = smokeSpecs(chainId)
+  const pair = TRADE_PAIRS[(cycle - 1) % TRADE_PAIRS.length]
+  const specs = smokeSpecs(chainId, pair)
   if (cycle % 6 === 5) {
     specs.push({
       role: 'maker',
-      pair: PAIR,
+      pair,
       side: 'buy',
       amount: '0.0005',
       price: PRICE,
@@ -121,7 +131,7 @@ async function generateAndSubmit(
     const tampered = tamperDigests.has(gen.digest.toLowerCase())
     runner.ledger.recordSubmitted(gen, outcome, tampered)
     log(
-      `chain ${cfg.chainId} 提交 ${gen.role}/${gen.side} digest=${gen.digest.slice(0, 10)}… ` +
+      `chain ${cfg.chainId} 提交 ${gen.pair} ${gen.role}/${gen.side} digest=${gen.digest.slice(0, 10)}… ` +
         `node=${outcome.node ? 'ok' : `FAIL ${outcome.nodeError}`} ` +
         `relay=${outcome.relay ? 'ok' : `FAIL ${outcome.relayError}`}` +
         (tampered ? '（中继侧 side 已改写注入）' : ''),

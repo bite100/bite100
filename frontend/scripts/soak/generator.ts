@@ -279,6 +279,12 @@ export interface SubmitOutcome {
   relay: boolean
   nodeError?: string
   relayError?: string
+  /**
+   * 本单真正发起网络提交的时刻（ms，第 36 轮 N4）：在 submitOrder
+   * 入口、首个 fetch 之前打点。旧口径由 recordSubmitted 在整批提交
+   * 完成后统一打点，批次内越靠前的单其传播延迟被系统性低估越多。
+   */
+  submittedAt: number
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -296,7 +302,8 @@ export async function submitOrder(
   gen: GeneratedOrder,
   relaySideOverride?: 'buy' | 'sell',
 ): Promise<SubmitOutcome> {
-  const out: SubmitOutcome = { node: false, relay: false }
+  // N4：第 36 轮起在真正发起提交的入口打点，而不是批次结束后补记。
+  const out: SubmitOutcome = { node: false, relay: false, submittedAt: Date.now() }
   const relayBody = {
     ...gen.body,
     chainId: gen.chainId,

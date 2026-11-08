@@ -117,6 +117,13 @@ export interface EvaluatedOrder {
   conflict: boolean
   /** 机器可读判定原因码（诊断用） */
   reasons: string[]
+  /**
+   * 可成交认证阻断码（第 36 轮）：与 reasons/validity 分开——validity 是
+   * 观察分类（状态机评估是否通过），本字段回答「能否认证为可成交」。
+   * 空数组 = 无阻断。当前协议下方向不可证（见 protocol.ts），每单恒为
+   * [SIDE_UNPROVABLE]，可成交集按构造为空。
+   */
+  tradableBlockers: string[]
   /** 链上权威剩余量（wei 整数字符串）；链上未知时为按源自报推导的诊断值并以 validity=UNKNOWN 标注 */
   remainingIn: string
   remainingOut: string
@@ -125,7 +132,7 @@ export interface EvaluatedOrder {
   badSignatureCopies: number
 }
 
-/** 合并视图：tradeable 为可成交集合（仅 VALID 且无冲突），all 为全部评估结果（诊断） */
+/** 合并视图：tradeable 为可成交集合（仅 VALID、无冲突、且无认证阻断），all 为全部评估结果（诊断） */
 export interface MergedView {
   chainId: number
   pair: string

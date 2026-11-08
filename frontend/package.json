@@ -14,7 +14,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check:abi": "node scripts/check-governance-abi.mjs",
-    "check:abi:selftest": "node scripts/check-governance-abi.test.mjs"
+    "check:abi:selftest": "node scripts/check-governance-abi.test.mjs",
+    "test:soak-timing": "node scripts/soak/timing.test.mjs"
   },
   "dependencies": {
     "@chainsafe/libp2p-noise": "^17.0.0",

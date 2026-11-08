@@ -35,6 +35,14 @@
 // (${...})、转义字符、标识符/展开等非纯字符串元素一律报错，绝不
 // 静默跳过。自检新增：反引号声明、混合引号、混合中藏伪造声明
 // （漏检才会放行）、模板表达式、表达式元素五例。
+//
+// 第 36 轮 N2：数组结尾的词法定位——旧实现以 indexOf('] as const')
+// 找结尾，数组内注释里出现同一字样（// ] as const）会被误认作结尾，
+// 后续声明被静默截断（计数对账也随之缩小，漂移无从发现）。现改为
+// findArrayEnd 逐字符词法扫描：跟踪行/块注释、三种字符串、模板表达
+// 式嵌套与方括号深度，只有深度归零的 ']' 才是真结尾；scanStringLiterals
+// 同步补齐块注释跳过。自检新增：行注释/块注释伪结尾后接合法声明
+// （必过且计数含两条）与伪造声明（必因漂移被拦）四例。
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -104,7 +112,7 @@ function sigKey(s) {
 //   （本检查只认纯字面量签名，不猜表达式求值结果）；
 // - 字符串之外出现标识符/数字/展开 ... 等非标点内容 → 报错
 //   （数组元素不是纯字符串，提取口径不再适用，绝不静默跳过）；
-// - // 行注释在非字符串状态下整段跳过（注释里的引号不污染计数）。
+// - // 行注释与 /* */ 块注释在非字符串状态下整段跳过（注释里的引号不污染计数）。
 function scanStringLiterals(block) {
   const literals = []
   let i = block.indexOf('[')
@@ -115,6 +123,12 @@ function scanStringLiterals(block) {
     const ch = block[i]
     if (ch === '/' && block[i + 1] === '/') {
       while (i < block.length && block[i] !== '\n') i++
+      continue
+    }
+    if (ch === '/' && block[i + 1] === '*') {
+      const close = block.indexOf('*/', i + 2)
+      if (close < 0) throw new Error('GOVERNANCE_ABI 块注释未闭合')
+      i = close + 2
       continue
     }
     if (ch === "'" || ch === '"' || ch === '`') {
@@ -155,6 +169,111 @@ function scanStringLiterals(block) {
   return literals
 }
 
+// 词法扫描定位数组真正的结尾 ']'（第 36 轮 N2）：从 from 之后的首个
+// '[' 起逐字符扫描，状态栈跟踪行注释/块注释/单引号/双引号/模板字面量
+// （模板里的 ${...} 表达式帧可再嵌套字符串/注释/模板，按其自身的 }
+// 收尾），方括号深度只在最外层代码帧内计数（字符串内的 '[]' 如
+// 'bytes32[] calldata proof' 不计深度）。只有深度归零的 ']' 才是
+// 数组结尾；注释里的 '] as const' 字样、字符串内的 ']' 都不算。
+// 返回 ']' 下标；扫描到文本末尾仍未归零返回 -1。
+function findArrayEnd(text, from) {
+  let i = text.indexOf('[', from)
+  if (i < 0) return -1
+  let depth = 0
+  const stack = [{ kind: 'code', tplExpr: false, braces: 0 }]
+  while (i < text.length) {
+    const f = stack[stack.length - 1]
+    const ch = text[i]
+    const nx = text[i + 1]
+    if (f.kind === 'line') {
+      if (ch === '\n') stack.pop()
+      i++
+      continue
+    }
+    if (f.kind === 'block') {
+      if (ch === '*' && nx === '/') {
+        stack.pop()
+        i += 2
+      } else i++
+      continue
+    }
+    if (f.kind === 'sq' || f.kind === 'dq') {
+      const q = f.kind === 'sq' ? "'" : '"'
+      if (ch === '\\') {
+        i += 2
+        continue
+      }
+      if (ch === q) stack.pop()
+      i++
+      continue
+    }
+    if (f.kind === 'tpl') {
+      if (ch === '\\') {
+        i += 2
+        continue
+      }
+      if (ch === '`') {
+        stack.pop()
+        i++
+        continue
+      }
+      if (ch === '$' && nx === '{') {
+        stack.push({ kind: 'code', tplExpr: true, braces: 0 })
+        i += 2
+        continue
+      }
+      i++
+      continue
+    }
+    // code 帧
+    if (ch === '/' && nx === '/') {
+      stack.push({ kind: 'line' })
+      i += 2
+      continue
+    }
+    if (ch === '/' && nx === '*') {
+      stack.push({ kind: 'block' })
+      i += 2
+      continue
+    }
+    if (ch === "'") {
+      stack.push({ kind: 'sq' })
+      i++
+      continue
+    }
+    if (ch === '"') {
+      stack.push({ kind: 'dq' })
+      i++
+      continue
+    }
+    if (ch === '`') {
+      stack.push({ kind: 'tpl' })
+      i++
+      continue
+    }
+    if (ch === '{') {
+      f.braces++
+      i++
+      continue
+    }
+    if (ch === '}') {
+      if (f.tplExpr && f.braces === 0) stack.pop()
+      else f.braces--
+      i++
+      continue
+    }
+    if (!f.tplExpr && stack.length === 1) {
+      if (ch === '[') depth++
+      else if (ch === ']') {
+        depth--
+        if (depth === 0) return i
+      }
+    }
+    i++
+  }
+  return -1
+}
+
 // 从 config.ts 的 GOVERNANCE_ABI 数组块提取并解析全部声明（M2/M2-R
 // 加固点）：任一环节异常都以 exit(1) 失败，绝不允许「解析到 0 条」
 // 或「漏检某条」时空过。
@@ -164,12 +283,16 @@ function extractFrontendSigs(configText) {
     console.error('config.ts 中找不到 GOVERNANCE_ABI')
     process.exit(2)
   }
-  const end = configText.indexOf('] as const', start)
+  const end = findArrayEnd(configText, start)
   if (end < 0) {
+    console.error('config.ts 中 GOVERNANCE_ABI 数组结尾 ] 未找到（词法扫描未归零）')
+    process.exit(1)
+  }
+  if (!/^\s*as const\b/.test(configText.slice(end + 1))) {
     console.error('config.ts 中 GOVERNANCE_ABI 数组未以 ] as const 结尾')
     process.exit(1)
   }
-  const block = configText.slice(start, end)
+  const block = configText.slice(start, end + 1)
   let rawDecls
   try {
     rawDecls = scanStringLiterals(block)

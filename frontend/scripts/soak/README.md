@@ -18,6 +18,7 @@
 | 影子轮次 | dualread 的 `runDualReadRound`/`ShadowObserver`/`computeShadowMetrics`（生产同一套代码） |
 | 链上状态 | dualread 的 `createChainStateReader` + viem multicall 传输层 |
 | 中继书籍 | dualread 的 `createRelayBookAdapter`（第 30 轮 relay API 合同） |
+| 交易对轮转（第 36 轮） | 前端既有 `TRADE_PAIRS` / `DEFAULT_PAIR` / `getPairTokens`（src/config/pairs），不另立平行表 |
 | 打包 | 仓库既有 esbuild（vite 依赖），`build.mjs` |
 
 自有代码只有：生成器的规格/预检/限速胶水、执行器的记账（submitted /
@@ -57,10 +58,23 @@ SOAK_INTERVAL_SEC=600 \
 ```
 
 `run` 模式每周期：双链各签发一小批（买卖两侧、资金可落锁的方向）→
-双发 → 每链一轮影子评估 → JSONL 追加。低频对抗样本：第 6 周期起
-每 6 轮一张 120 秒短存活单（喂 EXPIRED 路径）；每 12 轮一张中继侧
+双发 → 每链一轮影子评估（每轮评估覆盖全部交易对）→ JSONL 追加。
+低频对抗样本：第 6 周期起每 6 轮一张 120 秒短存活单（喂 EXPIRED 路径）；每 12 轮一张中继侧
 side 改写注入（同一签名、先于正本到达中继占住 digest——状态机必须
 把它判冲突/未知，绝不进可成交集）。
+
+交易对轮转（第 36 轮）：第 35 轮 as-built 只跑了 BTC/USDT 一对，与
+3A 门槛「全部交易对」的口径不符。现 run 模式按周期在前端既有配置
+`src/config/pairs` 的 `TRADE_PAIRS` 全表轮转（双链同周期同对，不另立
+平行表），每周期每链单量与构成不变（Sepolia 3 / Base 2）；某对在某
+链未登记、或钱包在该对无可落锁余额时，generator 预检跳过并在日志
+写明原因（不注资、不硬凑）。冒烟仍固定默认对 BTC/USDT。
+
+提交时刻口径（第 36 轮 N4）：`submitted` 行的 `submittedAt` 是该单
+在提交路径发起网络提交的真实时刻（submitOrder 入口打点，经
+SubmitOutcome 穿线到记账），不再是整批提交完成后的记账时刻——旧
+口径会让批次内靠前订单的 propagationMs 被系统性低估。自检：
+`npm run test:soak-timing`（fetch 桩验证逐单打点与穿线）。
 
 ## 环境变量
 

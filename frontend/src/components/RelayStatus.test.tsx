@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RelayModesExplanation, ShadowModePill } from './RelayStatus'
+import { DirectionTrustNotice, RelayModesExplanation, ShadowModePill, Stage3AdmissionExplanation } from './RelayStatus'
 
 const html = (el: React.ReactElement): string => renderToStaticMarkup(el)
 
@@ -37,5 +37,25 @@ describe('RelayModesExplanation（三态说明）', () => {
     expect(text).toContain('shadow')
     expect(text).toContain('active')
     expect(text).toContain('尚未接线')
+  })
+})
+
+describe('DirectionTrustNotice（第 36 轮方向可信过渡说明）', () => {
+  it('明示方向无法证明、可成交认证暂停、恢复条件是协议升级', () => {
+    const text = html(<DirectionTrustNotice />)
+    expect(text).toContain('方向')
+    expect(text).toContain('无法被证明')
+    expect(text).toContain('不认证任何订单为「可成交」')
+    expect(text).toContain('协议')
+    expect(text).toContain('纳入签名')
+  })
+
+  it('准入说明写明 3A/3B 拆分、双链各自计数与过渡期口径', () => {
+    const text = html(<Stage3AdmissionExplanation />)
+    expect(text).toContain('3A')
+    expect(text).toContain('3B')
+    expect(text).toContain('各自累计 ≥500')
+    expect(text).toContain('自动满足')
+    expect(text).toContain('不能替代 3B')
   })
 })
