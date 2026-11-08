@@ -22,7 +22,9 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          # 第 33 轮对齐：与 node/go.mod 的 go 1.26.8 一致（此前钉 1.24，
+          # 与 Dockerfile 的 golang:1.26 口径漂移，ChatGPT 复审小项）。
+          go-version: "1.26.8"
           cache-dependency-path: node/go.sum
 
       - name: Vet
@@ -32,3 +34,13 @@ jobs:
       - name: Test
         working-directory: node
         run: go test ./internal/...
+
+  # 构建 node/Dockerfile（只 build 不 push）：防止 Dockerfile 的 Go 版本
+  # 与 go.mod 再次漂移（第 32 轮加；此前 golang:1.24 对 go 1.26.8 必挂）。
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build node Docker image (no push)
+        run: docker build -t p2p-node:ci-check -f node/Dockerfile node/

@@ -19,7 +19,9 @@ const MAKER_ENV =
   process.env.MAKER_ENV ?? join(homedir(), 'workspace/bite100-deployer/maker.env')
 
 // Sepolia 配置（与 relay/src/config.ts 及前端 chains.ts 一致）
-const SETTLEMENT = '0x9f0636839b6699d530F954F87B939DA6f56c9890'
+// 签名域的 verifyingContract：必须与 src/config.ts 的 Sepolia settlement 一致
+// （第 34 轮按第 33 轮部署栈更新；改其一必须同步改另一处，演示验签会当场报错）
+const SETTLEMENT = '0xa3F8cBCDc1533299D37836ea80d5004FF59f9094'
 const BTC = '0x8EDa0025C245B10eA1E10c257674B794C85350f3'
 const USDT = '0x6Ca8cb68Ee5BB15474f1cfFE07B895C974Ab9c6e'
 const CHAIN_ID = 11155111
@@ -36,6 +38,7 @@ const ORDER_TYPES = {
     { name: 'timestamp', type: 'uint256' },
     { name: 'expiresAt', type: 'uint256' },
     { name: 'nonce', type: 'uint256' },
+    { name: 'side', type: 'uint8' },
   ],
 }
 
@@ -66,6 +69,8 @@ async function signOrder(account, { orderId, createdAt, expiresAt, side }) {
     timestamp: BigInt(createdAt),
     expiresAt: BigInt(expiresAt),
     nonce: 0n,
+    // 签名字段 side（uint8，规范 §2）：buy ↔ 0、sell ↔ 1，与请求体 side 字符串对应
+    side: side === 'buy' ? 0 : 1,
   }
   const signature = await account.signTypedData({
     domain: { name: '比特100', version: '1', chainId: CHAIN_ID, verifyingContract: SETTLEMENT },

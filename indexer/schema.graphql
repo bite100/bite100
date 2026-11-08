@@ -1,0 +1,66 @@
+# Bit100 Settlement 成交索引（第 34 轮，无节点阶段 2C）
+# 实体口径：
+# - Trade：每笔链上成交一行，唯一 ID = chainId-txHash-logIndex。
+#   来源事件 TradeSettled / TradeSettledWithGasReimburse（二选一，合约内互斥分支，
+#   每 Fill 恰好其一，不重不漏）。makerDigest/takerDigest 经同 tx calldata
+#   解码按序关联，解不出为 null 且 digestAssociated=false，绝不猜测归并。
+# - GasShare：每笔成交随后的 GasCostShared（gas 对半回收明细），按同 tx
+#   顺序 + maker/taker 双重核对关联到 Trade（trade_id 可空 = 未能关联）。
+# - TxCursor：索引器内部游标（同 tx 内成交/ gas 事件的顺序计数与成交 id 列表），
+#   供 handler 做确定性顺序关联；非业务数据，查询时可忽略。
+# 配合 config.yaml 的 disable_default_cross_chain: true，全部实体按链隔离，
+# 同一 id 在不同链是独立行，回滚互不影响。chainId 由框架按 per-chain 模式
+# 自动附加（schema 里不许再声明同名字段，codegen 会拒绝）；GraphQL 查询仍可
+# 按 chainId 过滤/选取，前端 services/tradesDual.ts 的查询口径不变。
+
+type Trade {
+  id: ID!
+  contractAddress: String!
+  txHash: String!
+  logIndex: Int!
+  blockNumber: Int!
+  blockHash: String!
+  blockTimestamp: Int!
+  eventKind: String!
+  maker: String!
+  taker: String!
+  tokenIn: String!
+  tokenOut: String!
+  amountIn: BigInt!
+  amountOut: BigInt!
+  feeAmount: BigInt!
+  gasReimburseIn: BigInt
+  gasReimburseOut: BigInt
+  gasRecipient: String
+  makerDigest: String
+  takerDigest: String
+  digestAssociated: Boolean!
+}
+
+type GasShare {
+  id: ID!
+  contractAddress: String!
+  txHash: String!
+  logIndex: Int!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  trade_id: Trade
+  maker: String!
+  taker: String!
+  gasRecipient: String!
+  gasUsed: BigInt!
+  gasCostWei: BigInt!
+  reason: Int!
+  makerToken: String!
+  makerDeduct: BigInt!
+  makerShortfall: BigInt!
+  takerToken: String!
+  takerDeduct: BigInt!
+  takerShortfall: BigInt!
+}
+
+type TxCursor {
+  id: ID!
+  tradeIds: [String!]!
+  gasCount: Int!
+}

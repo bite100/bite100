@@ -46,12 +46,12 @@ contract CalibrateGas is Script {
         Settlement.Order memory mo = Settlement.Order({
             orderId: "cal-m", userAddress: maker, tokenIn: address(tokenA), tokenOut: address(tokenB),
             amountIn: 100e18, amountOut: 100e18, price: 1e18, timestamp: block.timestamp,
-            expiresAt: block.timestamp + 1 days, nonce: 0
+            expiresAt: block.timestamp + 1 days, nonce: 0, side: 1
         });
         Settlement.Order memory to = Settlement.Order({
             orderId: "cal-t", userAddress: taker, tokenIn: address(tokenA), tokenOut: address(tokenB),
             amountIn: 100e18, amountOut: 100e18, price: 1e18, timestamp: block.timestamp,
-            expiresAt: block.timestamp + 1 days, nonce: 0
+            expiresAt: block.timestamp + 1 days, nonce: 0, side: 0
         });
         bytes memory mSig = _sign(makerKey, settlement, mo);
         bytes memory tSig = _sign(takerKey, settlement, to);
@@ -59,8 +59,8 @@ contract CalibrateGas is Script {
         // FILL 环境变量控制成交量：100 = 全量（锁记录被删除，产生 SSTORE 退款）；50 = 部分（无删除）
         uint256 fillAmt = vm.envOr("FILL", uint256(100e18));
         vm.startBroadcast(deployerKey);
-        vault.lockForOrder(_v(mo), mSig, true);
-        vault.lockForOrder(_v(to), tSig, false);
+        vault.lockForOrder(_v(mo), mSig);
+        vault.lockForOrder(_v(to), tSig);
         Settlement.Fill memory fill = Settlement.Fill({
             makerOrder: Settlement.SignedOrder({order: mo, signature: mSig}),
             takerOrder: Settlement.SignedOrder({order: to, signature: tSig}),
@@ -82,7 +82,7 @@ contract CalibrateGas is Script {
         return VaultOrder({
             orderId: o.orderId, userAddress: o.userAddress, tokenIn: o.tokenIn, tokenOut: o.tokenOut,
             amountIn: o.amountIn, amountOut: o.amountOut, price: o.price, timestamp: o.timestamp,
-            expiresAt: o.expiresAt, nonce: o.nonce
+            expiresAt: o.expiresAt, nonce: o.nonce, side: o.side
         });
     }
 }

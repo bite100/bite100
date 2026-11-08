@@ -38,6 +38,20 @@ export const EIP712_DOMAIN = {
   verifyingContract: defaultChain?.contracts.settlement ?? ZERO_ADDRESS,
 }
 
+/** 订单方向（阶段 3 Route A：side 进入 EIP-712 签名结构，置于末尾）。
+ * 数值与订单簿/中继行的自报 side 字符串一一对应：buy ↔ 0、sell ↔ 1。
+ * 语义相对签名交易对朝向：BUY 付 tokenOut 收 tokenIn；SELL 付 tokenIn 收 tokenOut。 */
+export const SIDE_BUY = 0
+export const SIDE_SELL = 1
+
+export function sideToSignedValue(side: 'buy' | 'sell'): number {
+  return side === 'sell' ? SIDE_SELL : SIDE_BUY
+}
+
+export function signedValueToSide(v: number): 'buy' | 'sell' | null {
+  return v === SIDE_BUY ? 'buy' : v === SIDE_SELL ? 'sell' : null
+}
+
 /** Order 类型定义（与 ethers TypedDataField[] 兼容；字段顺序即编码顺序） */
 export const ORDER_TYPES = {
   Order: [
@@ -51,6 +65,7 @@ export const ORDER_TYPES = {
     { name: 'timestamp', type: 'uint256' },
     { name: 'expiresAt', type: 'uint256' },
     { name: 'nonce', type: 'uint256' },
+    { name: 'side', type: 'uint8' },
   ],
 }
 
@@ -75,4 +90,6 @@ export interface OrderData {
   expiresAt: number
   /** 链上结算 nonce（Settlement.getCurrentNonce(userAddress)），结算时被合约消耗 */
   nonce: number
+  /** 签名方向（阶段 3）：SIDE_BUY=0 / SIDE_SELL=1，见上方常量 */
+  side: number
 }

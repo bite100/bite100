@@ -27,3 +27,6 @@ tmp/
 .DS_Store
 Thumbs.db
 *.log
+
+# 第 35 轮合成压测打包产物
+frontend/scripts/soak/dist/

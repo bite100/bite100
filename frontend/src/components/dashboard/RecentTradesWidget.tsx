@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Text } from '@mantine/core'
 import { nodeGet } from '../../nodeClient'
-import { DEFAULT_PAIR } from '../../config/pairs'
+import { CHAIN_ID } from '../../config'
+import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
+import { INDEXER_ENABLED } from '../../config/indexer'
+import {
+  fetchIndexerTrades,
+  loadDualTrades,
+  normalizeNodeTradeRow,
+  type MergedTrade,
+} from '../../services/tradesDual'
 import { fromScaled, fmtPrice, fmtAmount, fmtTime } from './tradeFormat'
 
 const DISPLAY_LIMIT = 18
@@ -21,16 +29,67 @@ export interface RecentTradesWidgetProps {
 /**
  * 右栏「最新成交」：与订单簿同源（节点 /api/trades），5 秒轮询。
  * 价格颜色按与上一笔（更早）成交的比较着色——成交记录本身不带 taker 方向字段，不臆造方向。
+ *
+ * 第 34 轮双源：配置 VITE_INDEXER_URL 后，Envio 链上索引为权威展示源——
+ * 与节点按 (chainId, txHash, logIndex) 口径合并（节点无 logIndex，同 tx 内
+ * 按双方+数量配对），节点独有标「待索引」，Envio 独有照常展示，冲突以链上
+ * 事件为准（见 services/tradesDual.ts）。未配置时行为与此前完全一致。
+ *
+ * 第 35 轮 D6：双源独立取数——节点宕机时照常展示链上索引数据（页首会
+ * 明示「节点暂不可达」），索引宕机时回退节点数据；两源皆不可达才显示
+ * 「成交数据暂不可用」，不再把单源故障误报成整页不可用。
+ *
+ * 第 39 轮：双源取数加超时真取消（节点 5 秒 / 索引器 8 秒，见
+ * services/tradesDual.ts），轮询加 in-flight 守卫——单源挂死不再拖住
+ * 整表，慢请求不在轮询下叠加。
  */
 export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetProps = {}) {
   const [trades, setTrades] = useState<RecentTrade[]>([])
+  const [merged, setMerged] = useState<MergedTrade[] | null>(null)
+  const [indexerFailed, setIndexerFailed] = useState(false)
+  /** 第 35 轮 D6：节点源单独失败标记（索引可用时不再整页盖掉） */
+  const [nodeFailed, setNodeFailed] = useState(false)
   const [loading, setLoading] = useState(true)
-  /** 节点不可达/未配置时为 true，区分「暂无成交」与「节点未连接」 */
+  /** 无任一数据源可用时为 true，区分「暂无成交」与「数据不可用」 */
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+    // 第 39 轮：in-flight 守卫——上一轮取数未完成时跳过本轮 tick，避免
+    // 慢/挂死请求在 5 秒轮询下叠加（双源取数已有超时兜底，此处再防堆积）。
+    let inFlight = false
     const fetchTrades = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
+      if (INDEXER_ENABLED) {
+        // 第 35 轮 D6：两源独立取数（loadDualTrades 内部 allSettled），
+        // 任一源失败只降级该源；两源皆失败才置 failed（不可用态）。
+        const baseToken = getPairTokens(CHAIN_ID, pair)?.base ?? ''
+        const outcome = await loadDualTrades(
+          async (signal) => {
+            const { data } = await nodeGet<unknown>(
+              '/api/trades',
+              {
+                pair,
+                limit: '30',
+              },
+              { signal },
+            )
+            const list = Array.isArray(data) ? data : []
+            return list.map(normalizeNodeTradeRow)
+          },
+          (signal) => fetchIndexerTrades(CHAIN_ID, pair, 50, undefined, undefined, 0, { signal }),
+          baseToken,
+        )
+        if (cancelled) return
+        setNodeFailed(outcome.nodeFailed)
+        setIndexerFailed(outcome.indexerFailed)
+        setFailed(outcome.unavailable)
+        setMerged(outcome.result.trades.filter((t) => t.price > 0).slice(0, DISPLAY_LIMIT))
+        setLoading(false)
+        return
+      }
       try {
         const { data } = await nodeGet<unknown>('/api/trades', {
           pair,
@@ -56,10 +115,14 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
       } catch {
         if (!cancelled) {
           setTrades([])
+          setMerged(null)
           setFailed(true)
         }
       } finally {
         if (!cancelled) setLoading(false)
+      }
+      } finally {
+        inFlight = false
       }
     }
     fetchTrades()
@@ -71,6 +134,7 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
   }, [pair])
 
   const [base, quote] = pair.split('/')
+  const displayMerged = INDEXER_ENABLED ? (merged ?? []) : null
 
   return (
     <div className="recent-trades">
@@ -80,6 +144,17 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
         </Text>
         <Text size="xs" c="dimmed">{pair}</Text>
       </div>
+      {INDEXER_ENABLED && (
+        <Text size="xs" c="dimmed">
+          {nodeFailed && indexerFailed
+            ? '节点与链上索引均不可达，成交数据暂不可用'
+            : indexerFailed
+              ? '链上索引暂不可达，暂显示节点数据（均标「待索引」）'
+              : nodeFailed
+                ? '节点暂不可达，暂显示链上索引数据（Envio 为权威来源）'
+                : '来源：链上索引（Envio）为权威，节点独有成交标「待索引」'}
+        </Text>
+      )}
       <div className="book-cols" aria-hidden>
         <span>价格 ({quote})</span>
         <span>数量 ({base})</span>
@@ -87,6 +162,34 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
       </div>
       {loading ? (
         <Text size="xs" c="dimmed" py="sm">加载中…</Text>
+      ) : displayMerged ? (
+        displayMerged.length === 0 ? (
+          <Text size="xs" c="dimmed" py={4}>
+            {failed ? '节点与链上索引均不可达，成交数据暂不可用' : '暂无成交'}
+          </Text>
+        ) : (
+          displayMerged.map((t, i) => {
+            const older = displayMerged[i + 1]
+            const color =
+              !older || t.price === older.price
+                ? 'var(--b100-text)'
+                : t.price > older.price
+                  ? 'var(--b100-up)'
+                  : 'var(--b100-down)'
+            return (
+              <div className="book-row book-row-static" key={t.key}>
+                <span className="book-cell book-price" style={{ color }}>
+                  {fmtPrice(t.price)}
+                </span>
+                <span className="book-cell book-cell-r">{fmtAmount(t.amount)}</span>
+                <span className="book-cell book-cell-r">
+                  {t.timestamp > 0 ? fmtTime(t.timestamp) : '—'}
+                  {t.pendingIndex ? ' · 待索引' : t.source === 'envio' ? ' · 链上' : ''}
+                </span>
+              </div>
+            )
+          })
+        )
       ) : trades.length === 0 ? (
         <Text size="xs" c="dimmed" py={4}>
           {failed ? '节点未连接，成交数据暂不可用' : '暂无成交'}

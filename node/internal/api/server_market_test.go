@@ -109,6 +109,23 @@ func TestPostOrder_InvalidExecTypeRejected(t *testing.T) {
 	}
 }
 
+// TestPostOrder_InvalidSideRejected 阶段 3 fail-closed：未知 side 必须在接单
+// 层被拒（400 invalid side）。用例中的签名是对 buy 口径签出的——若接单层
+// 不先判 side，未知值会绕过方向语义冒充卖盘入簿（引擎非 buy 即卖盘口径）。
+func TestPostOrder_InvalidSideRejected(t *testing.T) {
+	engine := match.NewEngine(marketPairTokens)
+	s := newMarketTestServer(engine)
+	o := signedMarketOrder(t, storage.ExecTypeLimit)
+	o.Side = "hold"
+	rec := postOrder(t, s, o)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid side, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid side") {
+		t.Errorf("expected invalid side message, got %q", rec.Body.String())
+	}
+}
+
 func TestPostOrder_LimitUnaffectedByPrecheck(t *testing.T) {
 	engine := match.NewEngine(marketPairTokens)
 	s := newMarketTestServer(engine)

@@ -1,5 +1,13 @@
 # 部署到测试网（推荐：Gas 最低的 Base Sepolia）
 
+> ⚠️ **本文已被取代（第 32 轮，2026-11-08）**：本文是项目早期（Phase 1
+> 时代）的部署记录，其中的合约组合、费率（如 `setFeeBps(5)`）与步骤
+> **不再适用**，正文保留仅作历史留存。现行双链技术栈（Vault /
+> Settlement / MakerVault）与地址以
+> `docs/round30-nodeless-stage1-2026-11-08.md` +
+> `docs/round30-l2-legb-2026-11-08.md` 为准（第 32 轮换栈后以
+> `docs/round32-fixes-2026-11-08.md` 为准）。
+
 ## 网络与 Gas 对比
 
 | 网络 | 类型 | Gas 费用 | 推荐 |

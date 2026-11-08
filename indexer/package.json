@@ -1,0 +1,22 @@
+{
+  "name": "bit100-indexer",
+  "version": "0.34.0",
+  "private": true,
+  "type": "module",
+  "description": "Bit100 Settlement 成交索引（第 34 轮，无节点阶段 2C；Envio HyperIndex v3）",
+  "scripts": {
+    "codegen": "envio codegen",
+    "dev": "envio dev",
+    "test": "vitest run",
+    "test:pure": "vitest run test/association.test.ts"
+  },
+  "dependencies": {
+    "envio": "3.15.0",
+    "viem": "2.57.16"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0"
+  }
+}

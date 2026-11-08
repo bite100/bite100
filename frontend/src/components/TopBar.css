@@ -1,0 +1,81 @@
+/* 第 31 轮顶栏：48px 固定，内容区为其留出顶部间距（见 App.css .app） */
+.topbar31 {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 65;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--b100-border);
+}
+.topbar31-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--b100-accent);
+  color: #fff;
+  font-weight: 800;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.topbar31-title {
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.topbar31-spacer {
+  flex: 1;
+}
+.topbar31-wallet {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  background: var(--b100-text);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* 链切换收进顶栏：按钮收成 chip 形态（圆点 + 链名），下拉菜单行为不变 */
+.topbar31-chain .chain-switcher-button {
+  border: 1px solid var(--b100-border);
+  background: #fff;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: none;
+  min-height: 0;
+}
+.topbar31-chain .chain-switcher-button::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--b100-up);
+  flex: none;
+}
+.topbar31-chain .chain-indicator {
+  font-size: 9px;
+  color: var(--b100-text-3);
+}
+@media (min-width: 1024px) {
+  .topbar31 {
+    padding: 0 20px;
+  }
+}

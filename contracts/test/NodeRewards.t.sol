@@ -74,7 +74,7 @@ contract NodeRewardsTest is Test {
 
     // ---------- 与 Settlement.t.sol 同源的订单/锁定辅助 ----------
 
-    function _order(address user, string memory orderId, uint256 amountIn, uint256 amountOut, uint256 nonce)
+    function _order(address user, string memory orderId, uint256 amountIn, uint256 amountOut, uint256 nonce, uint8 side)
         internal
         view
         returns (Settlement.Order memory)
@@ -89,7 +89,8 @@ contract NodeRewardsTest is Test {
             price: (amountOut * 1e18) / amountIn,
             timestamp: block.timestamp,
             expiresAt: block.timestamp + 1 days,
-            nonce: nonce
+            nonce: nonce,
+            side: side
         });
     }
 
@@ -98,22 +99,21 @@ contract NodeRewardsTest is Test {
         return Settlement.SignedOrder({order: order, signature: abi.encodePacked(r, s, v)});
     }
 
-    function _lock(Settlement.SignedOrder memory so, bool payWithTokenIn) internal {
+    function _lock(Settlement.SignedOrder memory so) internal {
         Settlement.Order memory o = so.order;
         vault.lockForOrder(
             VaultOrder({
                 orderId: o.orderId, userAddress: o.userAddress, tokenIn: o.tokenIn, tokenOut: o.tokenOut,
                 amountIn: o.amountIn, amountOut: o.amountOut, price: o.price, timestamp: o.timestamp,
-                expiresAt: o.expiresAt, nonce: o.nonce
+                expiresAt: o.expiresAt, nonce: o.nonce, side: o.side
             }),
-            so.signature,
-            payWithTokenIn
+            so.signature
         );
     }
 
     function _stdFill() internal view returns (Settlement.Fill memory) {
-        Settlement.SignedOrder memory m = _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0));
-        Settlement.SignedOrder memory t = _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0));
+        Settlement.SignedOrder memory m = _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0, 1));
+        Settlement.SignedOrder memory t = _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0, 0));
         return Settlement.Fill({
             makerOrder: m,
             takerOrder: t,
@@ -144,8 +144,8 @@ contract NodeRewardsTest is Test {
     function test_BatchGasSavings_RevertsWhenNodeRewardsSettlementUnset() public {
         _wireExceptNodeRewardsSettlement();
         Settlement.Fill memory fill = _stdFill();
-        _lock(fill.makerOrder, true);
-        _lock(fill.takerOrder, false);
+        _lock(fill.makerOrder);
+        _lock(fill.takerOrder);
 
         // fills 必须在 expectRevert 之前构造好：_batch() 内部会调
         // orderDigest（外部调用），若放在 expectRevert 之后，期望会被那次
@@ -165,8 +165,8 @@ contract NodeRewardsTest is Test {
         nodeRewards.setSettlement(address(settlement)); // 脚本的关键一步
 
         Settlement.Fill memory fill = _stdFill();
-        _lock(fill.makerOrder, true);
-        _lock(fill.takerOrder, false);
+        _lock(fill.makerOrder);
+        _lock(fill.takerOrder);
         settlement.settleTradesBatchWithGasSavings(_batch(), GAS_SAVINGS);
 
         assertEq(vault.balanceOf(address(tokenB), maker), 99.99e18);

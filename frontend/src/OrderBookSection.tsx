@@ -12,6 +12,7 @@ import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { nodeGet, nodePost } from './nodeClient'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
 import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
+import { sideToSignedValue } from './services/orderSigningTypes'
 import { dualSendOrderToRelay } from './services/relayDualSend'
 import { verifyOrderSignatureSignedData } from './services/orderVerification'
 import { LoadingSpinner } from './components/LoadingSpinner'
@@ -374,6 +375,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         timestamp,
         expiresAt,
         nonce,
+        side: sideToSignedValue(side),
       }
       const signature = await signOrder(orderData, signer, CHAIN_ID)
       const valid = await verifyOrderSignatureSignedData(orderData, signature, { chainId: CHAIN_ID })

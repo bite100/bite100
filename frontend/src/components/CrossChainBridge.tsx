@@ -13,6 +13,12 @@ import {
 import { getProvider, withSigner, formatTokenAmount, formatError } from '../utils'
 import { ErrorDisplay } from './ErrorDisplay'
 import { ERC20_ABI } from '../config'
+import {
+  prepState as computePrepState,
+  wrapShortfallWei,
+  bridgeCta,
+  expectedArrival,
+} from './bridge/prepState'
 import './CrossChainBridge.css'
 
 interface CrossChainBridgeProps {
@@ -31,8 +37,8 @@ const CROSS_CHAIN_BRIDGE_ABI = [
   'event BridgeStatusUpdated(uint256 indexed transferId, uint8 status, uint256 timestamp)',
 ] as const
 
-// WrappedTKA：在 ERC20 之外只需 wrap（TKA -> wTKA，1:1）
-const WRAPPED_TOKEN_ABI = [...ERC20_ABI, 'function wrap(uint256 amount)'] as const
+// WrappedTKA：在 ERC20 之外只需 wrap（TKA -> wTKA，1:1）与 unwrap（烧 WTKA 换回 TKA，无需授权）
+const WRAPPED_TOKEN_ABI = [...ERC20_ABI, 'function wrap(uint256 amount)', 'function unwrap(uint256 amount)'] as const
 
 // Chainlink CCIP 官方 Router（JSON ABI，含 tuple 结构）
 const CCIP_ROUTER_ABI = [
@@ -220,6 +226,15 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   const [wormholeTxHash, setWormholeTxHash] = useState<string | null>(null)
   const [fastLaneQuote, setFastLaneQuote] = useState<FastLaneQuote | null>(null)
   const [fastlaneTxHash, setFastlaneTxHash] = useState<string | null>(null)
+  // 第 31 轮 §12.3 准备区状态：WTKA 余额（wei，字符串保存避免精度丢失）、包裹/解包表单
+  const [wtkaWei, setWtkaWei] = useState<bigint>(0n)
+  const [wrapAmount, setWrapAmount] = useState<string>('')
+  const [wrapEdited, setWrapEdited] = useState(false)
+  const [wrapBusy, setWrapBusy] = useState(false)
+  const [wrapMsg, setWrapMsg] = useState<string | null>(null)
+  const [unwrapOpen, setUnwrapOpen] = useState(false)
+  const [unwrapAmount, setUnwrapAmount] = useState<string>('')
+  const [unwrapBusy, setUnwrapBusy] = useState(false)
 
   const sourceChain = sourceChainId ? getChainConfig(sourceChainId) : null
   const targetChain = targetChainId ? getChainConfig(targetChainId) : null
@@ -263,6 +278,99 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
   useEffect(() => {
     fetchBalance()
   }, [fetchBalance])
+
+  /* ---------- 第 31 轮 §12.3：WTKA 准备区（仅 CCIP / Wormhole） ---------- */
+  const isWrapBridge = selectedBridge === 'ccip' || selectedBridge === 'wormhole'
+  const amountWeiNow = parseAmountToWei(amount)
+  const prep = computePrepState(selectedBridge, amountWeiNow, wtkaWei)
+  const shortfallWei = wrapShortfallWei(amountWeiNow, wtkaWei)
+
+  const fetchWtkaBalance = useCallback(async () => {
+    if (!account || !sourceChain?.contracts.wrappedToken) {
+      setWtkaWei(0n)
+      return
+    }
+    try {
+      const provider = getProvider()
+      if (!provider) return
+      const wtka = new Contract(sourceChain.contracts.wrappedToken, ERC20_ABI, provider)
+      setWtkaWei((await wtka.balanceOf(account)) as bigint)
+    } catch {
+      setWtkaWei(0n)
+    }
+  }, [account, sourceChain])
+
+  useEffect(() => {
+    if (isWrapBridge) void fetchWtkaBalance()
+  }, [isWrapBridge, fetchWtkaBalance])
+
+  // 包裹数量默认按差额预填（用户手改后不再覆盖）
+  useEffect(() => {
+    if (!wrapEdited && shortfallWei > 0n) {
+      setWrapAmount(formatTokenAmount(shortfallWei))
+    }
+  }, [shortfallWei, wrapEdited])
+
+  /** 精确包裹指定数量：TKA 授权（不足才批）→ wrap。execute 流程的补差额与准备区共用这一步。 */
+  const wrapExact = async (signer: any, exactWei: bigint) => {
+    if (exactWei <= 0n) return
+    const tkaAddress = sourceChain!.contracts.token0
+    const wtkaAddress = sourceChain!.contracts.wrappedToken!
+    const wtka = new Contract(wtkaAddress, WRAPPED_TOKEN_ABI, signer)
+    const tka = new Contract(tkaAddress, ERC20_ABI, signer)
+    const allowance: bigint = await tka.allowance(account, wtkaAddress)
+    if (allowance < exactWei) {
+      const tx = await tka.approve(wtkaAddress, exactWei)
+      await tx.wait()
+    }
+    const wrapTx = await wtka.wrap(exactWei)
+    await wrapTx.wait()
+  }
+
+  const handleWrap = async () => {
+    const wei = parseAmountToWei(wrapAmount)
+    if (wei === 0n) {
+      setWrapMsg('请输入包裹数量')
+      return
+    }
+    setWrapBusy(true)
+    setWrapMsg(null)
+    try {
+      await withSigner(async (signer) => {
+        await wrapExact(signer, wei)
+      })
+      setWrapMsg('包裹已上链确认，WTKA 余额已刷新。')
+      setWrapEdited(false)
+      await fetchWtkaBalance()
+      await fetchBalance()
+    } catch (e) {
+      setWrapMsg(formatError(e))
+    } finally {
+      setWrapBusy(false)
+    }
+  }
+
+  const handleUnwrap = async () => {
+    const wei = parseAmountToWei(unwrapAmount)
+    if (wei === 0n) return
+    setUnwrapBusy(true)
+    setWrapMsg(null)
+    try {
+      await withSigner(async (signer) => {
+        const wtka = new Contract(sourceChain!.contracts.wrappedToken!, WRAPPED_TOKEN_ABI, signer)
+        const tx = await wtka.unwrap(wei)
+        await tx.wait()
+      })
+      setUnwrapAmount('')
+      setWrapMsg('解包已上链确认，WTKA 已换回 TKA。')
+      await fetchWtkaBalance()
+      await fetchBalance()
+    } catch (e) {
+      setWrapMsg(formatError(e))
+    } finally {
+      setUnwrapBusy(false)
+    }
+  }
 
   // 三家桥的实时报价（选好源链/目标链/数量后并行刷新，展示在各自卡片上）
   const refreshQuotes = useCallback(async () => {
@@ -421,22 +529,13 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     return () => clearInterval(interval)
   }, [bridgeAddress, lastRequestId, checkBridgeStatus])
 
-  // CCIP / Wormhole 共用：把 TKA 按 1:1 换成 wTKA（只补差额部分）
+  // CCIP / Wormhole 共用：把 TKA 按 1:1 换成 wTKA（只补差额部分；准备区已就绪时这里直接跳过）
   const wrapShortfall = async (signer: any, amountWei: bigint) => {
-    const tkaAddress = sourceChain!.contracts.token0
     const wtkaAddress = sourceChain!.contracts.wrappedToken!
     const wtka = new Contract(wtkaAddress, WRAPPED_TOKEN_ABI, signer)
     const current: bigint = await wtka.balanceOf(account)
     if (current >= amountWei) return
-    const shortfall = amountWei - current
-    const tka = new Contract(tkaAddress, ERC20_ABI, signer)
-    const allowance: bigint = await tka.allowance(account, wtkaAddress)
-    if (allowance < shortfall) {
-      const tx = await tka.approve(wtkaAddress, shortfall)
-      await tx.wait()
-    }
-    const wrapTx = await wtka.wrap(shortfall)
-    await wrapTx.wait()
+    await wrapExact(signer, amountWei - current)
   }
 
   const executeLayerzero = async (amountWei: bigint) => {
@@ -635,9 +734,40 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
     setShowConfirm(true)
   }
 
+  const swapChains = () => {
+    setSourceChainId(targetChainId)
+    setTargetChainId(sourceChainId)
+  }
+
+  const cta = bridgeCta({
+    bridge: selectedBridge,
+    prep,
+    account,
+    hasSource: Boolean(sourceChainId),
+    hasTarget: Boolean(targetChainId),
+    hasAmount: Boolean(amount),
+    loading,
+  })
+  const arrivalText = expectedArrival({
+    bridge: selectedBridge,
+    amountText: amount,
+    fastlaneNet: fastLaneQuote
+      ? `${formatUnits(fastLaneQuote.netReceived, fastLaneQuote.toTokenDecimals)} ${fastLaneQuote.toTokenSymbol}`
+      : null,
+  })
+  const ctaFeeText =
+    selectedBridge === 'layerzero'
+      ? '桥费 0.1 TKA（从到账扣）+ ETH 费（发送时付）'
+      : selectedBridge === 'ccip'
+        ? '桥费 ETH（发送时锁定）'
+        : selectedBridge === 'wormhole'
+          ? '桥费 消息费（发送时付）'
+          : selectedBridge === 'fastlane'
+            ? '桥费 从到账扣除（见报价）'
+            : '桥费 —'
+
   return (
     <div className="cross-chain-bridge">
-      <h2>跨链桥</h2>
       <p className="hint">把代币从一条链转移到另一条链，到达后可在目标链继续交易。本站接了四条跨链通道：三家消息桥（LayerZero、Chainlink CCIP、Wormhole）和一条主网极速通道（做市商垫付）。费用、时效和安全模型各不相同，由你自己选，没有默认选项。怎么选：① 在意验证层厚实、费用先锁定 → 选 Chainlink CCIP；② 在意费用低、能接受等久一点和偶尔手动收尾 → 选 Wormhole；③ LayerZero 到账较快，但请先看清它卡片上标红的 1-of-1 验证方风险再决定；④ 赶时间、在主网之间转主流资产 → 选极速到账：做市商先在目的链垫付，几分钟到账，费用从到账里扣（仅主网，测试网不可用）。步骤：选源链与目标链 → 点选一条通道（先看每张卡上的实时报价、预计时效与风险说明）→ 填数量 → 点「发起跨链转移」后会再弹确认框复述费用与风险，确认后在钱包里依次批准即可。前提：已连接钱包，且钱包网络与所选源链一致，钱包里留有少量源链 ETH 付费用与 gas。</p>
       <p className="hint">关于 CCIP 与 Wormhole 的代币：这两家桥目前只支持 wTKA（TKA 的 1:1 包装代币）。发起时页面会自动把你的 TKA 按 1:1 换成 wTKA 再跨链（随时可 1:1 换回，不收差价）；目标链收到的是 wTKA，在目标链换回 TKA 后即可交易。LayerZero 通道直接转 TKA。</p>
 
@@ -645,7 +775,7 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
 
       <div className="bridge-form">
         <div className="bridge-field">
-          <label>源链</label>
+          <label>从 · 源链</label>
           <select
             value={sourceChainId || ''}
             onChange={(e) => setSourceChainId(Number(e.target.value) || null)}
@@ -660,8 +790,19 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           </select>
         </div>
 
+        <button
+          type="button"
+          className="bridge-swap"
+          onClick={swapChains}
+          disabled={loading || !targetChainId}
+          aria-label="交换源链与目标链"
+          title="交换源链与目标链"
+        >
+          ⇅
+        </button>
+
         <div className="bridge-field">
-          <label>目标链</label>
+          <label>到 · 目标链</label>
           <select
             value={targetChainId || ''}
             onChange={(e) => setTargetChainId(Number(e.target.value) || null)}
@@ -674,6 +815,29 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="bridge-field">
+          <label>转移数量{isWrapBridge ? '（TKA）' : ''}</label>
+          <div className="bridge-amount-row">
+            <input
+              type="number"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.0"
+              step="0.000001"
+              disabled={loading}
+            />
+            {balance !== '0' && (
+              <button type="button" className="btn-max" onClick={() => setAmount(balance)} disabled={loading}>
+                最大
+              </button>
+            )}
+          </div>
+          {balance !== '0' && (
+            <p className="hint">源链可用（钱包）：{balance}{isWrapBridge ? ' TKA' : ''}</p>
+          )}
+          {selectedMeta && quotes[selectedMeta.id] && <p className="hint">{quotes[selectedMeta.id]}</p>}
         </div>
       </div>
 
@@ -722,6 +886,124 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
         {!selectedBridge && <p className="hint">尚未选择桥：请对比四张卡片的费用、时效与风险后点选一家，再继续。</p>}
       </div>
 
+      {isWrapBridge && (
+        <section className="card bridge-prep" aria-label="WTKA 准备区">
+          <div className="bridge-prep-head">
+            <b>准备：先把 TKA 包裹成 WTKA</b>
+            <span className="pill">
+              {prep === 'ready' ? '已就绪' : prep === 'need-wrap' ? '待包裹' : '待填数量'}
+            </span>
+          </div>
+          <p className="hint">
+            CCIP 与 Wormhole 通道转移的是包裹代币 WTKA（与 TKA 按 1:1 包裹/解包）。先完成这一步，下方的「发起跨链转移」才会可用；LayerZero 与极速到账不经过 WTKA，不会出现这一区。
+          </p>
+          <div>
+            <div className="kv">
+              <span className="k">我的 TKA（钱包）</span>
+              <span className="v num">{balance} TKA</span>
+            </div>
+            <div className="kv">
+              <span className="k">我的 WTKA 余额</span>
+              <span className="v num">{formatTokenAmount(wtkaWei)} WTKA</span>
+            </div>
+            <div className="kv">
+              <span className="k">本次转移需要 WTKA</span>
+              <span className="v num">{amountWeiNow > 0n ? `${amount} WTKA` : '—（先填转移数量）'}</span>
+            </div>
+            {prep === 'need-wrap' && (
+              <div className="kv">
+                <span className="k">还差（自动按差额预填）</span>
+                <span className="v num">{formatTokenAmount(shortfallWei)} WTKA</span>
+              </div>
+            )}
+          </div>
+          {prep === 'ready' && (
+            <p className="bridge-prep-ready">✓ 已就绪：WTKA 余额足够本次转移，可以直接在下方发起。</p>
+          )}
+          {prep === 'need-wrap' && (
+            <>
+              <label className="assets-field-label" htmlFor="bridge-wrap-amount">
+                包裹数量（TKA → WTKA）
+              </label>
+              <div className="bridge-amount-row">
+                <input
+                  id="bridge-wrap-amount"
+                  type="number"
+                  value={wrapAmount}
+                  onChange={(e) => {
+                    setWrapAmount(e.target.value)
+                    setWrapEdited(true)
+                  }}
+                  placeholder="0.0"
+                  step="0.000001"
+                  disabled={wrapBusy}
+                />
+                <span className="assets-amount-unit">TKA</span>
+                <button
+                  type="button"
+                  className="btn-max"
+                  onClick={() => {
+                    setWrapAmount(balance)
+                    setWrapEdited(true)
+                  }}
+                  disabled={wrapBusy}
+                >
+                  最大
+                </button>
+              </div>
+              <button type="button" className="btn primary bridge-prep-btn" onClick={handleWrap} disabled={wrapBusy || !wrapAmount}>
+                {wrapBusy ? '包裹中…' : '包裹 TKA → WTKA'}
+              </button>
+              <p className="hint">
+                包裹 = 把 TKA 存入 WrappedTKA 合约、1:1 换出 WTKA 的链上交易，在钱包中确认；没有损耗，桥费另计。包裹交易上链确认后，准备状态自动变为「已就绪」，固定条按钮随即可用。
+              </p>
+            </>
+          )}
+          {wrapMsg && (
+            <p className="hint" role="status">
+              {wrapMsg}
+            </p>
+          )}
+          <button type="button" className="bridge-unwrap-toggle" onClick={() => setUnwrapOpen((v) => !v)} aria-expanded={unwrapOpen}>
+            解包 WTKA → TKA（把 WTKA 换回 TKA）{unwrapOpen ? '⌄' : '›'}
+          </button>
+          {unwrapOpen && (
+            <div className="bridge-unwrap">
+              <div className="bridge-amount-row">
+                <input
+                  type="number"
+                  value={unwrapAmount}
+                  onChange={(e) => setUnwrapAmount(e.target.value)}
+                  placeholder="0.0"
+                  step="0.000001"
+                  disabled={unwrapBusy}
+                  aria-label="解包数量"
+                />
+                <span className="assets-amount-unit">WTKA</span>
+                <button
+                  type="button"
+                  className="btn-max"
+                  onClick={() => setUnwrapAmount(formatTokenAmount(wtkaWei))}
+                  disabled={unwrapBusy}
+                >
+                  最大
+                </button>
+              </div>
+              <button
+                type="button"
+                className="btn secondary bridge-prep-btn"
+                onClick={handleUnwrap}
+                disabled={unwrapBusy || !unwrapAmount}
+              >
+                {unwrapBusy ? '解包中…' : '解包 WTKA → TKA'}
+              </button>
+              <p className="hint">解包 = 在 WrappedTKA 合约里烧掉 WTKA、1:1 换回 TKA 的链上交易，在钱包中确认；不需要授权。</p>
+            </div>
+          )}
+          <p className="hint">到账后在目标链收到的是 WTKA，可在本区解包回 TKA 继续交易；源链多余的 WTKA 也可随时解包。</p>
+        </section>
+      )}
+
       <div className="bridge-form">
         {selectedBridge === 'ccip' || selectedBridge === 'wormhole' ? (
           <div className="bridge-field">
@@ -745,27 +1027,6 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           <p className="hint">极速到账填法：代币地址留空 = 转源链原生币（如 ETH）；填 ERC20 地址时，USDC / WETH 会自动匹配目的链的同名资产，其他代币默认两链同地址。此通道仅主网可用（Ethereum ↔ Base），测试网不发起报价。</p>
         )}
 
-        <div className="bridge-field">
-          <label>数量</label>
-          <div className="bridge-amount-row">
-            <input
-              type="number"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="0.0"
-              step="0.000001"
-              disabled={loading}
-            />
-            {balance !== '0' && (
-              <button type="button" className="btn-max" onClick={() => setAmount(balance)} disabled={loading}>
-                最大
-              </button>
-            )}
-          </div>
-          {balance !== '0' && <p className="hint">可用余额：{balance}</p>}
-          {selectedMeta && quotes[selectedMeta.id] && <p className="hint">{quotes[selectedMeta.id]}</p>}
-        </div>
-
         {selectedBridge === 'layerzero' && (
           <div className="bridge-field">
             <label>跨链桥合约地址（可选）</label>
@@ -778,14 +1039,20 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
             />
           </div>
         )}
+      </div>
 
-        <button
-          className="btn primary"
-          onClick={openConfirm}
-          disabled={loading || !account || !sourceChainId || !targetChainId || !amount || !selectedBridge}
-        >
-          {loading ? '处理中…' : '发起跨链转移'}
-        </button>
+      <div className="bridge-risk-note" role="note">
+        <b>跨链转账不可撤销。</b>
+        {selectedMeta ? (
+          <>
+            {' '}
+            以 {selectedMeta.name} 通道为例的主要风险：{selectedMeta.securitySummary}
+            {selectedMeta.riskPoints[0]} 第一次使用任一通道，请先小额试走。
+          </>
+        ) : (
+          <> 选择通道后，这里会复述所选通道的主要风险；第一次使用任一通道，请先小额试走。</>
+        )}
+        若长时间未到账，先凭发送交易哈希在对应桥的查询页确认状态：消息已发出但未投递时，按桥的机制等待或手动完成投递即可，不要重新再发一笔。
       </div>
 
       {bridgeStatus && (
@@ -827,8 +1094,6 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
         </div>
       )}
 
-      <p className="hint">注意：跨链转账不可撤销，发起后请勿重复提交同一笔转移。若长时间未到账，先凭发送交易哈希在对应桥的查询页确认状态：消息已发出但未投递时，按桥的机制等待或手动完成投递即可，不要重新再发一笔。</p>
-
       {sourceChain && targetChain && (
         <div className="bridge-info">
           <h3>本次转移</h3>
@@ -850,6 +1115,17 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
           </div>
         </div>
       )}
+
+      <div className="sticky-cta bridge-cta">
+        <div className="fee">
+          {ctaFeeText}
+          <br />
+          预计到账 <b>{arrivalText}</b>
+        </div>
+        <button type="button" className="btn primary" onClick={openConfirm} disabled={cta.disabled}>
+          {cta.text}
+        </button>
+      </div>
 
       {showConfirm && selectedMeta && (
         <div className="bridge-confirm-overlay">

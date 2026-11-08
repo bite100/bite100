@@ -12,19 +12,19 @@ describe('getEIP712Domain', () => {
     expect(d.name).toBe('比特100')
     expect(d.version).toBe('1')
     expect(d.chainId).toBe(11155111)
-    expect(d.verifyingContract).toBe('0x3efb8F22B925FC659b46680700936243E1f8365E')
+    expect(d.verifyingContract).toBe('0xa3F8cBCDc1533299D37836ea80d5004FF59f9094')
   })
 
   it('Base Sepolia 域指向 Base Settlement（与 Sepolia 不同）', () => {
     const d = getEIP712Domain(84532)
     expect(d.chainId).toBe(84532)
-    expect(d.verifyingContract).toBe('0x9711644e3E39cec6E099e01cd4029f72244012D1')
+    expect(d.verifyingContract).toBe('0x39037dE0a1d6ca567d50055522f7Ef825dF4FCf9')
     expect(d.verifyingContract).not.toBe(EIP712_DOMAIN.verifyingContract)
   })
 
   it('默认域仍为 Sepolia（兼容旧调用）', () => {
     expect(EIP712_DOMAIN.chainId).toBe(11155111)
-    expect(EIP712_DOMAIN.verifyingContract).toBe('0x3efb8F22B925FC659b46680700936243E1f8365E')
+    expect(EIP712_DOMAIN.verifyingContract).toBe('0xa3F8cBCDc1533299D37836ea80d5004FF59f9094')
   })
 
   it('未登记链回落为传入的 chainId 与零地址（不冒充别链）', () => {

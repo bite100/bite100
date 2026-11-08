@@ -282,12 +282,12 @@ func TestSepoliaE2E(t *testing.T) {
 
 	// ---- 挂单锁定（第十五轮）：部署者即 locker，maker 卖锁 100 TKA、taker 买锁 200 TKB ----
 	ownerPrivHex := os.Getenv("BIT100_SEPOLIA_OWNER_KEY")
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, trade.MakerOrder, "sell"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, trade.MakerOrder); err != nil {
 		t.Fatalf("LockOrder(maker): %v", err)
 	} else {
 		t.Logf("maker locked tx=%s", tx)
 	}
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, trade.TakerOrder, "buy"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, trade.TakerOrder); err != nil {
 		t.Fatalf("LockOrder(taker): %v", err)
 	} else {
 		t.Logf("taker locked tx=%s", tx)

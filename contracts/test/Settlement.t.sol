@@ -56,7 +56,7 @@ contract SettlementTest is Test {
     // ---------- 签名订单辅助 ----------
 
     /// @notice 构造一笔统一规范订单（交易对固定 tokenA/tokenB，price 按 amountOut*1e18/amountIn 派生）
-    function _order(address user, string memory orderId, uint256 amountIn, uint256 amountOut, uint256 nonce)
+    function _order(address user, string memory orderId, uint256 amountIn, uint256 amountOut, uint256 nonce, uint8 side)
         internal
         view
         returns (Settlement.Order memory)
@@ -71,7 +71,8 @@ contract SettlementTest is Test {
             price: (amountOut * 1e18) / amountIn,
             timestamp: block.timestamp,
             expiresAt: block.timestamp + 1 days,
-            nonce: nonce
+            nonce: nonce,
+            side: side
         });
     }
 
@@ -90,17 +91,17 @@ contract SettlementTest is Test {
         return VaultOrder({
             orderId: o.orderId, userAddress: o.userAddress, tokenIn: o.tokenIn, tokenOut: o.tokenOut,
             amountIn: o.amountIn, amountOut: o.amountOut, price: o.price, timestamp: o.timestamp,
-            expiresAt: o.expiresAt, nonce: o.nonce
+            expiresAt: o.expiresAt, nonce: o.nonce, side: o.side
         });
     }
 
-    function _lock(Settlement.SignedOrder memory so, bool payWithTokenIn) internal {
-        vault.lockForOrder(_vaultOrder(so.order), so.signature, payWithTokenIn);
+    function _lock(Settlement.SignedOrder memory so) internal {
+        vault.lockForOrder(_vaultOrder(so.order), so.signature);
     }
 
     function _lockFill(Settlement.Fill memory fill) internal {
-        _lock(fill.makerOrder, true); // maker 为卖方：锁 tokenIn 侧
-        _lock(fill.takerOrder, false); // taker 为买方：锁 tokenOut 侧
+        _lock(fill.makerOrder); // maker 为卖方：side=SELL，锁 tokenIn 侧
+        _lock(fill.takerOrder); // taker 为买方：side=BUY，锁 tokenOut 侧
     }
 
     /// @notice 落锁后结算（成功路径用例的统一入口；无锁订单结算必 revert，见 VaultLocking.t.sol）
@@ -116,8 +117,8 @@ contract SettlementTest is Test {
         returns (Settlement.Fill memory)
     {
         return _fillWithOrders(
-            _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0)),
-            _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0)),
+            _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0, 1)),
+            _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0, 0)),
             fillIn, fillOut, gasIn, gasOut
         );
     }
@@ -241,8 +242,10 @@ contract SettlementTest is Test {
         assertEq(score, settlement.INITIAL_RELAYER_REPUTATION());
     }
 
-    /// @notice 信誉处罚：违规扣分跌破门槛后被拦截；重新加白名单不重置已有信誉记录
-    function test_RelayerReputation_ViolationsBlockAndNoReset() public {
+    /// @notice 信誉记录：重新加白名单不重置已有信誉记录；且阶段 3 提交者模型 B 后
+    /// 信誉分不再是结算准入门槛（旧口径「跌破门槛被拦截」已废止）——score=0 的
+    /// 地址提交有效 Fill 照样结算，信誉仅保留为失败扣费申报角色的治理记录。
+    function test_RelayerReputation_NoResetAndNoLongerGatesSettlement() public {
         address r = makeAddr("badRelayer");
         settlement.setRelayerAllowed(r, true);
         for (uint256 i = 0; i < 51; i++) {
@@ -257,10 +260,13 @@ contract SettlementTest is Test {
         (uint256 scoreAfter,,,) = settlement.relayerReputation(r);
         assertEq(scoreAfter, 0);
 
+        // B 模型：信誉 0 分不拦截有效结算
         Settlement.Fill memory fill = _stdFill(100e18, 100e18, 0, 0);
+        _lockFill(fill);
         vm.prank(r);
-        vm.expectRevert("Settlement: relayer reputation too low");
         settlement.settleTrade(fill);
+        assertEq(vault.balanceOf(address(tokenB), maker), 99.99e18);
+        assertEq(vault.balanceOf(address(tokenA), taker), 99.99e18);
     }
 
     /// @notice 第二十一轮：旧版自报字段与 maxGasReimbursePerTrade 上限全部失效——
@@ -286,11 +292,11 @@ contract SettlementTest is Test {
 
     /// @notice verifyOrderSignature 视图：合法签名 true；篡改金额/他人签名 false
     function test_VerifyOrderSignatureView() public view {
-        Settlement.Order memory order = _order(maker, "m-view", 100e18, 100e18, 0);
+        Settlement.Order memory order = _order(maker, "m-view", 100e18, 100e18, 0, 1);
         bytes memory sig = _sign(makerKey, order);
         assertTrue(settlement.verifyOrderSignature(order, sig));
 
-        Settlement.Order memory tampered = _order(maker, "m-view", 200e18, 100e18, 0);
+        Settlement.Order memory tampered = _order(maker, "m-view", 200e18, 100e18, 0, 1);
         assertFalse(settlement.verifyOrderSignature(tampered, sig));
 
         bytes memory wrongSigner = _sign(takerKey, order);
@@ -299,12 +305,12 @@ contract SettlementTest is Test {
 
     /// @notice 篡改：签名后改大 maker 订单 amountIn 再提交，验签失败
     function test_SettleTrade_TamperedAmountReverts() public {
-        Settlement.Order memory signedOrder = _order(maker, "m1", 100e18, 100e18, 0);
+        Settlement.Order memory signedOrder = _order(maker, "m1", 100e18, 100e18, 0, 1);
         bytes memory sig = _sign(makerKey, signedOrder);
-        Settlement.Order memory tampered = _order(maker, "m1", 200e18, 100e18, 0);
+        Settlement.Order memory tampered = _order(maker, "m1", 200e18, 100e18, 0, 1);
         Settlement.SignedOrder memory makerOrder = Settlement.SignedOrder({order: tampered, signature: sig});
         Settlement.Fill memory fill = _fillWithOrders(
-            makerOrder, _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0)), 100e18, 100e18, 0, 0
+            makerOrder, _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0, 0)), 100e18, 100e18, 0, 0
         );
         vm.expectRevert("Settlement: invalid maker signature");
         settlement.settleTrade(fill);
@@ -313,8 +319,8 @@ contract SettlementTest is Test {
     /// @notice 伪造：用 taker 的私钥签 maker 的订单
     function test_SettleTrade_WrongSignerReverts() public {
         Settlement.Fill memory fill = _fillWithOrders(
-            _signed(takerKey, _order(maker, "m1", 100e18, 100e18, 0)),
-            _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0)),
+            _signed(takerKey, _order(maker, "m1", 100e18, 100e18, 0, 1)),
+            _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0, 0)),
             100e18, 100e18, 0, 0
         );
         vm.expectRevert("Settlement: invalid maker signature");
@@ -331,11 +337,11 @@ contract SettlementTest is Test {
 
     /// @notice 部分成交：一单可分多笔结算（nonce 只消耗一次），累计达上限后再结被拒
     function test_SettleTrade_PartialFills() public {
-        Settlement.SignedOrder memory m = _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0));
-        Settlement.SignedOrder memory t = _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0));
+        Settlement.SignedOrder memory m = _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0, 1));
+        Settlement.SignedOrder memory t = _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0, 0));
 
-        _lock(m, true);
-        _lock(t, false);
+        _lock(m);
+        _lock(t);
         settlement.settleTrade(_fillWithOrders(m, t, 60e18, 60e18, 0, 0));
         assertEq(settlement.getCurrentNonce(maker), 1); // 首次结算消耗 nonce 0
         settlement.settleTrade(_fillWithOrders(m, t, 40e18, 40e18, 0, 0));
@@ -351,8 +357,8 @@ contract SettlementTest is Test {
         _settle(_stdFill(100e18, 100e18, 0, 0));
 
         Settlement.Fill memory fill2 = _fillWithOrders(
-            _signed(makerKey, _order(maker, "m2", 50e18, 50e18, 0)), // 复用 nonce 0
-            _signed(takerKey, _order(taker, "t2", 50e18, 50e18, 1)), // taker 用新 nonce 1
+            _signed(makerKey, _order(maker, "m2", 50e18, 50e18, 0, 1)), // 复用 nonce 0
+            _signed(takerKey, _order(taker, "t2", 50e18, 50e18, 1, 0)), // taker 用新 nonce 1
             50e18, 50e18, 0, 0
         );
         _lockFill(fill2); // 第二张订单同样先落锁，revert 须来自 nonce 独占校验而非缺锁
@@ -374,13 +380,13 @@ contract SettlementTest is Test {
     /// @notice 批量：两笔合法 Fill 一次结算成功（不同订单对、nonce 递进）
     function test_SettleTradesBatch_TwoFills() public {
         Settlement.Fill memory f1 = _fillWithOrders(
-            _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0)),
-            _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0)),
+            _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0, 1)),
+            _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0, 0)),
             60e18, 60e18, 0, 0
         );
         Settlement.Fill memory f2 = _fillWithOrders(
-            _signed(makerKey, _order(maker, "m2", 100e18, 100e18, 1)),
-            _signed(takerKey, _order(taker, "t2", 100e18, 100e18, 1)),
+            _signed(makerKey, _order(maker, "m2", 100e18, 100e18, 1, 1)),
+            _signed(takerKey, _order(taker, "t2", 100e18, 100e18, 1, 0)),
             40e18, 40e18, 0, 0
         );
         Settlement.Fill[] memory fills = new Settlement.Fill[](2);
@@ -401,8 +407,8 @@ contract SettlementTest is Test {
     function test_SettleTradesBatch_TamperedReverts() public {
         Settlement.Fill memory good = _stdFill(60e18, 60e18, 0, 0);
         Settlement.Fill memory bad = _fillWithOrders(
-            _signed(takerKey, _order(maker, "m2", 100e18, 100e18, 1)), // 用 taker 私钥冒签 maker 订单
-            _signed(takerKey, _order(taker, "t2", 100e18, 100e18, 1)),
+            _signed(takerKey, _order(maker, "m2", 100e18, 100e18, 1, 1)), // 用 taker 私钥冒签 maker 订单
+            _signed(takerKey, _order(taker, "t2", 100e18, 100e18, 1, 0)),
             40e18, 40e18, 0, 0
         );
         _lockFill(good);

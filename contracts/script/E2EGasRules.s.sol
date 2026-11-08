@@ -48,19 +48,19 @@ contract E2EGasRules is Script {
 
             uint256 ts = block.timestamp;
             Settlement.SignedOrder memory mo =
-                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m", 100e18, 100e18, ts, ts + 1 days, 0));
+                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m", 100e18, 100e18, ts, ts + 1 days, 0, 1));
             Settlement.SignedOrder memory to =
-                _signed(takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t", 100e18, 100e18, ts, ts + 1 days, 0));
+                _signed(takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t", 100e18, 100e18, ts, ts + 1 days, 0, 0));
 
             vm.startBroadcast(deployerKey);
-            vault.lockForOrder(_v(mo.order), mo.signature, true);
-            vault.lockForOrder(_v(to.order), to.signature, false);
+            vault.lockForOrder(_v(mo.order), mo.signature);
+            vault.lockForOrder(_v(to.order), to.signature);
             settlement.settleTrade(_fill(mo, to, 100e18, 100e18));
             // 失败案例预锁：maker 订单 900 秒后过期（nonce 1）。
             // 保险丝必须足够长：低 gas 价下锁定 tx 落链可能耗时数分钟（90 秒曾实测烧完导致 lock revert）
             Settlement.SignedOrder memory exp =
-                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, ts, ts + 900, 1));
-            vault.lockForOrder(_v(exp.order), exp.signature, true);
+                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, ts, ts + 900, 1, 1));
+            vault.lockForOrder(_v(exp.order), exp.signature);
             vm.stopBroadcast();
             console.log("EXP_TIMESTAMP", ts);
             console.log("EXP_EXPIRES_AT", ts + 900);
@@ -72,9 +72,9 @@ contract E2EGasRules is Script {
             uint256 fuse = vm.envOr("EXP_FUSE", uint256(900));
             uint256 ts = block.timestamp;
             Settlement.SignedOrder memory exp =
-                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, ts, ts + fuse, nonce));
+                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, ts, ts + fuse, nonce, 1));
             vm.startBroadcast(deployerKey);
-            vault.lockForOrder(_v(exp.order), exp.signature, true);
+            vault.lockForOrder(_v(exp.order), exp.signature);
             vm.stopBroadcast();
             console.log("EXP_TIMESTAMP", ts);
             console.log("EXP_EXPIRES_AT", ts + fuse);
@@ -88,9 +88,9 @@ contract E2EGasRules is Script {
             uint256 expAt = vm.envUint("EXP_EXPIRES_AT");
             uint256 expNonce = vm.envOr("EXP_NONCE", uint256(1));
             Settlement.SignedOrder memory exp =
-                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, expTs, expAt, expNonce));
+                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, expTs, expAt, expNonce, 1));
             Settlement.SignedOrder memory to = _signed(
-                takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t2", 100e18, 100e18, expTs, expTs + 1 days, 1)
+                takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t2", 100e18, 100e18, expTs, expTs + 1 days, 1, 0)
             );
             console.log("EXP_SIG", vm.toString(exp.signature));
             console.log("TAKER_SIG", vm.toString(to.signature));
@@ -103,11 +103,11 @@ contract E2EGasRules is Script {
             uint256 expNonce = vm.envOr("EXP_NONCE", uint256(1));
             require(block.timestamp > expAt, "E2E: exp order not yet expired");
             Settlement.SignedOrder memory exp =
-                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, expTs, expAt, expNonce));
+                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, expTs, expAt, expNonce, 1));
             vm.startBroadcast(deployerKey);
             if (mode == 4) {
                 Settlement.SignedOrder memory to = _signed(
-                    takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t2", 100e18, 100e18, expTs, expTs + 1 days, 1)
+                    takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t2", 100e18, 100e18, expTs, expTs + 1 days, 1, 0)
                 );
                 (bool ok,) = address(settlement).call(
                     abi.encodeWithSelector(Settlement.settleTrade.selector, _fill(exp, to, 100e18, 100e18))
@@ -129,9 +129,9 @@ contract E2EGasRules is Script {
             require(block.timestamp > expAt, "E2E: exp order not yet expired");
             // 与预锁时逐字段相同的订单（同 digest、同墓碑）
             Settlement.SignedOrder memory exp =
-                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, expTs, expAt, expNonce));
+                _signed(makerKey, settlement, _order(maker, tokenA, tokenB, "e2e-m-exp", 100e18, 100e18, expTs, expAt, expNonce, 1));
             Settlement.SignedOrder memory to = _signed(
-                takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t2", 100e18, 100e18, expTs, expTs + 1 days, 1)
+                takerKey, settlement, _order(taker, tokenA, tokenB, "e2e-t2", 100e18, 100e18, expTs, expTs + 1 days, 1, 0)
             );
             vm.startBroadcast(deployerKey);
             // 低层调用尝试结算：内层必因订单过期 revert；外层 tx 成功落链。
@@ -159,7 +159,8 @@ contract E2EGasRules is Script {
         uint256 amountOut,
         uint256 timestamp,
         uint256 expiresAt,
-        uint256 nonce
+        uint256 nonce,
+        uint8 side
     ) internal pure returns (Settlement.Order memory) {
         return Settlement.Order({
             orderId: orderId,
@@ -171,7 +172,8 @@ contract E2EGasRules is Script {
             price: (amountOut * 1e18) / amountIn,
             timestamp: timestamp,
             expiresAt: expiresAt,
-            nonce: nonce
+            nonce: nonce,
+            side: side
         });
     }
 
@@ -205,7 +207,7 @@ contract E2EGasRules is Script {
         return VaultOrder({
             orderId: o.orderId, userAddress: o.userAddress, tokenIn: o.tokenIn, tokenOut: o.tokenOut,
             amountIn: o.amountIn, amountOut: o.amountOut, price: o.price, timestamp: o.timestamp,
-            expiresAt: o.expiresAt, nonce: o.nonce
+            expiresAt: o.expiresAt, nonce: o.nonce, side: o.side
         });
     }
 }

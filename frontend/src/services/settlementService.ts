@@ -1,6 +1,7 @@
 import { ethers } from 'ethers'
 import { SETTLEMENT_ADDRESS, SETTLEMENT_ABI, TOKEN0_ADDRESS, TOKEN1_ADDRESS } from '../config'
 import { MatchStorage, OrderStorage, type StoredOrder } from '../p2p/storage'
+import { SIDE_SELL, sideToSignedValue } from './orderSigningTypes'
 import type { Trade } from '../p2p/types'
 
 const SCALE = 10n ** 18n
@@ -17,6 +18,8 @@ export interface ContractOrder {
   timestamp: bigint
   expiresAt: bigint
   nonce: bigint
+  /** 签名方向（阶段 3）：0=买 / 1=卖，与签名消息逐字一致 */
+  side: bigint
 }
 
 /** 与合约 Settlement.Fill 对齐的结算请求 */
@@ -50,6 +53,7 @@ function storedOrderToContractOrder(o: StoredOrder): ContractOrder {
     timestamp: BigInt(timestamp),
     expiresAt: BigInt(expiresAt),
     nonce: BigInt(Number(extra.nonce ?? 0)),
+    side: BigInt(sideToSignedValue(o.side)),
   }
 }
 
@@ -70,7 +74,8 @@ export async function buildFill(trade: Trade): Promise<ContractFill> {
   const takerOrder = storedOrderToContractOrder(takerStored)
   const qty0 = ethers.parseUnits(trade.amount, 18)
   const qty1 = (qty0 * makerOrder.price) / SCALE
-  const makerSellsToken0 = trade.makerSide !== 'buy'
+  // Fill 付款方向只认 maker 的签名 side（阶段 3 合约强制比对，填反必回滚）
+  const makerSellsToken0 = makerOrder.side === BigInt(SIDE_SELL)
   return {
     makerOrder: { order: makerOrder, signature: makerStored.signature },
     takerOrder: { order: takerOrder, signature: takerStored.signature },
@@ -85,8 +90,10 @@ export async function buildFill(trade: Trade): Promise<ContractFill> {
 
 /**
  * 链下撮合后链上验签结算：调用 Settlement.settleTrade(Fill)，合约校验双方订单签名、
- * 累计成交量与 nonce 后才划转（提交者只是搬运工，但仍需 owner/relayer 身份）。
- * 失败时仅保留「待结算」状态，待 relayer/链上确认后由 chainSync 同步 txHash。
+ * 落锁、累计成交量与 nonce 后才划转。阶段 3 起为开放提交（B 模型）：任何地址
+ * 都可提交有效 Fill，提交者只是搬运工，gas 分成记提交者名下；提交失败（含校验
+ * 回滚）的 gas 由提交者自担，与发起者自担口径一致。
+ * 失败时仅保留「待结算」状态，待链上确认后由 chainSync 同步 txHash。
  */
 export async function settleTrade(
   signer: ethers.Signer,
@@ -105,13 +112,14 @@ export async function settleTrade(
     return { txHash }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
-    console.warn('settleTrade 失败（可能非 owner/relayer 或订单校验未通过）:', message)
+    console.warn('settleTrade 失败（订单校验未通过或 gas/网络问题；失败 gas 由提交者自担）:', message)
     return { error: message }
   }
 }
 
 /**
- * §12.3 Epoch 批量结算：多笔成交一次上链（每笔 Fill 与单笔同样验签）；需 owner/relayer；1–50 笔
+ * §12.3 Epoch 批量结算：多笔成交一次上链（每笔 Fill 与单笔同样验签），整批原子；
+ * 阶段 3 起开放提交（任何地址可提交）；1–50 笔，上限与合约 MAX_BATCH_SIZE 对齐
  */
 export async function settleTradesBatch(
   signer: ethers.Signer,

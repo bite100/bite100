@@ -5,7 +5,14 @@ import { nodeGet, nodePost } from '../../nodeClient'
 import { signCancelOrder } from '../../services/orderSigning'
 import { formatError, formatTokenAmount, getProvider } from '../../utils'
 import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
+import { INDEXER_ENABLED } from '../../config/indexer'
 import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
+import {
+  fetchIndexerTrades,
+  loadDualTrades,
+  normalizeNodeTradeRow,
+  type MergedTrade,
+} from '../../services/tradesDual'
 import { fromScaled, fmtPrice, fmtAmount, fmtDateTime } from './tradeFormat'
 import type { Order, Trade } from '../../OrderBookSection'
 import type { Signer } from 'ethers'
@@ -29,6 +36,12 @@ export interface TradeTabsPanelProps {
   getSigner: () => Promise<Signer | null>
   /** 下单成功后递增，触发挂单列表刷新 */
   refreshSignal?: number
+  /**
+   * 变体（第 31 轮）：full = 桌面四页签（当前挂单/历史订单/成交记录/余额，缺省不变）；
+   * mobile = 移动交易页三页签（当前委托/历史订单/持有币种），成交记录在图表展开态的
+   * 「最新成交」里与桌面端继续提供。数据管道两变体完全共用。
+   */
+  variant?: 'full' | 'mobile'
 }
 
 /**
@@ -61,13 +74,23 @@ interface BalanceRow {
  * K 线下方页签区（布局对标 Hyperliquid 底部表格区）：
  * 当前挂单 / 历史订单 / 成交记录 / 余额——实体全部来自本应用既有管道
  * （节点 /api/orders、/api/trades 与链上 ERC20/Vault 余额），无持仓/杠杆类概念。
+ *
+ * 第 39 轮：成交记录页签接入双源——配置 VITE_INDEXER_URL 时与右栏
+ * 「最新成交」走同一条 loadDualTrades 路径（同一合并口径、单源失败
+ * 降级、双源失败才报错）；未配置时仍为节点单源。展示形态与列不变，
+ * 「结算」列在双源下以「待索引 / 已上链」标注来源（沿用站内口径）。
  */
-export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refreshSignal = 0 }: TradeTabsPanelProps) {
+export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refreshSignal = 0, variant = 'full' }: TradeTabsPanelProps) {
+  const mobile = variant === 'mobile'
   const [baseSymbol, quoteSymbol] = pair.split('/')
   const pairTokens = getPairTokens(CHAIN_ID, pair)
   const [tab, setTab] = useState<string | null>('open')
   const [myOrders, setMyOrders] = useState<Order[]>([])
   const [trades, setTrades] = useState<Trade[]>([])
+  /** 第 39 轮：双源模式下的合并成交与两源失败标记（单源模式保持 null） */
+  const [mergedTrades, setMergedTrades] = useState<MergedTrade[] | null>(null)
+  const [tradesNodeFailed, setTradesNodeFailed] = useState(false)
+  const [tradesIndexerFailed, setTradesIndexerFailed] = useState(false)
   const [balances, setBalances] = useState<BalanceRow[]>([])
   const [nodeError, setNodeError] = useState(false)
   const [tradesError, setTradesError] = useState(false)
@@ -93,6 +116,34 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
   }, [account, pair])
 
   const fetchTrades = useCallback(async () => {
+    if (INDEXER_ENABLED) {
+      // 第 39 轮：与「最新成交」同一条双源路径（loadDualTrades：超时、
+      // 合并、失败降级口径全共用）；双源皆失败才置 tradesError。
+      try {
+        const baseToken = getPairTokens(CHAIN_ID, pair)?.base ?? ''
+        const outcome = await loadDualTrades(
+          async (signal) => {
+            const { data } = await nodeGet<unknown>(
+              '/api/trades',
+              { pair, limit: '30' },
+              { signal },
+            )
+            const list = Array.isArray(data) ? data : []
+            return list.map(normalizeNodeTradeRow)
+          },
+          (signal) => fetchIndexerTrades(CHAIN_ID, pair, 50, undefined, undefined, 0, { signal }),
+          baseToken,
+        )
+        setMergedTrades(outcome.result.trades.filter((t) => t.price > 0).slice(0, 30))
+        setTradesNodeFailed(outcome.nodeFailed)
+        setTradesIndexerFailed(outcome.indexerFailed)
+        setTradesError(outcome.unavailable)
+      } catch {
+        /* 双源路径异常兜底：保留旧数据并呈现不可用空态口径 */
+        setTradesError(true)
+      }
+      return
+    }
     try {
       const { data } = await nodeGet<Trade[]>('/api/trades', { pair, limit: '30' })
       setTrades(Array.isArray(data) ? data : [])
@@ -178,6 +229,37 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
   const sortedMine = [...myOrders].sort((a, b) => b.createdAt - a.createdAt)
   const sortedTrades = [...trades].sort((a, b) => b.timestamp - a.timestamp)
 
+  /**
+   * 第 39 轮：成交行统一视图模型——双源（MergedTrade，价格/数量已是展示
+   * 数值）与节点单源（Trade，1e18 定点串走 fmtPriceCell/fmtAmountCell）
+   * 收敛到同一张表渲染，列与形态不变；「结算」列双源下以待索引/已上链
+   * 标注来源，单源下维持已上链/待结算口径。
+   */
+  const tradeRows: {
+    key: string
+    timestamp: number
+    priceCell: string
+    amountCell: string
+    chipCls: string
+    chipLabel: string
+  }[] = INDEXER_ENABLED
+    ? (mergedTrades ?? []).map((t) => ({
+        key: t.key,
+        timestamp: t.timestamp,
+        priceCell: fmtPrice(t.price),
+        amountCell: fmtAmount(t.amount),
+        chipCls: t.pendingIndex ? 'status-pending' : 'status-settled',
+        chipLabel: t.pendingIndex ? '待索引' : '已上链',
+      }))
+    : sortedTrades.slice(0, 30).map((t) => ({
+        key: t.tradeId,
+        timestamp: t.timestamp,
+        priceCell: fmtPriceCell(t.price),
+        amountCell: fmtAmountCell(t.amount),
+        chipCls: t.txHash ? 'status-settled' : 'status-pending',
+        chipLabel: t.txHash ? '已上链' : '待结算',
+      }))
+
   const renderOrdersTable = (orders: Order[], withCancel: boolean) => {
     if (!account) return <Text size="sm" c="dimmed" py="sm">连接钱包后查看订单</Text>
     if (nodeError) return <Text size="sm" c="dimmed" py="sm">节点服务暂时不可用，订单无法加载（资产与跨链不受影响）</Text>
@@ -236,10 +318,20 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
     <div className="trade-tabs">
       <Tabs value={tab} onChange={setTab}>
         <Tabs.List>
-          <Tabs.Tab value="open">当前挂单{openOrders.length > 0 ? ` (${openOrders.length})` : ''}</Tabs.Tab>
-          <Tabs.Tab value="history">历史订单</Tabs.Tab>
-          <Tabs.Tab value="trades">成交记录</Tabs.Tab>
-          <Tabs.Tab value="balance">余额</Tabs.Tab>
+          {mobile ? (
+            <>
+              <Tabs.Tab value="open">当前委托{openOrders.length > 0 ? ` (${openOrders.length})` : ''}</Tabs.Tab>
+              <Tabs.Tab value="history">历史订单</Tabs.Tab>
+              <Tabs.Tab value="balance">持有币种</Tabs.Tab>
+            </>
+          ) : (
+            <>
+              <Tabs.Tab value="open">当前挂单{openOrders.length > 0 ? ` (${openOrders.length})` : ''}</Tabs.Tab>
+              <Tabs.Tab value="history">历史订单</Tabs.Tab>
+              <Tabs.Tab value="trades">成交记录</Tabs.Tab>
+              <Tabs.Tab value="balance">余额</Tabs.Tab>
+            </>
+          )}
         </Tabs.List>
 
         <Tabs.Panel value="open" pt="sm">
@@ -260,10 +352,26 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
           {renderOrdersTable(sortedMine, false)}
         </Tabs.Panel>
 
+        {!mobile && (
         <Tabs.Panel value="trades" pt="sm">
-          {sortedTrades.length === 0 ? (
+          {INDEXER_ENABLED && (
+            <Text size="xs" c="dimmed" pb="xs">
+              {tradesNodeFailed && tradesIndexerFailed
+                ? '节点与链上索引均不可达，成交数据暂不可用'
+                : tradesIndexerFailed
+                  ? '链上索引暂不可达，暂显示节点数据（均标「待索引」）'
+                  : tradesNodeFailed
+                    ? '节点暂不可达，暂显示链上索引数据（Envio 为权威来源）'
+                    : '来源：链上索引（Envio）为权威，节点独有成交标「待索引」'}
+            </Text>
+          )}
+          {tradeRows.length === 0 ? (
             <Text size="sm" c="dimmed" py="sm">
-              {tradesError ? '节点服务暂时不可用，成交记录无法加载（资产与跨链不受影响）' : '暂无成交'}
+              {tradesError
+                ? INDEXER_ENABLED
+                  ? '节点与链上索引均不可达，成交记录暂不可用（资产与跨链不受影响）'
+                  : '节点服务暂时不可用，成交记录无法加载（资产与跨链不受影响）'
+                : '暂无成交'}
             </Text>
           ) : (
             <div className="trade-table-wrap">
@@ -277,17 +385,13 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedTrades.slice(0, 30).map((t) => (
-                    <tr key={t.tradeId}>
+                  {tradeRows.map((t) => (
+                    <tr key={t.key}>
                       <td className="time">{fmtTime(t.timestamp)}</td>
-                      <td className="num">{fmtPriceCell(t.price)}</td>
-                      <td className="num">{fmtAmountCell(t.amount)}</td>
+                      <td className="num">{t.priceCell}</td>
+                      <td className="num">{t.amountCell}</td>
                       <td>
-                        {t.txHash ? (
-                          <span className="status-chip status-settled">已上链</span>
-                        ) : (
-                          <span className="status-chip status-pending">待结算</span>
-                        )}
+                        <span className={`status-chip ${t.chipCls}`}>{t.chipLabel}</span>
                       </td>
                     </tr>
                   ))}
@@ -296,6 +400,7 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
             </div>
           )}
         </Tabs.Panel>
+        )}
 
         <Tabs.Panel value="balance" pt="sm">
           {!account ? (

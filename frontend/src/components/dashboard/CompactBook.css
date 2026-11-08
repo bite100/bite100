@@ -1,0 +1,144 @@
+/* 紧凑盘口（移动交易页左列） */
+.cbook {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cbook-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10.5px;
+  color: var(--b100-text-3);
+  padding-bottom: 5px;
+}
+.cbook-head small {
+  font-size: 9.5px;
+}
+.cbook-coltoggle {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+}
+.cbook-row {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  padding: 3.5px 2px;
+  overflow: hidden;
+}
+.cbook-depth {
+  position: absolute;
+  right: 0;
+  top: 15%;
+  height: 70%;
+  border-radius: 3px;
+  pointer-events: none;
+}
+.cbook-depth.ask {
+  background: rgba(217, 45, 32, 0.09);
+}
+.cbook-depth.bid {
+  background: rgba(3, 152, 85, 0.09);
+}
+.cbook-price {
+  font-size: 11.5px;
+  font-weight: 600;
+  position: relative;
+}
+.cbook-amt {
+  font-size: 11.5px;
+  color: var(--b100-text-2);
+  position: relative;
+}
+.cbook-mid {
+  padding: 8px 2px;
+  border-top: 1px solid var(--b100-hairline);
+  border-bottom: 1px solid var(--b100-hairline);
+  margin: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cbook-last {
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+.cbook-last-none {
+  font-size: 14px;
+  color: var(--b100-text-3);
+  font-weight: 600;
+}
+.cbook-usd {
+  font-size: 11px;
+  color: var(--b100-text-2);
+}
+.cbook-ref {
+  font-size: 10.5px;
+  color: var(--b100-text-3);
+}
+.cbook-none,
+.cbook-empty {
+  font-size: 11.5px;
+  color: var(--b100-text-3);
+  padding: 6px 2px;
+  margin: 0;
+}
+.cbook-power {
+  display: flex;
+  gap: 3px;
+  margin-top: 7px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.cbook-power-b {
+  background: rgba(3, 152, 85, 0.13);
+  color: var(--b100-up);
+  border-radius: 4px;
+  padding: 3px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.cbook-power-s {
+  background: rgba(217, 45, 32, 0.1);
+  color: var(--b100-down);
+  border-radius: 4px;
+  padding: 3px 6px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.cbook-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 7px;
+}
+.cbook-step select {
+  border: 1px solid var(--b100-border);
+  background: #fff;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 5px;
+  color: var(--b100-text-2);
+}
+.cbook-mode {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--b100-text-3);
+  padding: 2px 4px;
+}

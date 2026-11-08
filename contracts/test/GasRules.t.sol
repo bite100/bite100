@@ -74,7 +74,7 @@ contract GasRulesTest is Test {
 
     // ---------- 辅助（与 Settlement.t.sol 同构） ----------
 
-    function _order(address user, string memory orderId, uint256 amountIn, uint256 amountOut, uint256 nonce)
+    function _order(address user, string memory orderId, uint256 amountIn, uint256 amountOut, uint256 nonce, uint8 side)
         internal
         view
         returns (Settlement.Order memory)
@@ -89,7 +89,8 @@ contract GasRulesTest is Test {
             price: (amountOut * 1e18) / amountIn,
             timestamp: block.timestamp,
             expiresAt: block.timestamp + 1 days,
-            nonce: nonce
+            nonce: nonce,
+            side: side
         });
     }
 
@@ -106,13 +107,13 @@ contract GasRulesTest is Test {
         return VaultOrder({
             orderId: o.orderId, userAddress: o.userAddress, tokenIn: o.tokenIn, tokenOut: o.tokenOut,
             amountIn: o.amountIn, amountOut: o.amountOut, price: o.price, timestamp: o.timestamp,
-            expiresAt: o.expiresAt, nonce: o.nonce
+            expiresAt: o.expiresAt, nonce: o.nonce, side: o.side
         });
     }
 
     function _lockFill(Settlement.Fill memory fill) internal {
-        vault.lockForOrder(_vaultOrder(fill.makerOrder.order), fill.makerOrder.signature, true);
-        vault.lockForOrder(_vaultOrder(fill.takerOrder.order), fill.takerOrder.signature, false);
+        vault.lockForOrder(_vaultOrder(fill.makerOrder.order), fill.makerOrder.signature);
+        vault.lockForOrder(_vaultOrder(fill.takerOrder.order), fill.takerOrder.signature);
     }
 
     function _fill(
@@ -135,8 +136,8 @@ contract GasRulesTest is Test {
 
     function _stdFill(uint256 nonce) internal view returns (Settlement.Fill memory) {
         return _fill(
-            _signed(makerKey, _order(maker, "m", 100e18, 100e18, nonce)),
-            _signed(takerKey, _order(taker, "t", 100e18, 100e18, nonce)),
+            _signed(makerKey, _order(maker, "m", 100e18, 100e18, nonce, 1)),
+            _signed(takerKey, _order(taker, "t", 100e18, 100e18, nonce, 0)),
             100e18,
             100e18
         );
@@ -222,8 +223,8 @@ contract GasRulesTest is Test {
     function test_GasShare_PriceConversion_TwoToOne() public {
         // 成交价 2 TKB / TKA：maker 卖 100 TKA 收 200 TKB；taker 卖 200 TKB 收 100 TKA
         Settlement.Fill memory fill = _fill(
-            _signed(makerKey, _order(maker, "m2", 100e18, 200e18, 0)),
-            _signed(takerKey, _order(taker, "t2", 100e18, 200e18, 0)),
+            _signed(makerKey, _order(maker, "m2", 100e18, 200e18, 0, 1)),
+            _signed(takerKey, _order(taker, "t2", 100e18, 200e18, 0, 0)),
             100e18,
             200e18
         );
@@ -301,8 +302,8 @@ contract GasRulesTest is Test {
     function test_GasShare_BatchAveraged() public {
         Settlement.Fill memory f1 = _stdFill(0);
         Settlement.Fill memory f2 = _fill(
-            _signed(makerKey, _order(maker, "m", 100e18, 100e18, 1)),
-            _signed(takerKey, _order(taker, "t", 100e18, 100e18, 1)),
+            _signed(makerKey, _order(maker, "m", 100e18, 100e18, 1, 1)),
+            _signed(takerKey, _order(taker, "t", 100e18, 100e18, 1, 0)),
             50e18,
             50e18
         );
@@ -338,17 +339,18 @@ contract GasRulesTest is Test {
             price: 1e18,
             timestamp: block.timestamp,
             expiresAt: block.timestamp + 100,
-            nonce: 7
+            nonce: 7,
+            side: 1
         });
     }
 
     function test_FailureCharge_ExpiredOrder() public {
         settlement.setMaxFailureGasChargeQuote(10e18);
         Settlement.SignedOrder memory so = _signed(makerKey, _expiringMakerOrder());
-        vault.lockForOrder(_vaultOrder(so.order), so.signature, true);
+        vault.lockForOrder(_vaultOrder(so.order), so.signature);
 
         vm.warp(block.timestamp + 200); // 订单过期
-        Settlement.Fill memory fill = _fill(so, _signed(takerKey, _order(taker, "t", 100e18, 100e18, 7)), 100e18, 100e18);
+        Settlement.Fill memory fill = _fill(so, _signed(takerKey, _order(taker, "t", 100e18, 100e18, 7, 0)), 100e18, 100e18);
         vm.expectRevert("Settlement: order expired");
         settlement.settleTrade(fill); // 失败交易（在真实链上这笔 revert 已烧掉提交者 gas）
 
@@ -370,8 +372,8 @@ contract GasRulesTest is Test {
 
     function test_FailureCharge_LockReleased() public {
         settlement.setMaxFailureGasChargeQuote(10e18);
-        Settlement.SignedOrder memory so = _signed(makerKey, _order(maker, "m-rel", 100e18, 100e18, 3));
-        vault.lockForOrder(_vaultOrder(so.order), so.signature, true);
+        Settlement.SignedOrder memory so = _signed(makerKey, _order(maker, "m-rel", 100e18, 100e18, 3, 1));
+        vault.lockForOrder(_vaultOrder(so.order), so.signature);
         bytes32 digest = settlement.orderDigest(so.order);
         vault.releaseOrderLock(digest); // 用户释放锁定后，节点在途结算必然 revert
 
@@ -382,13 +384,13 @@ contract GasRulesTest is Test {
 
     function test_FailureCharge_NeverLockedReverts() public {
         settlement.setMaxFailureGasChargeQuote(10e18);
-        Settlement.SignedOrder memory so = _signed(makerKey, _order(maker, "m-nolock", 100e18, 100e18, 9));
+        Settlement.SignedOrder memory so = _signed(makerKey, _order(maker, "m-nolock", 100e18, 100e18, 9, 1));
         vm.expectRevert("Settlement: order never locked");
         settlement.chargeFailedSettlement(so, 1, 500_000);
     }
 
     function test_FailureCharge_DisabledByDefault() public {
-        Settlement.SignedOrder memory so = _signed(makerKey, _order(maker, "m-dis", 100e18, 100e18, 11));
+        Settlement.SignedOrder memory so = _signed(makerKey, _order(maker, "m-dis", 100e18, 100e18, 11, 1));
         vm.expectRevert("Settlement: failure charge disabled");
         settlement.chargeFailedSettlement(so, 1, 500_000);
     }
@@ -396,7 +398,7 @@ contract GasRulesTest is Test {
     function test_FailureCharge_CapClamps() public {
         settlement.setMaxFailureGasChargeQuote(0.5e18); // 上限低于申报换算值 1e18
         Settlement.SignedOrder memory so = _signed(makerKey, _expiringMakerOrder());
-        vault.lockForOrder(_vaultOrder(so.order), so.signature, true);
+        vault.lockForOrder(_vaultOrder(so.order), so.signature);
         vm.warp(block.timestamp + 200);
         uint256 makerBefore = vault.balanceOf(address(tokenA), maker);
         settlement.chargeFailedSettlement(so, 1, 500_000);

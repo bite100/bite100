@@ -75,7 +75,7 @@ contract MakerVaultTest is Test {
         shares = makerVault.deposit(amount, depositor);
     }
 
-    function _vaultOrder(address user, string memory orderId, uint256 amountIn, uint256 amountOut, uint256 nonce)
+    function _vaultOrder(address user, string memory orderId, uint256 amountIn, uint256 amountOut, uint256 nonce, uint8 side)
         internal
         view
         returns (Settlement.Order memory)
@@ -90,7 +90,8 @@ contract MakerVaultTest is Test {
             price: PRICE,
             timestamp: block.timestamp,
             expiresAt: block.timestamp + 1 days,
-            nonce: nonce
+            nonce: nonce,
+            side: side
         });
     }
 
@@ -118,7 +119,8 @@ contract MakerVaultTest is Test {
             price: o.price,
             timestamp: o.timestamp,
             expiresAt: o.expiresAt,
-            nonce: o.nonce
+            nonce: o.nonce,
+            side: o.side
         });
     }
 
@@ -158,8 +160,8 @@ contract MakerVaultTest is Test {
         _deposit(1000e18);
         // 金库买单锁定 800 USDT（pay tokenOut），可用只剩 200
         Settlement.Order memory buy =
-            _vaultOrder(address(makerVault), "vault-buy-1", 0.01e18, 800e18, 0);
-        vault.lockForOrder(_toVaultOrder(buy), _sign(signerKey, buy), false);
+            _vaultOrder(address(makerVault), "vault-buy-1", 0.01e18, 800e18, 0, 0);
+        vault.lockForOrder(_toVaultOrder(buy), _sign(signerKey, buy));
         assertEq(vault.availableBalance(address(makerVault), address(usdt)), 200e18);
         vm.prank(depositor);
         vm.expectRevert();
@@ -174,14 +176,14 @@ contract MakerVaultTest is Test {
     // ---------- ERC-1271 金库订单全链路 ----------
 
     function testVaultOrderVerifiesViaERC1271() public {
-        Settlement.Order memory o = _vaultOrder(address(makerVault), "v-1", 0.01e18, 800e18, 0);
+        Settlement.Order memory o = _vaultOrder(address(makerVault), "v-1", 0.01e18, 800e18, 0, 0);
         bytes memory sig = _sign(signerKey, o);
         assertTrue(settlement.verifyOrderSignature(o, sig), "registered signer verifies");
         // 未登记密钥签的同一订单不通过
         bytes memory badSig = _sign(strangerKey, o);
         assertFalse(settlement.verifyOrderSignature(o, badSig), "stranger must not verify");
         // EOA 订单回归：恢复路径不受影响
-        Settlement.Order memory eoa = _vaultOrder(taker, "eoa-1", 0.01e18, 800e18, 0);
+        Settlement.Order memory eoa = _vaultOrder(taker, "eoa-1", 0.01e18, 800e18, 0, 0);
         assertTrue(settlement.verifyOrderSignature(eoa, _sign(takerKey, eoa)), "EOA path intact");
     }
 
@@ -190,12 +192,12 @@ contract MakerVaultTest is Test {
         // 金库买 0.01 BTC（付 758.2234 USDT），taker 卖 0.01 BTC。
         // Fill 语义：amountIn = maker 卖出 tokenIn 量——卖出 BTC 的一方（taker）
         // 是 makerOrder，买入的金库是 takerOrder。
-        Settlement.Order memory vaultBuy = _vaultOrder(address(makerVault), "vault-buy", 0.01e18, 7582234e14, 0);
-        Settlement.Order memory takerSell = _vaultOrder(taker, "taker-sell", 0.01e18, 7582234e14, 0);
+        Settlement.Order memory vaultBuy = _vaultOrder(address(makerVault), "vault-buy", 0.01e18, 7582234e14, 0, 0);
+        Settlement.Order memory takerSell = _vaultOrder(taker, "taker-sell", 0.01e18, 7582234e14, 0, 1);
         Settlement.SignedOrder memory vBuy = _signed(signerKey, vaultBuy);
         Settlement.SignedOrder memory tSell = _signed(takerKey, takerSell);
-        vault.lockForOrder(_toVaultOrder(vaultBuy), vBuy.signature, false);
-        vault.lockForOrder(_toVaultOrder(takerSell), tSell.signature, true);
+        vault.lockForOrder(_toVaultOrder(vaultBuy), vBuy.signature);
+        vault.lockForOrder(_toVaultOrder(takerSell), tSell.signature);
 
         Settlement.Fill memory fill = Settlement.Fill({
             makerOrder: tSell,
@@ -221,10 +223,10 @@ contract MakerVaultTest is Test {
     function testVaultRoundTrip() public {
         _deposit(1000e18);
         // 腿 1：金库买 0.01 BTC（taker 卖 BTC，是 Fill 的 maker；金库是 taker）
-        Settlement.Order memory vaultBuy = _vaultOrder(address(makerVault), "vault-buy", 0.01e18, 7582234e14, 0);
-        Settlement.Order memory takerSell = _vaultOrder(taker, "taker-sell", 0.01e18, 7582234e14, 0);
-        vault.lockForOrder(_toVaultOrder(vaultBuy), _signed(signerKey, vaultBuy).signature, false);
-        vault.lockForOrder(_toVaultOrder(takerSell), _signed(takerKey, takerSell).signature, true);
+        Settlement.Order memory vaultBuy = _vaultOrder(address(makerVault), "vault-buy", 0.01e18, 7582234e14, 0, 0);
+        Settlement.Order memory takerSell = _vaultOrder(taker, "taker-sell", 0.01e18, 7582234e14, 0, 1);
+        vault.lockForOrder(_toVaultOrder(vaultBuy), _signed(signerKey, vaultBuy).signature);
+        vault.lockForOrder(_toVaultOrder(takerSell), _signed(takerKey, takerSell).signature);
         settlement.settleTrade(
             Settlement.Fill({
                 makerOrder: _signed(takerKey, takerSell),
@@ -245,10 +247,10 @@ contract MakerVaultTest is Test {
         usdt.approve(address(vault), type(uint256).max);
         vault.deposit(address(usdt), 1000e18);
         vm.stopPrank();
-        Settlement.Order memory vaultSell = _vaultOrder(address(makerVault), "vault-sell", 9999000000000000, 758147577660000000000, 1);
-        Settlement.Order memory takerBuy = _vaultOrder(taker, "taker-buy", 9999000000000000, 758147577660000000000, 1);
-        vault.lockForOrder(_toVaultOrder(vaultSell), _signed(signerKey, vaultSell).signature, true);
-        vault.lockForOrder(_toVaultOrder(takerBuy), _signed(takerKey, takerBuy).signature, false);
+        Settlement.Order memory vaultSell = _vaultOrder(address(makerVault), "vault-sell", 9999000000000000, 758147577660000000000, 1, 1);
+        Settlement.Order memory takerBuy = _vaultOrder(taker, "taker-buy", 9999000000000000, 758147577660000000000, 1, 0);
+        vault.lockForOrder(_toVaultOrder(vaultSell), _signed(signerKey, vaultSell).signature);
+        vault.lockForOrder(_toVaultOrder(takerBuy), _signed(takerKey, takerBuy).signature);
         settlement.settleTrade(
             Settlement.Fill({
                 makerOrder: _signed(signerKey, vaultSell),
@@ -272,7 +274,7 @@ contract MakerVaultTest is Test {
     // ---------- 签名者管理 ----------
 
     function testSignerRotation() public {
-        Settlement.Order memory o = _vaultOrder(address(makerVault), "v-rot", 0.01e18, 800e18, 0);
+        Settlement.Order memory o = _vaultOrder(address(makerVault), "v-rot", 0.01e18, 800e18, 0, 0);
         assertTrue(settlement.verifyOrderSignature(o, _sign(signerKey, o)));
         // 撤销旧签名者、登记新签名者
         (address newSigner, uint256 newKey) = makeAddrAndKey("signer2");
@@ -302,7 +304,7 @@ contract MakerVaultTest is Test {
         vm.prank(depositor);
         vm.expectRevert();
         makerVault.deposit(100e18, depositor);
-        Settlement.Order memory o = _vaultOrder(address(makerVault), "v-pause", 0.01e18, 800e18, 0);
+        Settlement.Order memory o = _vaultOrder(address(makerVault), "v-pause", 0.01e18, 800e18, 0, 0);
         assertFalse(settlement.verifyOrderSignature(o, _sign(signerKey, o)), "signing halted while paused");
         assertEq(makerVault.isValidSignature(settlement.orderDigest(o), _sign(signerKey, o)), bytes4(0xffffffff));
         // 赎回不受暂停影响

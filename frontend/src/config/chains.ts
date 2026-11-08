@@ -26,6 +26,8 @@ export interface ChainConfig {
     crossChainBridge: string
     // 第十九轮：WrappedTKA（TKA 的 1:1 包装代币，CCIP / Wormhole 桥的载体代币）
     wrappedToken?: string
+    // 第三十轮：做市金库 MakerVault（ERC-4626，第 27 轮部署、第 30 轮随新栈换址）
+    makerVault?: string
   }
   // 第二十五轮：本链已部署的测试代币（符号 → 地址），供交易对切换器取下单/余额代币；
   // TKA/TKB 沿用 contracts.token0/token1 的地址，此处一并登记以便按符号统一取用。
@@ -75,8 +77,8 @@ const SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0x40aaCB66Bcd1b58d86FF17D3D8e800aF6cAf3b30',
-    settlement: '0x3efb8F22B925FC659b46680700936243E1f8365E',
+    vault: '0x66D4DE542d6329D2b6631170fCD773Ce2518E890',
+    settlement: '0xa3F8cBCDc1533299D37836ea80d5004FF59f9094',
     token0: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
     token1: '0x1530b74E6d5C2D0e2b78314b5C253E66bfC4ddc2',
     contributorReward: '0x12b8dA1b30771c46025488621bfe3DC665E9C0a8',
@@ -86,6 +88,7 @@ const SEPOLIA: ChainConfig = {
     chainConfig: '0x52De0F096B169f612E55084eE05Efa7D1dEaa0c4',
     crossChainBridge: '0x7a0eCbc2Ffca2F8f7A1505Fa65e7E4759bE33d50',
     wrappedToken: '0x03ED8203236Bb5409caA6330fDCd16559C914b9a',
+    makerVault: '0x41c0f50f9Ff4D895eb33C1590B6DEDCa6C06857a',
   },
   // 第十九轮 CCIP（见 docs/round19-three-bridges-2026-11-07.md）
   ccip: {
@@ -141,8 +144,8 @@ const BASE_SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0x1bFb42E93F5860C76ef0E100E063083357b93C8A',
-    settlement: '0x9711644e3E39cec6E099e01cd4029f72244012D1',
+    vault: '0x60eaeb651371268EAA96bc0F45ec20Ed000f7b4A',
+    settlement: '0x39037dE0a1d6ca567d50055522f7Ef825dF4FCf9',
     token0: '0xd3f1136Cb3511b4546BDE5dDAC4F0D5a4D5C5D33',
     token1: '0x8492ccCE958803F04772C0f5B51DbbC320A54daF',
     contributorReward: '0xFe066c25a25Fddd6433Fac7f7769d5806392663e',
@@ -151,6 +154,7 @@ const BASE_SEPOLIA: ChainConfig = {
     tokenRegistry: '0x8dC560038D392012C8562185E4C6Bf2Ce636E74D',
     chainConfig: '0x41b12b6620750564a412b294a1a2bBde24a3B9E8',
     crossChainBridge: '0xA7722A0ba7F2DA1d4D67D5191222C5e4c3835dBB',
+    makerVault: '0x35366FB236b67f43A3287efa8f0b461DfC9E3279',
     // 注意：Base Sepolia 的 wTKA 地址字符串与 Sepolia 的 FeeDistributor 相同，是不同链上的不同合约；
     // Base Sepolia 的 CCIP 池地址字符串又与 Sepolia 的 TKA 相同（CREATE nonce 巧合），引用时务必连链一起看。
     wrappedToken: '0x346DE29B7fEe95F44A5b5385e87182F031E8E1B5',

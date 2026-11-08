@@ -2,9 +2,12 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @notice Settlement 订单结构镜像：字段顺序与 Settlement.Order 严格一致，
-/// 供 Vault 调用 Settlement 的验签与摘要函数（ABI 元组编码相同）
+/// 供 Vault 调用 Settlement 的验签与摘要函数（ABI 元组编码相同）。
+/// side 与 Settlement 同口径：0 = BUY（付 tokenOut）、1 = SELL（付 tokenIn），
+/// 阶段 3 起为签名字段（docs/eip712-order-spec.md §2）。
 struct VaultOrder {
     string orderId;
     address userAddress;
@@ -16,6 +19,7 @@ struct VaultOrder {
     uint256 timestamp;
     uint256 expiresAt;
     uint256 nonce;
+    uint8 side;
 }
 
 /// @notice Vault 需要的 Settlement 只读接口（验签 + 订单摘要）
@@ -28,7 +32,13 @@ interface ISettlementVerifier {
 /// @notice 用户存入/提取资产，仅 Settlement 可划转用于结算；挂单落锁后（第三十轮起
 /// 无权限，见 lockForOrder），对应余额被锁定：不可提取、随成交消耗、撤单/过期释放
 /// （设计见 docs/order-balance-locking.md、docs/nodeless-design-2026-11-07.md §4.2 L2）
-contract Vault {
+/// @dev 第 33 轮安全加固（ChatGPT 复审 N1）：继承 OpenZeppelin ReentrancyGuard
+/// （骑既有依赖，与 Settlement/MakerVault/Governance 同款）。凡函数体内含代币
+/// 外部调用（transferFrom/transfer）或外部验签回调（lockForOrder 调
+/// Settlement.verifyOrderSignature）的入口一律 nonReentrant，防恶意代币在
+/// 回调中重入造成重复记账；纯账本内划转（transferWithinVault）无外部调用、
+/// 无回调面，不加（理由见该函数注释）。
+contract Vault is ReentrancyGuard {
     address public settlement;
     address public owner;
 
@@ -102,15 +112,28 @@ contract Vault {
     }
 
     /// @notice 用户存入代币：需先 approve Vault
-    function deposit(address token, uint256 amount) external {
+    /// @dev 第 32 轮起按**实际到账**记账（ChatGPT 审查整改）：transferFrom 前后
+    /// 各读一次 Vault 的代币余额，差额即实收。带转账扣费/税的代币实收小于
+    /// 名义额，按实收记账与发事件，保证内部账本与 Vault 真实余额恒一致；
+    /// 标准代币实收恒等于名义额，行为不变。实收为 0（全额扣费）时 revert，
+    /// 不记空账。withdraw/结算等下游一律以 balances 为准，无需感知此口径。
+    /// nonReentrant（第 33 轮 N1）：差额记账横跨 transferFrom 外部调用，恶意
+    /// 代币可在回调中重入 deposit，使外层把内层转入也算作自己的实收而重复
+    /// 记账——重入守卫令内层调用直接回滚（专项测试见 VaultReentrancy.t.sol）。
+    function deposit(address token, uint256 amount) external nonReentrant {
         require(token != address(0) && amount > 0, "Vault: invalid input");
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
         require(IERC20(token).transferFrom(msg.sender, address(this), amount), "Vault: transfer failed");
-        balances[msg.sender][token] += amount;
-        emit Deposit(msg.sender, token, amount);
+        uint256 received = IERC20(token).balanceOf(address(this)) - balanceBefore;
+        require(received > 0, "Vault: nothing received");
+        balances[msg.sender][token] += received;
+        emit Deposit(msg.sender, token, received);
     }
 
     /// @notice 用户提取代币：只能提取可用余额（总余额 − 挂单锁定），锁定部分提不出
-    function withdraw(address token, uint256 amount) external {
+    /// @dev nonReentrant（第 33 轮 N1）：账面先扣后转，transfer 含代币回调面；
+    /// 与 deposit 共用同一重入锁，跨函数重入（如提取回调中再存入）同样被挡。
+    function withdraw(address token, uint256 amount) external nonReentrant {
         require(token != address(0) && amount > 0, "Vault: invalid input");
         require(amount <= balances[msg.sender][token] - locked[msg.sender][token], "Vault: insufficient available balance");
         balances[msg.sender][token] -= amount;
@@ -131,26 +154,39 @@ contract Vault {
     }
 
     /// @notice 为一笔签名订单落锁：锁定其全部付款义务。签名订单是交易对朝向的
-    /// （tokenIn/tokenOut 恒为交易对两币，与方向无关），义务按方向二选一：
-    /// payWithTokenIn=true（卖方）锁 (tokenIn, amountIn)；false（买方）锁
-    /// (tokenOut, amountOut)。金额一律由 Vault 从验签后的订单本身派生，
-    /// 调用者只能给方向，无法传入任意金额。
+    /// （tokenIn/tokenOut 恒为交易对两币），付款义务由**签名方向**派生：
+    /// side = SELL(1) 锁 (tokenIn, amountIn)；side = BUY(0) 锁
+    /// (tokenOut, amountOut)。代币与金额一律由 Vault 从验签后的订单本身
+    /// 派生，调用者无法传入方向、无法传入任意金额。
+    /// 【阶段 3 ⑥方向一致性】本函数旧签名带调用者自填的方向参数
+    /// payWithTokenIn——第 35 轮复审 N1 证伪其安全性：任何人可按错误方向
+    /// 抢先为他人订单落锁（锁错币/错量）。side 进入 EIP-712 签名结构后
+    /// （Route A），方向成为签名事实，本函数改为只从 order.side 派生，
+    /// 参数删除；「落锁方向 ≠ 签名方向」在接口层即不可能表达。Settlement
+    /// 结算时另有方向强制（付款侧与签名方向比对），双重一致。
     /// 【第三十轮 L2：无权限落锁】任何人可调用（不再限 locker）。安全性不来自
     /// 调用者身份，而来自 Vault 强制向 Settlement 验签并由 Settlement 计算摘要：
-    /// 调用者只能替订单签名者执行其已签名同意的锁定（金额/代币/归属全部由签名
-    /// 订单派生），无法凭空锁定他人余额、无法伪造锁定键、无法改动锁定条款。
-    /// 无效签名、同一订单重复上锁、已过期、可用余额不足均 revert。
+    /// 调用者只能替订单签名者执行其已签名同意的锁定（方向/金额/代币/归属全部
+    /// 由签名订单派生），无法凭空锁定他人余额、无法伪造锁定键、无法改动锁定条款。
+    /// 无效签名、非法 side、同一订单重复上锁、已过期、可用余额不足均 revert。
     /// lockers 角色保留（见 lockers 注释）：releaseOrderLock 的授权仍认 locker。
-    function lockForOrder(VaultOrder calldata order, bytes calldata signature, bool payWithTokenIn)
+    /// nonReentrant（第 33 轮 N1）：本函数向 Settlement 发起外部验签调用，
+    /// 验签方若为恶意/被攻陷合约可在回调中重入 Vault 的记账入口——加守卫后
+    /// 回调期内的 deposit/withdraw/transferOut 一律被挡；Settlement 自身的
+    /// 结算划转不经本函数嵌套调用，不受影响。
+    function lockForOrder(VaultOrder calldata order, bytes calldata signature)
         external
+        nonReentrant
         returns (bytes32 digest)
     {
         require(settlement != address(0), "Vault: settlement unset");
         require(order.expiresAt > block.timestamp, "Vault: order expired");
+        require(order.side == 0 || order.side == 1, "Vault: invalid side");
         ISettlementVerifier verifier = ISettlementVerifier(settlement);
         require(verifier.verifyOrderSignature(order, signature), "Vault: invalid order signature");
         digest = verifier.orderDigest(order);
         require(orderLocks[digest].user == address(0), "Vault: order already locked");
+        bool payWithTokenIn = order.side == 1; // SELL 付 tokenIn；BUY 付 tokenOut
         address token = payWithTokenIn ? order.tokenIn : order.tokenOut;
         uint256 amount = payWithTokenIn ? order.amountIn : order.amountOut;
         require(amount > 0, "Vault: zero lock amount");
@@ -215,7 +251,10 @@ contract Vault {
     }
 
     /// @notice 结算合约：从 fromUser 扣减并转至 to（仅 Settlement 调用），代币转出到 to 地址
-    function transferOut(address fromUser, address to, address token, uint256 amount) external onlySettlement {
+    /// @dev nonReentrant（第 33 轮 N1）：含 transfer 外部调用与代币回调面，与
+    /// deposit/withdraw 共用重入锁。结算事务内 Settlement 对本函数的多次调用
+    /// 是顺序独立调用（非嵌套），守卫不影响正常结算。
+    function transferOut(address fromUser, address to, address token, uint256 amount) external onlySettlement nonReentrant {
         require(token != address(0) && to != address(0) && amount > 0, "Vault: invalid input");
         require(balances[fromUser][token] >= amount, "Vault: insufficient balance");
         balances[fromUser][token] -= amount;
@@ -224,6 +263,9 @@ contract Vault {
     }
 
     /// @notice 结算合约：在托管账本内划转（仅 Settlement 调用），不转出代币
+    /// @dev 不加 nonReentrant（第 33 轮 N1 取舍）：函数体只有账本加减、无任何
+    /// 外部调用，不存在回调面；且结算路径常与 transferOut 同事务顺序调用，
+    /// 保持无守卫避免无谓约束。
     function transferWithinVault(address fromUser, address toUser, address token, uint256 amount) external onlySettlement {
         require(token != address(0) && toUser != address(0) && amount > 0, "Vault: invalid input");
         require(balances[fromUser][token] >= amount, "Vault: insufficient balance");

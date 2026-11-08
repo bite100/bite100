@@ -3,6 +3,7 @@ import { CHAIN_ID } from '../config'
 import { nodePost } from '../nodeClient'
 import { dualSendOrderToRelay } from './relayDualSend'
 import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce, OrderData } from './orderSigning'
+import { sideToSignedValue } from './orderSigningTypes'
 
 export interface OrderParams {
   tokenIn: string
@@ -40,6 +41,7 @@ export async function submitOrder(
     timestamp,
     expiresAt,
     nonce,
+    side: sideToSignedValue(params.side),
   }
 
   // 签名订单（域按当前链生成）

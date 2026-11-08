@@ -12,7 +12,11 @@
     "build:polygon": "tsc -b && cross-env VITE_NETWORK=polygon vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:abi": "node scripts/check-governance-abi.mjs",
+    "check:abi:selftest": "node scripts/check-governance-abi.test.mjs",
+    "test:soak-timing": "node scripts/soak/timing.test.mjs",
+    "test:soak-report": "node scripts/soak/report.test.mjs"
   },
   "dependencies": {
     "@chainsafe/libp2p-noise": "^17.0.0",

@@ -181,7 +181,7 @@ func TestChainLockingLoopE2E(t *testing.T) {
 		Filled: "0", Status: "open", Nonce: makerNonce, CreatedAt: now, ExpiresAt: now + 3600,
 	}
 	soA := sign(makerKey, orderA)
-	digestA, lockTxA, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, soA, "sell")
+	digestA, lockTxA, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, soA)
 	if err != nil {
 		t.Fatalf("LockOrder(A): %v", err)
 	}
@@ -233,12 +233,12 @@ func TestChainLockingLoopE2E(t *testing.T) {
 	}
 	trade := trades[0]
 
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, trade.MakerOrder, "sell"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, trade.MakerOrder); err != nil {
 		t.Fatalf("LockOrder(B): %v", err)
 	} else {
 		t.Logf("order B locked tx=%s", tx)
 	}
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, soT, "buy"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), ownerPrivHex, soT); err != nil {
 		t.Fatalf("LockOrder(taker): %v", err)
 	} else {
 		t.Logf("taker order locked tx=%s", tx)

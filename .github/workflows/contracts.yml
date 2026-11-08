@@ -7,10 +7,17 @@ on:
     paths:
       - "contracts/**"
       - ".github/workflows/contracts.yml"
+      # 第 33 轮：治理 ABI 防漂移检查以前端声明为输入，改 config.ts 也须触发
+      - "frontend/src/config.ts"
+      - "frontend/scripts/check-governance-abi.mjs"
+      - "frontend/scripts/check-governance-abi.test.mjs"
   pull_request:
     paths:
       - "contracts/**"
       - ".github/workflows/contracts.yml"
+      - "frontend/src/config.ts"
+      - "frontend/scripts/check-governance-abi.mjs"
+      - "frontend/scripts/check-governance-abi.test.mjs"
   workflow_dispatch:
 
 jobs:
@@ -27,6 +34,17 @@ jobs:
       - name: Build contracts
         working-directory: contracts
         run: forge build
+
+      # 第 33 轮：治理 ABI 防漂移——config.ts 手写的 GOVERNANCE_ABI 与
+      # forge 产物逐条比对（第 32 轮漂移的根因是全手写无核对）。零依赖
+      # 纯 Node 脚本，runner 预装 Node 即可。
+      - name: Check governance ABI drift
+        run: node frontend/scripts/check-governance-abi.mjs
+
+      # 第 34 轮 M2：主检查的负例自检（空 ABI / 双引号 / 不可解析
+      # 声明必须被拦下），防检查脚本自身退化为空过。
+      - name: Self-test governance ABI checker
+        run: node frontend/scripts/check-governance-abi.test.mjs
 
       - name: Run contract tests
         working-directory: contracts

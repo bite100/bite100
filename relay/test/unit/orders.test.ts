@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BUILTIN_CHAINS, pairTokens } from '../../src/config'
+import { BUILTIN_CHAINS, pairTokens, type ChainRelayConfig } from '../../src/config'
 import {
   buildSignedOrder,
   orderDigest,
+  sideStringToUint,
   validateBody,
   verifyOrder,
   ORDER_TYPES,
+  type NodeOrderBody,
 } from '../../src/orders'
 import { account, makeSignedOrder, TEST_ADDRESS } from '../helpers'
 
@@ -93,6 +95,7 @@ describe('verifyOrder ERC-1271 双路（合约账户 / MakerVault）', () => {
       timestamp: BigInt(now),
       expiresAt: BigInt(now + 86400),
       nonce: 0n,
+      side: 0, // 与下方请求体 side: 'buy' 对应（规范 §2：buy ↔ 0）
     }
     // 测试钥扮演金库注册签名者代签（恢复地址 = 测试地址 ≠ 金库地址）
     const signature = await account.signTypedData({
@@ -168,6 +171,97 @@ describe('verifyOrder ERC-1271 双路（合约账户 / MakerVault）', () => {
     const stub = stubClient(false)
     expect(await verifyOrder(sepolia, so, body.signature, stub)).toBe(true)
     expect(stub.verifyTypedData).not.toHaveBeenCalled()
+  })
+})
+
+describe('阶段 3 side 签名字段（规范 §2）', () => {
+  it('ORDER_TYPES 与规范类型串逐字一致（side 为 uint8、置于末位）', () => {
+    const typeString = `Order(${ORDER_TYPES.Order.map((f) => `${f.type} ${f.name}`).join(',')})`
+    expect(typeString).toBe(
+      'Order(string orderId,address userAddress,address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOut,uint256 price,uint256 timestamp,uint256 expiresAt,uint256 nonce,uint8 side)',
+    )
+    expect(ORDER_TYPES.Order[ORDER_TYPES.Order.length - 1]).toEqual({
+      name: 'side',
+      type: 'uint8',
+    })
+  })
+
+  it('buildSignedOrder 映射：buy -> 0、sell -> 1（与订单行 side 字符串一一对应）', async () => {
+    const buy = await makeSignedOrder({ side: 'buy' })
+    expect(buildSignedOrder(sepolia, buy)!.side).toBe(0)
+    // 签名消息由 helpers 以同一映射签名，两种方向重建后均可验签
+    expect(await verifyOrder(sepolia, buildSignedOrder(sepolia, buy)!, buy.signature)).toBe(true)
+    const sell = await makeSignedOrder({ side: 'sell' })
+    expect(buildSignedOrder(sepolia, sell)!.side).toBe(1)
+    expect(await verifyOrder(sepolia, buildSignedOrder(sepolia, sell)!, sell.signature)).toBe(
+      true,
+    )
+    expect(sideStringToUint('buy')).toBe(0)
+    expect(sideStringToUint('sell')).toBe(1)
+    expect(() => sideStringToUint('hold')).toThrow(/side/)
+  })
+
+  it('side 被签名绑死：签后翻转订单行 side 字符串 -> 验签失败', async () => {
+    const body = await makeSignedOrder({ side: 'buy' })
+    const localOnly = { ...sepolia, rpcUrl: '' } // 关掉 RPC 回退，只看本地验签结论
+    const flipped = { ...body, side: 'sell' }
+    const so = buildSignedOrder(localOnly, flipped)!
+    expect(so.side).toBe(1)
+    expect(await verifyOrder(localOnly, so, body.signature)).toBe(false)
+  })
+})
+
+describe('跨语言向量（规范 §6，ethers 生成，含 side 的新消息）', () => {
+  // 域：name=比特100、version=1、chainId=31337、verifyingContract=anvil 首部署地址；
+  // 交易对代币以向量 tokenIn/tokenOut 对齐（0x1111…/0x2222…），其余字段经
+  // buildSignedOrder 的既有派生（amountOut = amountIn * price / 1e18）与向量自洽。
+  const VECTOR_CHAIN: ChainRelayConfig = {
+    chainId: 31337,
+    settlement: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+    rpcUrl: '',
+    tokens: {
+      AAA: '0x1111111111111111111111111111111111111111',
+      BBB: '0x2222222222222222222222222222222222222222',
+    },
+  }
+  const VECTOR_SIGNATURE =
+    '0xc7d48a6fdc483a27fa1c04cdfa92b5e4fb162cd94c747ffca46b73222b34f9ae4c2751772e5e43bbcee2b9d84a46eee9a7e472fddcf1bd58542760c0afe9ec9c1b'
+  const VECTOR_DIGEST = '0xd793d795036c2d1b548120e9e73ea43a608529b4a23f0d3254c263fde391cec0'
+
+  function vectorBody(): NodeOrderBody {
+    return {
+      orderId: 'order_vector_1',
+      trader: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
+      pair: 'AAA/BBB',
+      side: 'sell',
+      price: '2000000000000000000',
+      amount: '100000000000000000000',
+      nonce: 0,
+      createdAt: 1700000000,
+      expiresAt: 1700086400,
+      signature: VECTOR_SIGNATURE,
+    }
+  }
+
+  it('重建字段与向量逐项一致，digest 与向量逐字相等', () => {
+    const so = buildSignedOrder(VECTOR_CHAIN, vectorBody())!
+    expect(so.orderId).toBe('order_vector_1')
+    expect(so.userAddress).toBe('0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266')
+    expect(so.tokenIn).toBe('0x1111111111111111111111111111111111111111')
+    expect(so.tokenOut).toBe('0x2222222222222222222222222222222222222222')
+    expect(so.amountIn).toBe(100000000000000000000n)
+    expect(so.amountOut).toBe(200000000000000000000n)
+    expect(so.price).toBe(2000000000000000000n)
+    expect(so.timestamp).toBe(1700000000n)
+    expect(so.expiresAt).toBe(1700086400n)
+    expect(so.nonce).toBe(0n)
+    expect(so.side).toBe(1)
+    expect(orderDigest(VECTOR_CHAIN, so)).toBe(VECTOR_DIGEST)
+  })
+
+  it('向量签名（ethers / anvil 账户 #0）经 verifyOrder 本地路径验过', async () => {
+    const so = buildSignedOrder(VECTOR_CHAIN, vectorBody())!
+    expect(await verifyOrder(VECTOR_CHAIN, so, VECTOR_SIGNATURE)).toBe(true)
   })
 })
 

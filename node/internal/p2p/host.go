@@ -14,6 +14,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p-pubsub"
+	routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/multiformats/go-multiaddr"
 	"golang.org/x/net/proxy"
 )
@@ -151,16 +152,23 @@ func StartDHT(ctx context.Context, h host.Host, bootstrapPeers []string) (*dht.I
 	return kad, nil
 }
 
-// NewGossipSub 创建 GossipSub（先不接 DHT discovery，仅直连与 -connect 的节点互通）
+// NewGossipSub 创建 GossipSub；kad 非 nil 时经 kad-dht 自带的 routing
+// discovery 按 topic 自动发现节点（pubsub.WithDiscovery，第 32 轮接上；
+// 此前 StartDHT 从未被主流程调用、GossipSub 也未接发现，只能靠 -connect
+// 与 bootstrap 直连互通）。kad 为 nil 时退化为仅直连，行为与旧版一致。
 // 清单 1.1 GossipSub 延迟优化：降低 heartbeat、适度提高 fanout 以加快订单广播
-func NewGossipSub(ctx context.Context, h host.Host) (*pubsub.PubSub, error) {
+func NewGossipSub(ctx context.Context, h host.Host, kad *dht.IpfsDHT) (*pubsub.PubSub, error) {
 	params := pubsub.DefaultGossipSubParams()
 	// heartbeat 从 1s 降为 500ms，加快 mesh 维护与 gossip 频率
 	params.HeartbeatInterval = 500 * time.Millisecond
 	params.HeartbeatInitialDelay = 50 * time.Millisecond
 	// fanout 保留时间略短，便于快速重选 mesh 内 peer
 	params.FanoutTTL = 30 * time.Second
-	return pubsub.NewGossipSub(ctx, h, pubsub.WithGossipSubParams(params))
+	opts := []pubsub.Option{pubsub.WithGossipSubParams(params)}
+	if kad != nil {
+		opts = append(opts, pubsub.WithDiscovery(routing.NewRoutingDiscovery(kad)))
+	}
+	return pubsub.NewGossipSub(ctx, h, opts...)
 }
 
 // SubscribeAndLog 订阅 topic 并打印收到的消息（为 M2/M3 打基础）

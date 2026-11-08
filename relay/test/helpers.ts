@@ -5,7 +5,7 @@
  */
 import { privateKeyToAccount } from 'viem/accounts'
 import { BUILTIN_CHAINS, pairTokens } from '../src/config'
-import { ORDER_TYPES, type NodeOrderBody } from '../src/orders'
+import { ORDER_TYPES, sideStringToUint, type NodeOrderBody } from '../src/orders'
 
 export const TEST_PRIVATE_KEY =
   '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as const
@@ -53,6 +53,8 @@ export async function makeSignedOrder(opts: MakeOrderOpts = {}): Promise<NodeOrd
     timestamp: BigInt(createdAt),
     expiresAt: BigInt(expiresAt),
     nonce: BigInt(opts.nonce ?? 0),
+    // 签名字段 side（uint8，规范 §2）：与下方请求体 side 字符串同一映射
+    side: sideStringToUint(opts.side ?? 'buy'),
   }
   const signature = await account.signTypedData({
     domain: {

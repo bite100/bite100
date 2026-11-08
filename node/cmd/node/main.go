@@ -152,8 +152,17 @@ func main() {
 		time.Sleep(2 * time.Second) // 留时间让并行连接完成
 	}
 
+	// 2.5 DHT：启动 Kademlia DHT 并作为 GossipSub 的发现层（第 32 轮接上；
+	// 此前 StartDHT 从未被调用，节点实际只有直连互通）。启动失败不致命：
+	// 记录后以无 DHT 发现模式继续运行（-connect/bootstrap 直连仍可用）。
+	kad, derr := p2p.StartDHT(ctx, h, cfg.Network.Bootstrap)
+	if derr != nil {
+		log.Printf("DHT 启动失败（继续以无 DHT 发现模式运行）: %v", derr)
+		kad = nil
+	}
+
 	// 3. GossipSub
-	ps, err := p2p.NewGossipSub(ctx, h)
+	ps, err := p2p.NewGossipSub(ctx, h, kad)
 	if err != nil {
 		exitFatalf("GossipSub: %v", err)
 	}
@@ -598,7 +607,7 @@ func (l *vaultLocker) lockForBookOrder(order *storage.Order) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	_, tx, err := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so, order.Side)
+	_, tx, err := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so)
 	switch classifyLockErr(err) {
 	case lockOK:
 		log.Printf("[lock] 订单 %s 已落锁 tx=%s", order.OrderID, tx)
@@ -609,7 +618,7 @@ func (l *vaultLocker) lockForBookOrder(order *storage.Order) error {
 		return nil
 	case lockRedrive:
 		log.Printf("[lock] 订单 %s 落锁交易已被丢弃，幂等重驱一次: %v", order.OrderID, err)
-		_, tx2, err2 := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so, order.Side)
+		_, tx2, err2 := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so)
 		switch classifyLockErr(err2) {
 		case lockOK:
 			log.Printf("[lock] 订单 %s 重驱落锁成功 tx=%s", order.OrderID, tx2)
@@ -640,7 +649,7 @@ func (l *vaultLocker) trackPendingLock(order *storage.Order) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-		_, tx, err := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so, order.Side)
+		_, tx, err := settlement.LockOrder(ctx, l.rpcURL, l.vault, l.settlement, l.keyHex, so)
 		cancel()
 		if err == nil {
 			log.Printf("[lock] 订单 %s 在途落锁已确认 tx=%s（第 %d 次追踪）", order.OrderID, tx, attempt)
