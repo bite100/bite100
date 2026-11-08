@@ -148,7 +148,8 @@ ethers 的 `TypedDataEncoder`（中立的 EIP-712 参考实现）生成，Go 测
 ### 7.2 失败结算：归责扣费
 
 revert 的交易内无法扣款，失败扣费走独立入口 `chargeFailedSettlement(signedOrder,
-reason, gasUsedClaimed)`，由结算调用方（owner/治理/白名单 relayer）在失败后申报：
+reason, gasUsedClaimed)`，由结算调用方（owner / relayer / 白名单 relayer；
+以合约 `_isSettlementCaller` 的角色集合为准，**不含 governance**)在失败后申报：
 
 - **归责只认两类链上可验事实**：`FAIL_ORDER_EXPIRED = 1`（订单 `expiresAt` 已过）、
   `FAIL_LOCK_RELEASED = 2`（订单锁已被释放/取消且该订单未成交完毕）。被扣方与被扣

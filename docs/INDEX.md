@@ -62,6 +62,7 @@
 | 39 | [round39-dual-source-hardening-2026-11-08.md](round39-dual-source-hardening-2026-11-08.md) | 成交双源健壮性四项（Envio 接线增量复审整改）：双源取数超时真取消（节点 5s/索引器 8s，AbortController 平台标准）、GraphQL errors 检查、服务端排序补 logIndex 次级键、桌面「成交记录」页签接入同一条双源路径 | 待合并（本轮分支 round39-dual-source-hardening；仅 frontend/ 与 docs/，零新依赖） |
 | 40 | [round40-review-followups-2026-11-08.md](round40-review-followups-2026-11-08.md) | 复审跟进批：第 38 轮 F1–F4（asIntString 数字分支安全整数化 + 边界测试、节点适配器形态校验 requireBookSides 前端/runner 共用、droppedRows 口径写明）、Envio 跟进（indexer viem 精确锁 2.57.16）、第 39 轮 F1/测试缺口/F2（tryNodes abort 短路、双挂死双 signal 断言、FetchFn 契约注释）；不重建 soak 包、3A 不受影响 | 待合并（本轮分支 round40-review-followups；仅 frontend/、indexer/、docs/，零新依赖） |
 | 阶段 3 | [stage3-contract-matching-2026-11-08.md](stage3-contract-matching-2026-11-08.md) | 无节点阶段 3：Route A（side 进 EIP-712 签名，五方同轮同步、跨语言向量一致、SIDE_UNPROVABLE 过渡体制结束）、Settlement 开放提交（模型 B）+ ERC-1271 长度门修复 + 批上限常量 50、Vault 落锁方向只从签名派生（⑥）、前端撮合开启（本地撮合骑 dualread 可成交集、批结算自提+预检剔腿、灰度开关默认关）、同单双路径 anvil 对账四项全过（三套链参数）；含切换 runbook 与第 40 轮复审三小项骑乘 | 本地分支 stage3-contract-matching，未 push/未部署；双链切换等 3A 结案后发令 |
+| 阶段 3 修复 | [stage3-price-fix-2026-11-08.md](stage3-price-fix-2026-11-08.md) | 阶段 3 后端复审 P0 修复：Settlement 限价强制（_accountFill 落账前按签名量交叉相乘校验双方限价，SELL 实收不低于签名价 / BUY 实付不高于签名价，无除法不误杀边界小额，四入口全覆盖，ABI 不变）+ Stage3PriceFix.t.sol 14 例（167→181）；骑乘冻结摘要 Solidity 侧向量断言、GasSavings/Merkle 批入口坏腿回滚、chargeFailedSettlement 计费口径入文档 | 本地分支 stage3-price-fix，未 push/未部署；测试网切换硬前置（合入并复审后方可发令） |
 
 ## 三、分支上的设计文档（未合入 main）
 

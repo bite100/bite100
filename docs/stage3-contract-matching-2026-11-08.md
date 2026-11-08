@@ -224,6 +224,7 @@ pending/retry/submitting 中的成交。
   收起，随切换日后的单独发令）。
 - soak 按新结构体重新基线并开新窗口（切换后下一轮）。
 - chargeFailedSettlement 门禁去留（§2 标记项，待主聊天/Ren 裁定）。
+- 价格校验修复（阶段 3 后端复审 P0：结算从无「成交比例 vs 双方签名限价」校验）：**已完成**（分支 `stage3-price-fix`，见 [stage3-price-fix-2026-11-08.md](stage3-price-fix-2026-11-08.md)）——双方限价交叉相乘强制 + 14 例新测试（forge 167→181）；**测试网切换硬前置之一：合入并复审通过后方可发令切换**。
 - 节点 e2e 的 anvil 实跑在本轮以 D1 双驱动覆盖（节点路径即节点代码
   实跑）；`scripts/anvil-e2e.sh` 全家桶（含 1271/market/locking）随
   套件在本地 anvil 复跑结果见 D2 门禁行。
