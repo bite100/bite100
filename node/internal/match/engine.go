@@ -236,8 +236,14 @@ func (e *Engine) ClearSignatureCache() {
 // Amount）缺失、已过期或剩余量 ≤ 0 时返回 false。纯函数（只读入参），
 // AddOrder 与 ReplaceOrderbook 共用，保证两条写入路径的入簿口径一致
 // （第 33 轮 N2/N3：写入路径统一）。
+// 阶段 3 fail-closed：side 非 buy/sell 一律拒绝入簿——此前非 buy 即按卖盘
+// 处理，未知方向（如 gossip 混入的 "hold"）会被当卖单挂簿；签名侧 side
+// 已是签名字段（见 signature.go），簿侧口径必须与之严格一致。
 func normalizeForBook(o *storage.Order) (*storage.Order, bool) {
 	if o == nil || o.OrderID == "" || o.Price == "" || o.Amount == "" {
+		return nil, false
+	}
+	if o.Side != "buy" && o.Side != "sell" {
 		return nil, false
 	}
 	if storage.OrderExpired(o) {
@@ -537,6 +543,12 @@ func (e *Engine) Match(taker *storage.Order) (trades []*storage.Trade) {
 	t0 := time.Now()
 	defer func() { metrics.RecordMatch(len(trades), time.Since(t0)) }()
 	if taker.OrderID == "" || taker.Pair == "" || taker.Side == "" || taker.Price == "" || taker.Amount == "" {
+		return nil
+	}
+	// 阶段 3 fail-closed：未知 side 的 taker 不撮合（此前非 buy 一律按卖方
+	// 吃买盘，未知方向可冒充卖方成交）；市价路径 ExecuteMarketOrder 经本
+	// 函数撮合，同受此口径约束。
+	if taker.Side != "buy" && taker.Side != "sell" {
 		return nil
 	}
 	e.mu.Lock()

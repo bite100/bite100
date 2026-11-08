@@ -503,6 +503,15 @@ func (s *Server) handlePostOrder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing required fields", http.StatusBadRequest)
 		return
 	}
+	// 方向校验（阶段 3 fail-closed）：side 只接受 buy/sell。此前仅判非空，
+	// 未知 side（如 "hold"）能混过本层：验签时 BuildSignedOrder 对未知值无
+	// 对应签名口径、引擎又把非 buy 一律当卖盘入簿，未知方向可冒充卖单。
+	// 现在此处先行拒绝；验签路径（match.VerifyOrderSignature）与引擎入簿
+	// 路径（normalizeForBook）另有同口径兜底，任一层都不放行未知方向。
+	if o.Side != "buy" && o.Side != "sell" {
+		http.Error(w, "invalid side", http.StatusBadRequest)
+		return
+	}
 	// 执行指令校验（第十七轮）：仅 "" / "limit" / "market" 合法；market 时 Price 为签名保护价
 	if o.ExecType != "" && o.ExecType != storage.ExecTypeLimit && o.ExecType != storage.ExecTypeMarket {
 		http.Error(w, "invalid execType", http.StatusBadRequest)

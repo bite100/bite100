@@ -200,3 +200,26 @@ func TestReplaceOrderbook_SkipsInvalidEntries(t *testing.T) {
 		}
 	}
 }
+
+// 阶段 3 fail-closed：未知 side 不得入簿（此前非 buy 一律按卖盘处理，未知
+// 方向会冒充卖单挂簿），AddOrder / ReplaceOrderbook / Match 三条路径同口径。
+func TestInvalidSideNeverEntersBook(t *testing.T) {
+	e := NewEngine(nil)
+	now := time.Now().Unix()
+	const pair = "TKA/TKB"
+
+	if e.AddOrder(r33Order("bad1", pair, "hold", now, now+3600)) {
+		t.Error("AddOrder(hold) = true, want false")
+	}
+	e.ReplaceOrderbook(pair, nil, []*storage.Order{r33Order("bad2", pair, "hold", now, now+3600)})
+	bids, asks := e.GetOrderbook(pair)
+	if len(bids) != 0 || len(asks) != 0 {
+		t.Errorf("invalid side must not enter book via ReplaceOrderbook, bids=%d asks=%d", len(bids), len(asks))
+	}
+	if _, ok := e.orderIDToPair["bad2"]; ok {
+		t.Error("orderIDToPair must not contain invalid-side order")
+	}
+	if trades := e.Match(r33Order("bad3", pair, "hold", now, now+3600)); len(trades) != 0 {
+		t.Errorf("Match(hold) must produce no trades, got %d", len(trades))
+	}
+}
