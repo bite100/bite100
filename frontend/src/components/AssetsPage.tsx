@@ -29,6 +29,10 @@ import { SparklineChart } from './SparklineChart'
 import { MakerVaultPage } from './MakerVaultPage'
 import { ensureAllowance, parseAmountInput } from './assets/tokenOps'
 import { evaluateFeedReading, getFeedConfig, readChainlinkFeed } from '../services/referencePrice'
+import { CHANNEL_DISCLOSURES } from '../services/defaultBridge/disclosures'
+import { loadDeliveries } from '../services/defaultBridge/deliveries'
+import { loadSettings } from '../services/defaultBridge/settings'
+import { getChainConfig } from '../config/chains'
 import './AssetsPage.css'
 
 type AssetsView = 'overview' | 'vault' | 'deposit' | 'withdraw' | 'query'
@@ -41,6 +45,8 @@ interface AssetsPageProps {
   ethBalance: string
   onDisconnect: () => void
   goTrade: (pair: string) => void
+  /** 第四十一轮：跨链交付设置入口行（设计 §2.2）→ 跳桥页顶部设置区 */
+  onOpenBridge?: () => void
 }
 
 const fmtQty = (n: number): string =>
@@ -48,7 +54,7 @@ const fmtQty = (n: number): string =>
 
 const DIST_COLORS = ['#ff007a', '#089981', '#7a5af8', '#f0b90b', '#64748b', '#0ea5e9', '#d92d20', '#9333ea']
 
-export function AssetsPage({ account, chainConfig, chainId, connectionLabel, ethBalance, onDisconnect, goTrade }: AssetsPageProps) {
+export function AssetsPage({ account, chainConfig, chainId, connectionLabel, ethBalance, onDisconnect, goTrade, onOpenBridge }: AssetsPageProps) {
   const [view, setView] = useState<AssetsView>('overview')
   const [transferSymbol, setTransferSymbol] = useState('USDT')
   const [balances, setBalances] = useState<TokenBalance[] | null>(null)
@@ -57,6 +63,30 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
   const [hideTotal, setHideTotal] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
   const mv = useMakerVaultData(chainConfig, account, refreshTick)
+
+  /* ---------- 第四十一轮：跨链交付摘要（入口行）+ 在途金额标注（设计 §2.2 / §4.2） ---------- */
+  const deliverySettings = account ? loadSettings(account) : null
+  const deliverySummary = !account
+    ? ''
+    : !deliverySettings?.defaultChannel
+      ? '未设置'
+      : `${CHANNEL_DISCLOSURES[deliverySettings.defaultChannel].name}${deliverySettings.standingAuth ? '（自动交付开）' : '（自动交付关）'}`
+  /** 当前链上「交付中/发起中」的在途金额（按资产汇总 wei），渲染时从本地交付记录现读 */
+  const inFlightByAsset = (() => {
+    const map = new Map<string, { wei: bigint; channelName: string; homeName: string }>()
+    if (!account || chainId == null) return map
+    for (const r of loadDeliveries(account)) {
+      if (r.settleChainId !== chainId) continue
+      if (r.status !== 'in-flight' && r.status !== 'initiating') continue
+      const prev = map.get(r.asset)
+      map.set(r.asset, {
+        wei: (prev?.wei ?? 0n) + BigInt(r.amountWei),
+        channelName: r.channel ? CHANNEL_DISCLOSURES[r.channel].name : '通道',
+        homeName: getChainConfig(r.homeChainId)?.name ?? `${r.homeChainId}`,
+      })
+    }
+    return map
+  })()
 
   const symbols = useMemo(
     () => (chainConfig?.tokens ? Object.keys(chainConfig.tokens) : []),
@@ -376,6 +406,12 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
         </section>
       )}
 
+      {account && onOpenBridge && (
+        <button type="button" className="assets-queryrow" onClick={onOpenBridge} style={{ marginBottom: 12 }}>
+          跨链交付设置：默认通道 {deliverySummary} <span aria-hidden="true">›</span>
+        </button>
+      )}
+
       <section className="card assets-balances">
         <h3 className="card-title">余额</h3>
         {balances === null ? (
@@ -397,6 +433,10 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
                   </b>
                   <span className="assets-bsub num">
                     Vault 可用 {fmtQty(r.vaultAvailable)} · 锁定中 {fmtQty(r.vaultLocked)} · 钱包 {fmtQty(r.wallet)}
+                    {(() => {
+                      const inf = inFlightByAsset.get(r.symbol)
+                      return inf ? ` · 其中交付在途 ${formatTokenAmount(inf.wei)}（经${inf.channelName}送往${inf.homeName}，未到账前不可用）` : ''
+                    })()}
                   </span>
                 </span>
                 <span className="assets-bright">

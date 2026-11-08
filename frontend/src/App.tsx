@@ -187,6 +187,7 @@ function App() {
               ethBalance={ethBalance}
               onDisconnect={() => disconnect()}
               goTrade={goTradeWithPair}
+              onOpenBridge={() => setActiveTab('bridge')}
             />
           )}
 
@@ -209,6 +210,7 @@ function App() {
               onOpenBridge={() => setActiveTab('bridge')}
               onOpenGovern={() => setActiveTab('govern')}
               onOpenData={openData}
+              account={account}
             />
           )}
 

@@ -14,6 +14,7 @@ import {
   type MergedTrade,
 } from '../../services/tradesDual'
 import { fromScaled, fmtPrice, fmtAmount, fmtDateTime } from './tradeFormat'
+import { DeliveryRecords } from '../bridge/DeliveryRecords'
 import type { Order, Trade } from '../../OrderBookSection'
 import type { Signer } from 'ethers'
 
@@ -438,6 +439,8 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
           )}
         </Tabs.Panel>
       </Tabs>
+      {/* 第四十一轮：跨链交付记录（设计 §4.2，挂在订单历史下方） */}
+      <DeliveryRecords account={account} refreshSignal={refreshSignal} />
     </div>
   )
 }

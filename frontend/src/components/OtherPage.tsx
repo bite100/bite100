@@ -4,12 +4,16 @@
  * 不编造不存在的入口（没有客服、没有设置项）。
  */
 import { useState } from 'react'
+import { CHANNEL_DISCLOSURES } from '../services/defaultBridge/disclosures'
+import { loadSettings } from '../services/defaultBridge/settings'
 import './OtherPage.css'
 
 interface OtherPageProps {
   onOpenBridge: () => void
   onOpenGovern: () => void
   onOpenData: (anchor: string) => void
+  /** 第四十一轮：跨链交付设置入口行要读当前用户的设置摘要 */
+  account?: string | null
 }
 
 function Icon({ d }: { d: string }) {
@@ -28,8 +32,18 @@ function Icon({ d }: { d: string }) {
   )
 }
 
-export function OtherPage({ onOpenBridge, onOpenGovern, onOpenData }: OtherPageProps) {
+export function OtherPage({ onOpenBridge, onOpenGovern, onOpenData, account }: OtherPageProps) {
   const [aboutOpen, setAboutOpen] = useState(false)
+  // 第四十一轮：跨链交付设置入口行（设计 §2.2）——摘要读本机保存的设置，未连接/未设置时给通用文案
+  const deliverySummary = (() => {
+    if (!account) return '预先选好默认通道，跨链成交后自动把成交款送回你的主场链'
+    const s = loadSettings(account)
+    if (!s.defaultChannel) return '未设置：跨链成交款先留成交链 Vault，可点此去桥页设置'
+    const name = CHANNEL_DISCLOSURES[s.defaultChannel].name
+    return s.standingAuth
+      ? `默认通道 ${name}，自动交付已开启`
+      : `默认通道 ${name}，自动交付已关闭`
+  })()
   return (
     <div className="other-page">
       <p className="other-intro">
@@ -45,6 +59,16 @@ export function OtherPage({ onOpenBridge, onOpenGovern, onOpenData }: OtherPageP
           <span className="menu-txt">
             <b>跨链桥</b>
             <span>在 Sepolia 与 Base Sepolia 之间转移代币，四条通道自己选</span>
+          </span>
+          <span className="menu-arrow">›</span>
+        </button>
+        <button type="button" className="menu-row" onClick={onOpenBridge}>
+          <span className="menu-ico">
+            <Icon d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5" />
+          </span>
+          <span className="menu-txt">
+            <b>跨链交付设置</b>
+            <span>跨链交付设置：{deliverySummary} ›</span>
           </span>
           <span className="menu-arrow">›</span>
         </button>

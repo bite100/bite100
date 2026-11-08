@@ -28,6 +28,10 @@ import {
   type VaultTopUpStep,
 } from './vaultTopUp'
 import { useReferencePrice } from '../../hooks/useReferencePrice'
+import { buildOrderDeliveryEstimate } from '../../services/defaultBridge/estimate'
+import { getDisclosure } from '../../services/defaultBridge/disclosures'
+import { loadSettings, pushTempOverride } from '../../services/defaultBridge/settings'
+import { hasValidConfirmation } from '../../services/defaultBridge/support'
 import {
   REFERENCE_SOURCE_LABELS,
   DEVIATION_WARN_PCT,
@@ -103,6 +107,8 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
   const [topUpStep, setTopUpStep] = useState<VaultTopUpStep | null>(null)
   const [balanceTick, setBalanceTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // 第四十一轮：成交前交付预估（设计 §6）——askChoiceNote 记录本单的一次性临时选择回执
+  const [askChoiceNote, setAskChoiceNote] = useState<string | null>(null)
   // 阶段 3 块 C：前端撮合结果口径（仅灰度开关开启时出现）
   const [matchNote, setMatchNote] = useState<string | null>(null)
 
@@ -681,6 +687,90 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
             Vault（可能需要两次钱包确认：授权 + 存入），确认到账后自动继续下单；差额不足时不会签名提交。
           </Text>
         )}
+        {/* 第四十一轮 §6：成交前交付预估（一行非阻塞）与三级询问（默认桥不支持时当场问一次，绝不静默换桥） */}
+        {account &&
+          (() => {
+            const receivedAsset = side === 'buy' ? baseSymbol : quoteSymbol
+            const est = buildOrderDeliveryEstimate({
+              settings: loadSettings(account),
+              settleChainId: CHAIN_ID,
+              receivedAsset,
+            })
+            if (est.kind === 'line') {
+              return (
+                <Text size="xs" c="dimmed">
+                  {est.text}
+                </Text>
+              )
+            }
+            if (est.kind === 'suspended') {
+              return (
+                <Text size="xs" c="orange">
+                  {est.text}
+                </Text>
+              )
+            }
+            if (est.kind === 'ask') {
+              if (askChoiceNote) {
+                return (
+                  <Text size="xs" c="dimmed" role="status">
+                    {askChoiceNote}
+                  </Text>
+                )
+              }
+              const settings = loadSettings(account)
+              return (
+                <div>
+                  <Text size="xs" c="orange">
+                    {est.text}
+                  </Text>
+                  <Stack gap={6} mt={6}>
+                    {est.supportedChannels.map((ch) => {
+                      const ok = hasValidConfirmation(settings, ch)
+                      return (
+                        <Button
+                          key={ch}
+                          size="xs"
+                          variant="light"
+                          disabled={!ok}
+                          title={ok ? undefined : '需先到跨链桥页默认通道设置里读完并确认该通道披露'}
+                          onClick={() => {
+                            pushTempOverride(account, {
+                              channel: ch,
+                              settleChainId: CHAIN_ID,
+                              asset: receivedAsset,
+                              createdAt: Date.now(),
+                            })
+                            setAskChoiceNote(
+                              `已选：本次成交后经 ${getDisclosure(ch).name} 交付回你的主场链（一次性选择，不改变默认设置）。`
+                            )
+                          }}
+                        >
+                          本次改用 {getDisclosure(ch).name} 交付{ok ? '' : '（需先确认其披露）'}
+                        </Button>
+                      )
+                    })}
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      onClick={() => {
+                        pushTempOverride(account, {
+                          channel: 'settle-chain-only',
+                          settleChainId: CHAIN_ID,
+                          asset: receivedAsset,
+                          createdAt: Date.now(),
+                        })
+                        setAskChoiceNote('已选：本次成交款只留在成交链 Vault，不跨链交付（一次性选择）。')
+                      }}
+                    >
+                      只在成交链交付
+                    </Button>
+                  </Stack>
+                </div>
+              )
+            }
+            return null
+          })()}
         {error && (
           <Text size="sm" c="red" mb={4} role="alert">
             {error}
