@@ -23,6 +23,11 @@ runner 的 `discoveryStats()` 不排除篡改单，与收官工具 report.mjs �
 换包、改压测的节点地址指向（主聊天决定改走本机 127.0.0.1:8080/8081，
 传输层调整、与本轮代码无关）与重启 bite100-soak 由主聊天在本轮合并
 推送后执行，3A 新窗口起止时刻回填第 34 轮文档 §6.3 占位。
+**主聊天回填（2026-11-08）**：换包重启已执行——bite100-soak 于
+2026-11-08 13:41:43 JST 以第 38 轮新包重启，节点地址已改为本机
+127.0.0.1:8080/8081；新 3A 窗口 **2026-11-08 13:41:43 JST →
+2026-11-15 13:41:43 JST**；第一窗口数据归档为
+`~/workspace/bite100-soak/soak-metrics.window1-aborted-20261108.jsonl`。
 
 **范围红线**：`contracts/`、`node/`、`relay/` 零 diff（已用
 `git diff c9765d6..HEAD -- contracts/ node/ relay/` 验空，0 行）；
