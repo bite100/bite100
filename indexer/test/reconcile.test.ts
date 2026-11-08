@@ -29,13 +29,13 @@ const CASES = [
   {
     chainId: 11155111,
     rpc: 'https://ethereum-sepolia.publicnode.com',
-    settlement: '0xa3F8cBCDc1533299D37836ea80d5004FF59f9094',
+    settlement: '0xbf2B9635B682Ff30E73028a5b2beEB829873a88f',
     settleTx: '0x86fa42804f9a9d89773414964b6b608962ea416d20934320921f0066367fbef7',
   },
   {
     chainId: 84532,
     rpc: 'https://sepolia.base.org',
-    settlement: '0x39037dE0a1d6ca567d50055522f7Ef825dF4FCf9',
+    settlement: '0x50aFA0d0a407bdeCcdd6b9b3f6d4a68f837F0305',
     settleTx: '0x54437b1254cd574077a4ea8cd5d73edb215e2f2a359812f10a88c1dc2f3a459e',
   },
 ] as const
