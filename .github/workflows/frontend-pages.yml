@@ -43,6 +43,8 @@ jobs:
         working-directory: frontend
         env:
           VITE_NODE_API_URL: ${{ secrets.VITE_NODE_API_URL }}
+          VITE_RELAY_URL: ${{ secrets.VITE_RELAY_URL }}
+          VITE_RELAY_MODE: ${{ secrets.VITE_RELAY_MODE }}
         run: npm run build
 
       - name: Upload artifact

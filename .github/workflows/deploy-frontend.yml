@@ -26,6 +26,8 @@ jobs:
         env:
           VITE_BASE: '/${{ github.event.repository.name }}/'
           VITE_NODE_API_URL: ${{ secrets.VITE_NODE_API_URL }}
+          VITE_RELAY_URL: ${{ secrets.VITE_RELAY_URL }}
+          VITE_RELAY_MODE: ${{ secrets.VITE_RELAY_MODE }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
