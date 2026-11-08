@@ -1,5 +1,7 @@
 # 第十七轮记录（2026-11-07）：砍掉 AMM + 市价单 + 做市金库设计 + 下单一键补存
 
+> **⚠️ 后续定位变更（2026-11-08，负责人拍板）**：本轮立项的「做市金库」（Part C）定位已被取代——金库不再做市，改为 **gas 库**（存款人资金作 gas 垫付周转，平台只做中介、不自营）。设计原件见 `docs/market-maker-vault-design.md` 文首横幅。本轮其余结论（砍 AMM、市价单、一键补存）不受影响。
+
 > 决策来源：Ren 在 AMM 调研（`~/workspace/research_notes/amm-pool-designs-dex-decision-20261107-0937/`）
 > 后拍板「砍掉 AMM：补市价单 + 做市金库，走 HY 路线」；Part D 为 Ren 真机
 > 试用后追加（保留 Vault 模型，把存入做顺滑）。
