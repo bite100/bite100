@@ -231,59 +231,95 @@ func (e *Engine) ClearSignatureCache() {
 	}
 }
 
+// normalizeForBook 把一笔原始订单归一化为入簿形态：Filled 清零、Amount
+// 改为剩余量（Amount − Filled）。订单为 nil、关键字段（OrderID/Price/
+// Amount）缺失、已过期或剩余量 ≤ 0 时返回 false。纯函数（只读入参），
+// AddOrder 与 ReplaceOrderbook 共用，保证两条写入路径的入簿口径一致
+// （第 33 轮 N2/N3：写入路径统一）。
+func normalizeForBook(o *storage.Order) (*storage.Order, bool) {
+	if o == nil || o.OrderID == "" || o.Price == "" || o.Amount == "" {
+		return nil, false
+	}
+	if storage.OrderExpired(o) {
+		return nil, false
+	}
+	filled := bigNew(o.Filled)
+	amount := bigNew(o.Amount)
+	left := new(big.Float).Sub(amount, filled)
+	if left.Cmp(big.NewFloat(0)) <= 0 {
+		return nil, false
+	}
+	o2 := *o
+	o2.Filled = "0"
+	o2.Amount = left.Text('f', 18)
+	return &o2, true
+}
+
+// checkInsertable 校验一笔已归一化订单能否入簿（须持 e.mu）；不改动任何
+// 状态。两条规则与 ReplaceOrderbook 的批量路径同一口径：
+//   - 容量：目标侧（buy→Bids，其余→Asks）未达 maxOrdersPerPair；
+//   - ID 全局唯一：orderID 不得被其它交易对的在簿订单占用（同 pair 的
+//     同 ID 由调用方按替换语义先行移除，不在此拒绝）。
+func (e *Engine) checkInsertable(ob *OrderBook, o *storage.Order) bool {
+	if o.Side == "buy" {
+		if len(ob.Bids) >= e.maxOrdersPerPair {
+			return false
+		}
+	} else {
+		if len(ob.Asks) >= e.maxOrdersPerPair {
+			return false
+		}
+	}
+	if p, exists := e.orderIDToPair[o.OrderID]; exists && p != ob.Pair {
+		return false
+	}
+	return true
+}
+
 // AddOrder 将订单加入订单簿（未撮合部分）；同 orderID 先移除再插入；返回是否插入成功；已过期订单不加入（Replay/过期防护）
+// 容量策略（第 32 轮）：单侧达到上限时**拒绝新单**（如实返回 false），不
+// 再静默截掉尾单；同 ID 替换先腾位再入簿，满员时仍可成功。
+// 第 33 轮 N2：全部校验通过后才触碰簿与索引，任一失败路径都保证簿与
+// orderIDToPair 索引同生同灭——归一化（过期/剩余量）在动簿之前完成，
+// 剩余量 ≤ 0 的替换单直接拒绝、同 ID 旧单原样留簿（旧实现先删旧单再算
+// 剩余量，提前返回时旧单已删而索引残留）；跨 pair 重 ID 在动簿之前拒绝；
+// 容量拒绝时若索引指向本 pair（同 ID 旧单已被移除或历史残留）一并清除。
 func (e *Engine) AddOrder(o *storage.Order) bool {
 	if o.OrderID == "" || o.Pair == "" || o.Side == "" || o.Price == "" || o.Amount == "" {
 		return false
 	}
-	if storage.OrderExpired(o) {
+	o2, ok := normalizeForBook(o)
+	if !ok {
 		return false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	// 同 orderID 先移除（避免重复挂单）
-	if ob, ok := e.pairs[o.Pair]; ok {
-		removeOrderFromBook(ob, o.OrderID)
+	// 跨 pair 重 ID：索引指向其它交易对即该 ID 已在别处在簿，拒绝。
+	if p, exists := e.orderIDToPair[o.OrderID]; exists && p != o.Pair {
+		return false
 	}
 	ob, ok := e.pairs[o.Pair]
 	if !ok {
 		ob = &OrderBook{Pair: o.Pair}
 		e.pairs[o.Pair] = ob
 	}
-	filled := bigNew(o.Filled)
-	amount := bigNew(o.Amount)
-	left := new(big.Float).Sub(amount, filled)
-	if left.Cmp(big.NewFloat(0)) <= 0 {
+	// 同 orderID 先移除（避免重复挂单，并为满员时的同侧替换腾位）
+	removeOrderFromBook(ob, o.OrderID)
+	if !e.checkInsertable(ob, o2) {
+		// 容量拒绝：同 ID 旧单已移除（或索引本就残留指向本 pair），
+		// 索引同步清除，保持簿/索引一致。
+		if e.orderIDToPair[o.OrderID] == o.Pair {
+			delete(e.orderIDToPair, o.OrderID)
+		}
 		return false
 	}
-	o2 := *o
-	o2.Filled = "0"
-	o2.Amount = left.Text('f', 18)
-	// 订单簿容量策略（第 32 轮整改）：达到上限时**拒绝新单**（如实返回
-	// false），不再静默截掉尾单——旧逻辑丢弃的尾单还残留在 orderIDToPair
-	// 索引里，造成簿/索引不一致（ChatGPT 审查项）。同 orderID 的替换已在
-	// 上方先行移除旧单，故替换永远先腾位、不会被本检查误拒。
-	// 索引只在确实入簿后写入；被拒时若索引残留指向本簿，一并清除。
+	e.orderIDToPair[o.OrderID] = o.Pair
 	if o.Side == "buy" {
-		if len(ob.Bids) >= e.maxOrdersPerPair {
-			if e.orderIDToPair[o.OrderID] == o.Pair {
-				delete(e.orderIDToPair, o.OrderID)
-			}
-			return false
-		}
-		e.orderIDToPair[o.OrderID] = o.Pair
-		ob.Bids = append(ob.Bids, &o2)
+		ob.Bids = append(ob.Bids, o2)
 		// 算法优化：使用更高效的插入排序（对于已排序列表，插入排序比完整排序更快）
 		e.insertOrderSorted(ob.Bids, true)
 	} else {
-		if len(ob.Asks) >= e.maxOrdersPerPair {
-			if e.orderIDToPair[o.OrderID] == o.Pair {
-				delete(e.orderIDToPair, o.OrderID)
-			}
-			return false
-		}
-		e.orderIDToPair[o.OrderID] = o.Pair
-		ob.Asks = append(ob.Asks, &o2)
+		ob.Asks = append(ob.Asks, o2)
 		e.insertOrderSorted(ob.Asks, false)
 	}
 	return true
@@ -314,7 +350,17 @@ func (e *Engine) insertOrderSorted(orders []*storage.Order, isBids bool) {
 	}
 }
 
-// ReplaceOrderbook 用给定买卖盘替换某交易对的订单簿（用于 1.2 订单簿同步）；跳过已过期订单
+// ReplaceOrderbook 用给定买卖盘替换某交易对的订单簿（用于 1.2 订单簿同步）
+// 第 33 轮 N3：与 AddOrder 共用同一套写入校验（normalizeForBook 归一化 +
+// 容量上限 + ID 唯一），不再逐笔裸 append 绕过上限：
+//   - 跳过 nil/字段缺失/已过期/剩余量 ≤ 0 的订单（归一化口径与 AddOrder
+//     一致；旧实现对空 Price/Amount 不设防，现统一收紧）；
+//   - 本次重建内重 ID（同侧或买卖跨侧）先到先得，后到跳过；
+//   - ID 已被其它交易对在簿占用 → 跳过，不抢占其索引；
+//   - 每侧装满 maxOrdersPerPair 后，超出部分丢弃（同步语义：尽力装入
+//     前 N 条，输入序即优先级序；被丢弃单不入簿、不写索引，与簿一致）。
+//
+// 重建前先清除该 pair 旧簿的全部索引项，重建后索引与新簿严格一致。
 func (e *Engine) ReplaceOrderbook(pair string, bids, asks []*storage.Order) {
 	if pair == "" {
 		return
@@ -331,38 +377,31 @@ func (e *Engine) ReplaceOrderbook(pair string, bids, asks []*storage.Order) {
 		}
 	}
 	ob := &OrderBook{Pair: pair}
-	for _, o := range bids {
-		if o == nil || o.OrderID == "" || storage.OrderExpired(o) {
-			continue
+	seen := make(map[string]bool)
+	load := func(list []*storage.Order) []*storage.Order {
+		var out []*storage.Order
+		for _, o := range list {
+			o2, ok := normalizeForBook(o)
+			if !ok {
+				continue
+			}
+			if seen[o2.OrderID] {
+				continue // 本次重建内重 ID：先到先得
+			}
+			if p, exists := e.orderIDToPair[o2.OrderID]; exists && p != pair {
+				continue // 跨 pair 重 ID：不抢占其它交易对的索引
+			}
+			if len(out) >= e.maxOrdersPerPair {
+				continue // 容量上限：超出部分丢弃（见函数注释）
+			}
+			seen[o2.OrderID] = true
+			e.orderIDToPair[o2.OrderID] = pair
+			out = append(out, o2)
 		}
-		amount := bigNew(o.Amount)
-		filled := bigNew(o.Filled)
-		left := new(big.Float).Sub(amount, filled)
-		if left.Cmp(big.NewFloat(0)) <= 0 {
-			continue
-		}
-		o2 := *o
-		o2.Filled = "0"
-		o2.Amount = left.Text('f', 18)
-		ob.Bids = append(ob.Bids, &o2)
-		e.orderIDToPair[o.OrderID] = pair
+		return out
 	}
-	for _, o := range asks {
-		if o == nil || o.OrderID == "" || storage.OrderExpired(o) {
-			continue
-		}
-		amount := bigNew(o.Amount)
-		filled := bigNew(o.Filled)
-		left := new(big.Float).Sub(amount, filled)
-		if left.Cmp(big.NewFloat(0)) <= 0 {
-			continue
-		}
-		o2 := *o
-		o2.Filled = "0"
-		o2.Amount = left.Text('f', 18)
-		ob.Asks = append(ob.Asks, &o2)
-		e.orderIDToPair[o.OrderID] = pair
-	}
+	ob.Bids = load(bids)
+	ob.Asks = load(asks)
 	// 算法优化：使用稳定的排序算法，减少比较次数
 	e.sortOrdersOptimized(ob.Bids, true)
 	e.sortOrdersOptimized(ob.Asks, false)
