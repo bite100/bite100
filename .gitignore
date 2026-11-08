@@ -30,3 +30,6 @@ Thumbs.db
 
 # 第 35 轮合成压测打包产物
 frontend/scripts/soak/dist/
+
+# 第 42 轮挂单计量打包产物
+frontend/scripts/posting-meter/dist/
