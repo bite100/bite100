@@ -78,6 +78,11 @@ export function toRawOrder(x: unknown): RawOrder | null {
  * 一批原始行 → 规范化订单 + 丢弃计数（第 38 轮）：三个取数点（前端节点
  * 适配器、前端中继适配器、soak 服务端节点适配器）共用，保证「整源被
  * 字段形态吞掉」时计数可见，不再静默归零。
+ *
+ * droppedRows 的口径是「规范化阶段丢弃数」（第 40 轮，第 38 轮复审 F4
+ * 写明）：只数 toRawOrder 返回 null 的行；后续 digest 重构失败、验签
+ * 失败、链上状态判无效的订单不在此列——那些走评估层 validity 口径，
+ * 不回填本计数（见 types.ts SourceBook.droppedRows）。
  */
 export function normalizeBookRows(rows: unknown[]): { orders: RawOrder[]; droppedRows: number } {
   const orders: RawOrder[] = []

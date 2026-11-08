@@ -49,7 +49,12 @@ export interface SourceBook {
    * 对照可发现「整源被字段形态吞掉」；旧记录/未计数的适配器缺省 undefined。
    */
   rawRows?: number
-  /** 原始行中被 toRawOrder 判无效丢弃的行数（第 38 轮） */
+  /**
+   * 规范化阶段丢弃数（第 38 轮；口径第 40 轮写明，第 38 轮复审 F4）：
+   * 只统计原始行中被 toRawOrder 判无效（返回 null）的行数。不含后续
+   * 阶段淘汰的订单——digest 重构失败、验签失败、链上状态判无效走评估
+   * 层 validity 口径，不计入本字段；勿把本字段读成「全部无效订单数」。
+   */
   droppedRows?: number
 }
 
