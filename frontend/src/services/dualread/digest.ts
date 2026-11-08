@@ -41,9 +41,15 @@ export function buildSignedOrderData(raw: RawOrder, chainId: number): OrderData 
   } catch {
     return null
   }
-  if (amountIn < 0n || price < 0n) return null
+  // 第 35 轮 D3：Settlement._verifyFill 要求 amountIn > 0 && amountOut > 0
+  // （"Settlement: zero amount"），旧实现只拦负数——price=0 或整数除法把
+  // amountOut 舍为 0 的订单能重构成功并被判 VALID 却必然被合约拒收。
+  // 口径：amountIn / price 必须 > 0，且按规范公式算出的 amountOut 必须 > 0，
+  // 否则视为不可重构（prepare 阶段归 INVALID/UNBUILDABLE，fail-closed）。
+  if (amountIn <= 0n || price <= 0n) return null
   // 第 29 轮规范整数公式：amountOut = amountIn * price / 1e18（整数除法）
   const amountOut = (amountIn * price) / WEI
+  if (amountOut <= 0n) return null
   const createdAt = Number(raw.createdAt) || 0
   const expiresAt =
     raw.expiresAt && Number(raw.expiresAt) !== 0

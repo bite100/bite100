@@ -16,6 +16,20 @@
  * 同 digest 两源未签名业务字段（side / pair / execType）不一致 → conflict，
  * 无论 validity 为何都不进可成交集合（evaluate 输出 validity=UNKNOWN +
  * CONFLICT 原因码，保守口径）。
+ *
+ * 第 35 轮加固（ChatGPT 复审 D1/D2）：
+ * - D1 分页完整度：候选记录每个来源的 SourceBook.complete；仅被不完整
+ *   来源证明的订单（无任一完整来源在场）→ UNKNOWN（SOURCE_INCOMPLETE），
+ *   不进可成交集；有完整来源在场时按完整来源的数据判定（展示字段亦优先
+ *   取完整来源）。轮次文档原口径：分页未拉完 ⇒ 该源订单按未知处理。
+ * - D2 未签名字段可信边界：side 不在签名结构内（tokenIn/tokenOut 恒为
+ *   交易对 Token0/Token1、与方向无关，三方实现一致），无法从签名字段
+ *   推导；但 Vault 锁仓代币是链上方向证据——卖单锁 tokenIn、买单锁
+ *   tokenOut（node/internal/settlement/lock.go ObligationForOrder）。
+ *   据此：任一来源自报 side 与锁仓派生方向不符 → SIDE_LOCK_MISMATCH；
+ *   单源订单无锁仓佐证时方向无从证明 → SIDE_UNCORROBORATED；单源订单
+ *   声称 execType=market（非缺省执行类型，同样未签名）→ EXEC_TYPE_UNPROVEN。
+ *   以上任一命中都只把 VALID 降为 UNKNOWN（不改 INVALID 终局判定）。
  */
 import { getChainConfig } from '../../config/chains'
 import { type OrderData } from '../orderSigningTypes'
@@ -23,6 +37,7 @@ import { verifyOrderSignatureSignedData } from '../orderVerification'
 import { buildSignedOrderData, computeOrderDigest } from './digest'
 import type {
   BookSource,
+  ChainOrderState,
   ChainSnapshot,
   EvaluatedOrder,
   MergedView,
@@ -55,6 +70,8 @@ export interface PreparedCandidate {
   localVerify: Partial<Record<BookSource, boolean>>
   /** 任一副本本地验签通过 */
   anyLocalValid: boolean
+  /** 第 35 轮 D1：每个来源本轮书籍的分页完整度（SourceBook.complete） */
+  complete: Partial<Record<BookSource, boolean>>
 }
 
 export interface PrepareResult {
@@ -121,12 +138,14 @@ export async function prepareCandidates(
           raws: {},
           localVerify: {},
           anyLocalValid: false,
+          complete: {},
         }
         byKey.set(key, cand)
       }
       // 同源同 digest 出现两行（源数据重复）：保留先到的一行，另一行忽略
       if (!cand.raws[book.source]) {
         cand.raws[book.source] = raw
+        cand.complete[book.source] = book.complete
         const ok = await verify(data, raw.signature, chainId)
         cand.localVerify[book.source] = ok
         if (ok) cand.anyLocalValid = true
@@ -136,6 +155,17 @@ export async function prepareCandidates(
   return { candidates: [...byKey.values()], unbuildable }
 }
 
+/**
+ * execType 归一化：缺失/空/'limit' 都是协议缺省的限价语义（第 17 轮：
+ * 市价单靠未签名的 execType:'market' 标记，其余皆限价）；relay/orders.ts
+ * 的合法取值域只有 limit/market。旧冲突判定把缺失映射成 'GTC'，会把
+ * 「一源写 limit、一源不写」误判冲突——按缺省语义归一后才对。
+ */
+export function normalizeExecType(x?: string): string {
+  const v = (x ?? '').trim().toLowerCase()
+  return v === '' || v === 'limit' ? 'limit' : v
+}
+
 /** 未签名业务字段冲突判定（side/pair/execType——这些字段不进 EIP-712 签名） */
 export function unsignedFieldConflict(c: PreparedCandidate): boolean {
   const n = c.raws.node
@@ -143,8 +173,29 @@ export function unsignedFieldConflict(c: PreparedCandidate): boolean {
   if (!n || !r) return false
   if (n.side !== r.side) return true
   if (n.pair !== r.pair) return true
-  if ((n.execType ?? 'GTC') !== (r.execType ?? 'GTC')) return true
+  if (normalizeExecType(n.execType) !== normalizeExecType(r.execType)) return true
   return false
+}
+
+/**
+ * 第 35 轮 D2：从 Vault 链上锁仓派生订单方向。
+ * 签名结构的方向无关性是协议事实（tokenIn/tokenOut 恒为交易对
+ * Token0/Token1），但落锁义务按方向分化：卖单锁 tokenIn×amountIn、
+ * 买单锁 tokenOut×amountOut（node/internal/settlement/lock.go 的
+ * ObligationForOrder；Vault.lockForOrder 验签后按 order 本身派生锁量，
+ * 锁定代币不是节点可任意填写的字段）。故活跃锁的 token 即方向的链上
+ * 证据：== tokenIn → sell；== tokenOut → buy；无锁/锁代币不在对内 → null
+ * （方向无从证明）。墓碑不作证据：锁释放后方向只剩来源自报。
+ */
+export function deriveSideFromLock(
+  data: OrderData,
+  st: ChainOrderState | undefined,
+): 'buy' | 'sell' | null {
+  const token = st?.lock?.token?.toLowerCase()
+  if (!token) return null
+  if (token === data.tokenIn.toLowerCase()) return 'sell'
+  if (token === data.tokenOut.toLowerCase()) return 'buy'
+  return null
 }
 
 function clampSub(total: string, used: bigint): string {
@@ -161,11 +212,18 @@ export function evaluateCandidate(
   const sources = Object.keys(c.raws) as BookSource[]
   const conflict = unsignedFieldConflict(c)
   const badCopies = sources.filter((s) => c.localVerify[s] === false).length
+  // D1：有任一完整来源在场才算数据完整；展示/诊断字段优先取完整来源
+  const incompleteOnly = sources.length > 0 && !sources.some((s) => c.complete[s])
+  const primaryRaw =
+    (c.raws.node && c.complete.node ? c.raws.node : undefined) ??
+    (c.raws.relay && c.complete.relay ? c.raws.relay : undefined) ??
+    c.raws.node ??
+    c.raws.relay
   const base: EvaluatedOrder = {
     identity: c.identity,
     orderId: c.data.orderId,
-    pair: c.raws.node?.pair ?? c.raws.relay?.pair ?? '',
-    side: c.raws.node?.side ?? c.raws.relay?.side ?? 'buy',
+    pair: primaryRaw?.pair ?? '',
+    side: primaryRaw?.side ?? 'buy',
     trader: c.data.userAddress,
     amountIn: c.data.amountIn,
     amountOut: c.data.amountOut,
@@ -182,7 +240,7 @@ export function evaluateCandidate(
     reasons: [],
     // 链上未知时的诊断剩余量：按先到源自报 filled 推导（不作权威）
     remainingIn: (() => {
-      const first = c.raws.node ?? c.raws.relay
+      const first = primaryRaw
       if (!first) return c.data.amountIn
       try {
         return clampSub(c.data.amountIn, BigInt(first.filled || '0'))
@@ -194,19 +252,44 @@ export function evaluateCandidate(
     lockState: 'unknown',
     badSignatureCopies: badCopies,
   }
+  // D2 信任标志（st 可用后赋值；done 只在把 VALID 降级时消费它们）
+  let sideMismatch = false
+  let sideUncorroborated = false
+  let execUnproven = false
   const done = (patch: Partial<EvaluatedOrder>): EvaluatedOrder => {
     const merged = { ...base, ...patch }
-    if (conflict && merged.validity === 'VALID') {
-      merged.validity = 'UNKNOWN'
+    if (conflict) {
       merged.reasons = [...merged.reasons, 'CONFLICT_UNSIGNED_FIELDS']
-    } else if (conflict) {
-      merged.reasons = [...merged.reasons, 'CONFLICT_UNSIGNED_FIELDS']
+    }
+    if (merged.validity === 'VALID') {
+      // D1/D2 上限：字段冲突、仅不完整来源证明、方向与锁仓证据不符、
+      // 单源方向无佐证、单源非缺省 execType 无从证明——任一命中，
+      // 「有效」结论都不可信，降为 UNKNOWN（不进可成交集）。
+      const caps: string[] = []
+      if (incompleteOnly) caps.push('SOURCE_INCOMPLETE')
+      if (sideMismatch) caps.push('SIDE_LOCK_MISMATCH')
+      else if (sideUncorroborated) caps.push('SIDE_UNCORROBORATED')
+      if (execUnproven) caps.push('EXEC_TYPE_UNPROVEN')
+      if (conflict || caps.length > 0) {
+        merged.validity = 'UNKNOWN'
+        merged.reasons = [...merged.reasons, ...caps]
+      }
     }
     return merged
   }
 
   // 2) 签名权威：本地任一副本通过即成立；全失败时看链上兜底结果（在链状态里）
   const st = chain?.states.get(c.identity.digest.toLowerCase())
+  // D2：锁仓派生方向与来源自报方向的核对（链上状态在场时才有证据）
+  const derivedSide = deriveSideFromLock(c.data, st)
+  if (derivedSide && sources.some((s) => c.raws[s]!.side !== derivedSide)) {
+    sideMismatch = true
+  }
+  if (sources.length === 1) {
+    const sole = c.raws[sources[0]]!
+    if (!derivedSide) sideUncorroborated = true
+    if (normalizeExecType(sole.execType) !== 'limit') execUnproven = true
+  }
   const signatureProven =
     c.anyLocalValid || (st ? st.chainSignatureValid === true : false)
   if (!signatureProven) {

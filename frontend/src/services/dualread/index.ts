@@ -40,7 +40,14 @@ export {
   assembleChainState,
   buildStateCalls,
 } from './chainState'
-export { prepareCandidates, evaluateCandidate, mergeBooks, unsignedFieldConflict } from './evaluate'
+export {
+  prepareCandidates,
+  evaluateCandidate,
+  mergeBooks,
+  unsignedFieldConflict,
+  normalizeExecType,
+  deriveSideFromLock,
+} from './evaluate'
 export { ShadowObserver, computeShadowMetrics } from './metrics'
 export type { ShadowMetrics, BookSideDiff, Ratio } from './metrics'
 

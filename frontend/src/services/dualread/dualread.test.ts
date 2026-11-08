@@ -6,6 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { ethers } from 'ethers'
+import { getPairTokens } from '../../config/pairs'
 import {
   ORDER_TYPES,
   getEIP712Domain,
@@ -100,9 +101,13 @@ function book(source: 'node' | 'relay', rows: RawOrder[], complete = true): Sour
   }
 }
 
+// 锁仓夹具按协议真实口径：卖单锁 tokenIn（交易对 base），见
+// node/internal/settlement/lock.go ObligationForOrder——第 35 轮 D2 的
+// 方向派生依赖于此，任意假地址会让派生恒为 null、单源单全部降级。
+const PAIR_TOKENS = getPairTokens(CHAIN, PAIR)!
 const LOCK = {
   user: TRADER,
-  token: '0x1111111111111111111111111111111111111111',
+  token: PAIR_TOKENS.base,
   remaining: 100n * E18,
   expiresAt: 1700086400n,
 }
@@ -192,6 +197,29 @@ describe('digest 重算（规范向量与公式）', () => {
     expect(data.expiresAt).toBe(1700000000 + 7 * 24 * 3600)
     expect(buildSignedOrderData({ ...raw, pair: 'XXX/USDT' }, CHAIN)).toBeNull()
   })
+
+  it('第 35 轮 D3：amountIn=0 / price=0 / amountOut 舍为 0 → 不可重构', () => {
+    const raw: RawOrder = {
+      orderId: 'x',
+      trader: TRADER,
+      pair: PAIR,
+      side: 'sell',
+      price: (2n * E18).toString(),
+      amount: (100n * E18).toString(),
+      filled: '0',
+      status: 'open',
+      nonce: 0,
+      createdAt: 1700000000,
+      expiresAt: 1700086400,
+      signature: '0x',
+    }
+    expect(buildSignedOrderData({ ...raw, amount: '0' }, CHAIN)).toBeNull()
+    expect(buildSignedOrderData({ ...raw, price: '0' }, CHAIN)).toBeNull()
+    // 边界：amountIn=1 wei、price=1 wei 均非零，但 amountOut = 1×1/1e18 舍为 0
+    expect(buildSignedOrderData({ ...raw, amount: '1', price: '1' }, CHAIN)).toBeNull()
+    // 边界内侧：amountOut 恰为 1 wei → 可重构
+    expect(buildSignedOrderData({ ...raw, amount: E18.toString(), price: '1' }, CHAIN)).not.toBeNull()
+  })
 })
 
 describe('状态机（mock 链上快照）', () => {
@@ -262,16 +290,30 @@ describe('状态机（mock 链上快照）', () => {
     expect(ev.lockState).toBe('released')
   })
 
-  it('无锁无墓碑 → VALID 但标 unlocked（公告栏先行口径）', async () => {
+  it('无锁无墓碑 + 单源（公告栏先行）→ 第 35 轮 D2 起 UNKNOWN/SIDE_UNCORROBORATED', async () => {
+    // 第 34 轮口径曾判 VALID/unlocked；D2 复审指出：单源订单的 side 只凭
+    // 来源一面之词（side 未签名），无锁仓链上证据时方向无从证明——
+    // fail-closed 降级，锁由提交者补齐的结算语义不变，但不再进可成交集。
     const raw = await signedRaw()
     const cand = await prepareOne({ relay: raw })
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state({ lock: null, tombstone: null })]])),
     )
-    expect(ev.validity).toBe('VALID')
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SIDE_UNCORROBORATED')
     expect(ev.lockState).toBe('unlocked')
-    expect(ev.reasons).toContain('LOCK_MISSING')
+  })
+
+  it('单源 + 锁仓方向与自报一致 → VALID（锁仓即方向的链上佐证）', async () => {
+    const raw = await signedRaw() // side=sell，夹具锁 tokenIn(base) → 派生 sell
+    const cand = await prepareOne({ relay: raw })
+    const ev = evaluateCandidate(
+      cand,
+      snapshot(new Map([[digestOf(raw), state()]])),
+    )
+    expect(ev.validity).toBe('VALID')
+    expect(ev.lockState).toBe('locked')
   })
 
   it('签名伪造（他人私钥冒签）且链上验签未过 → INVALID/BAD_SIGNATURE', async () => {
@@ -337,6 +379,151 @@ describe('状态机（mock 链上快照）', () => {
     const ev = evaluateCandidate(cand, snapshot(new Map([[digestOf(raw), state()]])))
     expect(ev.validity).toBe('VALID')
     expect(ev.sources).toEqual(['node'])
+  })
+})
+
+describe('第 35 轮 D1：分页完整度进入状态机', () => {
+  async function evalWithBooks(books: SourceBook[], raw: RawOrder) {
+    const prepared = await prepareCandidates(CHAIN, books)
+    expect(prepared.candidates.length).toBe(1)
+    const snap = snapshot(new Map([[digestOf(raw), state()]]))
+    const ev = evaluateCandidate(prepared.candidates[0], snap)
+    const view = mergeBooks(CHAIN, PAIR, prepared, snap)
+    return { ev, view }
+  }
+
+  it('仅节点且节点分页不完整 → UNKNOWN/SOURCE_INCOMPLETE，不进可成交集', async () => {
+    const raw = await signedRaw()
+    const { ev, view } = await evalWithBooks([book('node', [raw], false)], raw)
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SOURCE_INCOMPLETE')
+    expect(view.tradeable.length).toBe(0)
+  })
+
+  it('仅公告栏且公告栏分页不完整 → UNKNOWN/SOURCE_INCOMPLETE', async () => {
+    const raw = await signedRaw()
+    const { ev, view } = await evalWithBooks([book('relay', [raw], false)], raw)
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SOURCE_INCOMPLETE')
+    expect(view.tradeable.length).toBe(0)
+  })
+
+  it('两源都在但两源都不完整 → UNKNOWN/SOURCE_INCOMPLETE', async () => {
+    const raw = await signedRaw()
+    const { ev } = await evalWithBooks(
+      [book('node', [raw], false), book('relay', [raw], false)],
+      raw,
+    )
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SOURCE_INCOMPLETE')
+  })
+
+  it('一源不完整、另一源完整 → 按完整来源判定，仍可 VALID', async () => {
+    const raw = await signedRaw()
+    const { ev } = await evalWithBooks(
+      [book('node', [raw], false), book('relay', [raw], true)],
+      raw,
+    )
+    expect(ev.validity).toBe('VALID')
+    expect(ev.reasons).not.toContain('SOURCE_INCOMPLETE')
+  })
+
+  it('下一轮分页恢复完整 → 同单回到 VALID（恢复性）', async () => {
+    const raw = await signedRaw()
+    const first = await evalWithBooks([book('node', [raw], false)], raw)
+    expect(first.ev.validity).toBe('UNKNOWN')
+    const second = await evalWithBooks(
+      [book('node', [raw], true), book('relay', [raw], true)],
+      raw,
+    )
+    expect(second.ev.validity).toBe('VALID')
+  })
+})
+
+describe('第 35 轮 D2：未签名字段的可信边界', () => {
+  it('仅节点携带被改写的 side（锁仓证据 sell、节点写 buy）→ UNKNOWN/SIDE_LOCK_MISMATCH', async () => {
+    const raw = await signedRaw({ side: 'sell' })
+    const flipped = { ...raw, side: 'buy' as const } // side 未签名：改写不改变 digest/验签
+    const prepared = await prepareCandidates(CHAIN, [book('node', [flipped])])
+    expect(prepared.candidates.length).toBe(1)
+    const snap = snapshot(new Map([[digestOf(raw), state()]]))
+    const ev = evaluateCandidate(prepared.candidates[0], snap)
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SIDE_LOCK_MISMATCH')
+    expect(mergeBooks(CHAIN, PAIR, prepared, snap).tradeable.length).toBe(0)
+  })
+
+  it('仅公告栏携带被改写的 side → UNKNOWN/SIDE_LOCK_MISMATCH', async () => {
+    const raw = await signedRaw({ side: 'sell' })
+    const flipped = { ...raw, side: 'buy' as const }
+    const prepared = await prepareCandidates(CHAIN, [book('relay', [flipped])])
+    const snap = snapshot(new Map([[digestOf(raw), state()]]))
+    const ev = evaluateCandidate(prepared.candidates[0], snap)
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SIDE_LOCK_MISMATCH')
+    expect(mergeBooks(CHAIN, PAIR, prepared, snap).tradeable.length).toBe(0)
+  })
+
+  it('两源同写被改的 side（互相抄）→ 锁仓证据仍抓出 SIDE_LOCK_MISMATCH', async () => {
+    const raw = await signedRaw({ side: 'sell' })
+    const flipped = { ...raw, side: 'buy' as const }
+    const prepared = await prepareCandidates(CHAIN, [
+      book('node', [flipped]),
+      book('relay', [flipped]),
+    ])
+    expect(prepared.candidates.length).toBe(1)
+    const ev = evaluateCandidate(
+      prepared.candidates[0],
+      snapshot(new Map([[digestOf(raw), state()]])),
+    )
+    expect(ev.conflict).toBe(false) // 两源彼此一致，冲突检查抓不到
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SIDE_LOCK_MISMATCH')
+  })
+
+  it('单源声称市价单（execType=market）→ UNKNOWN/EXEC_TYPE_UNPROVEN', async () => {
+    const raw = await signedRaw({ execType: 'market' })
+    const cand = await prepareOne({ node: raw })
+    const ev = evaluateCandidate(
+      cand,
+      snapshot(new Map([[digestOf(raw), state()]])),
+    )
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('EXEC_TYPE_UNPROVEN')
+    expect(ev.reasons).not.toContain('SIDE_UNCORROBORATED') // 方向有锁仓佐证
+  })
+
+  it('两源一致的正常单（含共同声称 market）→ 交叉核对通过，VALID', async () => {
+    const plain = await signedRaw({ orderId: 'd2plain' })
+    const mkt = await signedRaw({ orderId: 'd2mkt', execType: 'market' })
+    const prepared = await prepareCandidates(CHAIN, [
+      book('node', [plain, mkt]),
+      book('relay', [plain, mkt]),
+    ])
+    const snap = snapshot(
+      new Map([
+        [digestOf(plain), state()],
+        [digestOf(mkt), state()],
+      ]),
+    )
+    const view = mergeBooks(CHAIN, PAIR, prepared, snap)
+    expect(view.all.every((o) => o.validity === 'VALID')).toBe(true)
+    expect(view.tradeable.length).toBe(2)
+  })
+
+  it('execType 一源写 limit、一源不写 → 同为缺省语义，不算冲突', async () => {
+    const raw = await signedRaw()
+    const withLimit = { ...raw, execType: 'limit' }
+    const prepared = await prepareCandidates(CHAIN, [
+      book('node', [withLimit]),
+      book('relay', [raw]),
+    ])
+    const ev = evaluateCandidate(
+      prepared.candidates[0],
+      snapshot(new Map([[digestOf(raw), state()]])),
+    )
+    expect(ev.conflict).toBe(false)
+    expect(ev.validity).toBe('VALID')
   })
 })
 
@@ -410,6 +597,37 @@ describe('链上读取器（mock transport）', () => {
       { status: 'success', result: [TRADER, LOCK.token] },
     ])
     expect(assembled).toBeNull()
+  })
+
+  it('第 35 轮 D4：multicall 钉在取到的区块号，快照按该块归属', async () => {
+    const pinnedSeen: bigint[] = []
+    let blockNo = 777n
+    const transport: ChainTransport = {
+      async getLatestBlock() {
+        return { number: blockNo, timestamp: 1700001000 }
+      },
+      async multicall(calls, pinned) {
+        pinnedSeen.push(pinned)
+        return calls.map((c): StateCallResult => {
+          if (c.functionName === 'orderFilledIn') return { status: 'success', result: 0n }
+          if (c.functionName === 'orderFilledOut') return { status: 'success', result: 0n }
+          if (c.functionName === 'usedNonces') return { status: 'success', result: false }
+          if (c.functionName === 'orderLocks')
+            return { status: 'success', result: [TRADER, LOCK.token, 100n * E18, 1700086400n] }
+          return { status: 'success', result: [TRADER, LOCK.token] }
+        })
+      },
+    }
+    const reader = createChainStateReader(() => transport, () => 1700001000)
+    const req = [{ digest: '0x' + 'cd'.repeat(32), userAddress: TRADER, nonce: 0 }]
+    const s1 = await reader.snapshot(CHAIN, req)
+    expect(pinnedSeen).toEqual([777n]) // 读取钉在 777，不许滑到更新的块
+    expect(s1.blockNumber).toBe(777n)
+    expect(s1.states.size).toBe(1)
+    blockNo = 778n
+    const s2 = await reader.snapshot(CHAIN, req)
+    expect(pinnedSeen).toEqual([777n, 778n]) // 新区块重新钉块读取
+    expect(s2.blockNumber).toBe(778n)
   })
 })
 

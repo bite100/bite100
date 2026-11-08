@@ -123,7 +123,13 @@ export type StateCallResult =
 /** 可注入的链传输层：真实实现走 viem multicall，单测注入 mock */
 export interface ChainTransport {
   getLatestBlock(): Promise<{ number: bigint; timestamp: number }>
-  multicall(calls: StateCall[]): Promise<StateCallResult[]>
+  /**
+   * 第 35 轮 D4：multicall 必须钉在 blockNumber 执行——旧实现取完最新区块
+   * 后不带块号调用，读到的可能是 N+1 块状态却记在 N 块名下（过期判定用
+   * N 块时间、成交/nonce/锁来自 N+1），快照自相矛盾。钉块后整份快照
+   * 同属一个区块，缓存按该块号归属才诚实。
+   */
+  multicall(calls: StateCall[], blockNumber: bigint): Promise<StateCallResult[]>
 }
 
 export interface ChainStateRequest {
@@ -269,7 +275,7 @@ export function createChainStateReader(
           spans.push({ digest: req.digest.toLowerCase(), start: calls.length, len: built.length })
           calls.push(...built)
         }
-        const results = await transport.multicall(calls)
+        const results = await transport.multicall(calls, block.number)
         for (const span of spans) {
           const assembled = assembleChainState(results.slice(span.start, span.start + span.len))
           if (assembled) states.set(span.digest, assembled)
@@ -295,6 +301,8 @@ interface MinimalPublicClient {
   multicall(args: {
     contracts: unknown[]
     allowFailure: true
+    /** 第 35 轮 D4：钉块读取（viem multicall 原生支持 blockNumber） */
+    blockNumber: bigint
   }): Promise<Array<{ status: 'success' | 'failure'; result?: unknown; error?: unknown }>>
 }
 
@@ -322,7 +330,7 @@ export function createViemChainTransport(): (chainId: number) => ChainTransport 
         const block = await clientFor(chainId).getBlock()
         return { number: block.number ?? 0n, timestamp: Number(block.timestamp) }
       },
-      async multicall(calls: StateCall[]): Promise<StateCallResult[]> {
+      async multicall(calls: StateCall[], blockNumber: bigint): Promise<StateCallResult[]> {
         const client = clientFor(chainId)
         const contracts = calls.map((c) => ({
           address: (c.contract === 'settlement'
@@ -332,7 +340,7 @@ export function createViemChainTransport(): (chainId: number) => ChainTransport 
           functionName: c.functionName as never,
           args: c.args as never,
         }))
-        const results = await client.multicall({ contracts, allowFailure: true })
+        const results = await client.multicall({ contracts, allowFailure: true, blockNumber })
         return results.map((r) =>
           r.status === 'success'
             ? { status: 'success' as const, result: r.result }
