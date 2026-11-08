@@ -158,6 +158,10 @@ export function computeShadowMetrics(
   const chainDecided = common.filter((o) => o.chainKnown)
   const consistent = chainDecided.filter((o) => {
     if (o.conflict) return false
+    // 第 36 轮：落锁义务方向与来源自报方向不符（观察旗标）也是来源数据
+    // 与链上状态的不一致——锁仓方向本身证明不了挂单人方向（N1），但
+    // 「自报方向与链上落锁义务对不上」这一事实本身计入不一致。
+    if (o.reasons.includes('SIDE_LOCK_MISMATCH')) return false
     for (const src of ['node', 'relay'] as const) {
       const raw = o.raw[src]
       if (!raw) return false
