@@ -10,7 +10,9 @@
  * 验签重建与节点 match.BuildSignedOrder 逐项一致：
  *   tokenIn/tokenOut = 交易对 (Token0, Token1)，与买卖方向无关；
  *   amountIn = amount，price = price，amountOut = amountIn * price / 1e18；
- *   timestamp = createdAt；expiresAt 缺省 = createdAt + 7 天；nonce = nonce。
+ *   timestamp = createdAt；expiresAt 缺省 = createdAt + 7 天；nonce = nonce；
+ *   side = 订单行自报 side 字符串映射为 uint8（规范 §2：buy ↔ 0、sell ↔ 1，
+ *   置于签名结构末位，阶段 3 新增签名字段）。
  * 验签只用 viem 的 verifyTypedData / hashTypedData（现成库），不手写密码学。
  */
 import {
@@ -38,6 +40,7 @@ export const ORDER_TYPES = {
     { name: 'timestamp', type: 'uint256' },
     { name: 'expiresAt', type: 'uint256' },
     { name: 'nonce', type: 'uint256' },
+    { name: 'side', type: 'uint8' },
   ],
 } as const
 
@@ -71,6 +74,8 @@ export interface SignedOrder {
   timestamp: bigint
   expiresAt: bigint
   nonce: bigint
+  /** 签名方向（uint8）：0 = buy、1 = sell（规范 §2） */
+  side: number
 }
 
 const SCALE_1E18 = 10n ** 18n
@@ -145,6 +150,23 @@ export function validateBody(raw: unknown): NodeOrderBody {
   }
 }
 
+/**
+ * 订单行自报 side 字符串 -> 签名字段 side（uint8）的映射，与规范
+ * docs/eip712-order-spec.md §2 一一对应：buy ↔ 0、sell ↔ 1。
+ * validateBody 已保证入库路径的 side 只为 buy/sell；本函数对其它值直接抛错，
+ * 防止未经校验直接调用 buildSignedOrder 时把非法方向悄悄编进签名消息。
+ */
+export function sideStringToUint(side: string): number {
+  switch (side) {
+    case 'buy':
+      return 0
+    case 'sell':
+      return 1
+    default:
+      throw new Error(`invalid side: ${side}`)
+  }
+}
+
 /** 按节点 BuildSignedOrder 的同一映射重建签名订单；交易对未登记返回 null */
 export function buildSignedOrder(
   chain: ChainRelayConfig,
@@ -167,6 +189,7 @@ export function buildSignedOrder(
     timestamp: BigInt(body.createdAt),
     expiresAt: BigInt(expiresAt),
     nonce: BigInt(body.nonce),
+    side: sideStringToUint(body.side),
   }
 }
 

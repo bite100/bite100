@@ -38,6 +38,7 @@ const ORDER_TYPES = {
     { name: 'timestamp', type: 'uint256' },
     { name: 'expiresAt', type: 'uint256' },
     { name: 'nonce', type: 'uint256' },
+    { name: 'side', type: 'uint8' },
   ],
 }
 
@@ -68,6 +69,8 @@ async function signOrder(account, { orderId, createdAt, expiresAt, side }) {
     timestamp: BigInt(createdAt),
     expiresAt: BigInt(expiresAt),
     nonce: 0n,
+    // 签名字段 side（uint8，规范 §2）：buy ↔ 0、sell ↔ 1，与请求体 side 字符串对应
+    side: side === 'buy' ? 0 : 1,
   }
   const signature = await account.signTypedData({
     domain: { name: '比特100', version: '1', chainId: CHAIN_ID, verifyingContract: SETTLEMENT },

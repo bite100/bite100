@@ -27,6 +27,7 @@ const ORDER_TYPES = {
     { name: 'timestamp', type: 'uint256' },
     { name: 'expiresAt', type: 'uint256' },
     { name: 'nonce', type: 'uint256' },
+    { name: 'side', type: 'uint8' },
   ],
 }
 
@@ -43,6 +44,7 @@ const message = {
   timestamp: BigInt(now),
   expiresAt: BigInt(now + 3600),
   nonce: 0n,
+  side: 0, // buy（规范 §2：buy ↔ 0；本脚本只验 1271 回退路径，方向取任一合法值）
 }
 const domain = { name: '比特100', version: '1', chainId: 11155111, verifyingContract: SETTLEMENT }
 const signature = await stranger.signTypedData({
