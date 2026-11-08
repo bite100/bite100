@@ -32,7 +32,7 @@
 
 ## 配置口径（部署地址/起始块）
 
-只认第 33 轮轮次文档的部署记录（`config.yaml` 头部有完整出处与 CREATE tx）：
+只认阶段 3 切换文档的部署记录（`config.yaml` 头部有完整出处与 CREATE tx）：
 
 | 链 | Settlement | 起始块（部署块） |
 | --- | --- | --- |
@@ -53,7 +53,7 @@
    测试库 simulate 模式喂合成事件进真实 handler——批量 tx 两笔成交落库、
    digest 按序关联、GasShare 挂载、calldata 缺失留空、双链分隔。3/3 通过。
 3. **真实链数据回放对账**（`test/reconcile.test.ts`，`RECONCILE=1` 显式开）：
-   取第 33 轮双链 E2E 结算 tx 的真实回执日志 + 真实 calldata 回放进 handler，
+   取阶段 3 切换双链 E2E 结算 tx 的真实回执日志 + 真实 calldata 回放进 handler，
    实体与链上日志逐字段一致，且关联出的 makerDigest 与链上
    `Settlement.orderDigest(order)` 的 eth_call 真值逐字一致。双链 2/2 通过。
 4. **未做**：Envio Cloud 实时同步 E2E（需要 HyperSync token / Envio 账号，
@@ -77,7 +77,7 @@ RECONCILE=1 npx vitest run test/reconcile.test.ts
    （HyperSync 用；token 只放部署环境变量，不入 Git）。
 2. 在 Envio Cloud 新建索引器，关联本仓库、根目录选 `indexer/`、
    配置文件 `config.yaml`，部署分支按发布流程定。
-3. 部署后核对：双链同步高度 ≥ 各自起始块且追上链头；用第 33 轮两笔 E2E
+3. 部署后核对：双链同步高度 ≥ 各自起始块且追上链头；用阶段 3 切换两笔 E2E
    结算 tx 在 GraphQL 里查 `Trade` 行，字段与链上日志一致（口径同回放对账）。
 4. 把控制台给出的 GraphQL 端点 URL 配到前端构建环境变量
    `VITE_INDEXER_URL` 并重新发布前端；数据页「链上索引（Envio）」状态应转

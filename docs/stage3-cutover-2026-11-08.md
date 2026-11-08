@@ -103,6 +103,10 @@ Settlement 发出）×1、`GasCostShared`（topic `0xf25f067a…`）×1、Vault 
   再以 Cloudflare 帮手（custom.cloudflare 连接器）上传新 bundle 并重设 cron（`*/15`）与
   workers.dev 子域。**secret `NOSTR_POSTMAN_SECRET_HEX` 未动**（上传脚本不携带 secret，
   原 secret 保持绑定）。
+- **D1 清空备份注记（2026-11-08 复审回填）**：本次清空未做删除前导出备份。被删 99 行
+  均为旧签名域订单，在新 Settlement 下全部失效、且属测试期订单；回滚旧栈不依赖该
+  数据（旧栈订单簿以节点 SQLite 备份 `storage.db.bak-s3cutover-20261108` 为准），
+  故无实际损失，但流程不闭环——**此后任何 D1 清空/重置前必须先导出备份留档**。
 - 冒烟：`GET /health` → `{"ok":true,"db":"ok"}`；`scripts/demo.mjs` 对生产 URL **9/9 全过**——
   含以新 Settlement 为签名域的真实签名订单入库、去重、查回、订单簿、过期拒、坏签名拒、
   Nostr 镜像 event id 回填（`52e6ffc3…e6e20`）。注意 demo 订单会留在 D1 中（BTC/USDT 一单），

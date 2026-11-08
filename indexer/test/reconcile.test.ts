@@ -1,6 +1,6 @@
 /**
  * 真实链数据回放对账（RECONCILE=1 时才运行，需公共 RPC 可达）：
- * 取第 33 轮双链 E2E 结算 tx 的真实回执日志 + 真实 calldata，经 eth_getLogs
+ * 取阶段 3 切换双链 E2E 结算 tx 的真实回执日志 + 真实 calldata，经 eth_getLogs
  * 口径解码后用 createTestIndexer 的 simulate 回放进真实 handler，断言：
  * - Trade/GasShare 实体与链上日志逐字段一致（不重不漏）；
  * - calldata 关联出的 makerDigest 与链上 Settlement.orderDigest(order)
@@ -10,10 +10,10 @@
  *（后者需要 HyperSync token / 账号，属部署阶段，见 README）。
  * 默认 npm test 不跑本文件（describe.skipIf），避免离线环境误红。
  *
- * 阶段 3 切换注意（块B-⑧）：下方 CASES 仍指向第 33 轮旧栈地址与旧 E2E tx，
- * 其 calldata 是旧结构体（无 side），按新 ABI 解码必失败——阶段 3 双链
- * 重部署后，必须先把 CASES 换成新栈地址 + 新 E2E 结算 tx 才能开
- * RECONCILE=1；在此之前本文件仅保持类型/ABI 与新规范对齐，不实际运行。
+ * 阶段 3 切换后口径（2026-11-08 复审回填）：下方 CASES 已换成新栈
+ * Settlement 地址 + 阶段 3 切换 E2E 的单笔结算 tx（见
+ * docs/stage3-cutover-2026-11-08.md §4），RECONCILE=1 已实跑通过；
+ * 此后每次切换/重部署都必须同步更换 CASES 并重跑一次。
  */
 import { describe, it, expect } from 'vitest'
 import { createTestIndexer } from 'envio'
@@ -30,13 +30,13 @@ const CASES = [
     chainId: 11155111,
     rpc: 'https://ethereum-sepolia.publicnode.com',
     settlement: '0xbf2B9635B682Ff30E73028a5b2beEB829873a88f',
-    settleTx: '0x86fa42804f9a9d89773414964b6b608962ea416d20934320921f0066367fbef7',
+    settleTx: '0x8f6b138e8ae232c5a01f214e70a5caca27cb36813130b0b000acaa7a03dfbd26',
   },
   {
     chainId: 84532,
     rpc: 'https://sepolia.base.org',
     settlement: '0x50aFA0d0a407bdeCcdd6b9b3f6d4a68f837F0305',
-    settleTx: '0x54437b1254cd574077a4ea8cd5d73edb215e2f2a359812f10a88c1dc2f3a459e',
+    settleTx: '0x3ead6a1e29f463640e379b298bddb841a66d1055063a3402db6882ef401da2d1',
   },
 ] as const
 
@@ -81,7 +81,7 @@ const ORDER_DIGEST_ABI = [
   },
 ] as const
 
-describe.skipIf(!process.env.RECONCILE)('真实链数据回放对账（第 33 轮 E2E 结算 tx）', () => {
+describe.skipIf(!process.env.RECONCILE)('真实链数据回放对账（阶段 3 切换 E2E 结算 tx）', () => {
   for (const c of CASES) {
     it(`chain ${c.chainId}: 实体与链上日志逐字段一致、digest 与链上真值一致`, async () => {
       const receipt = await rpc(c.rpc, 'eth_getTransactionReceipt', [c.settleTx])
