@@ -76,7 +76,8 @@ export function confirmDisclosure(
 const OVERRIDE_KEY_PREFIX = 'bit100.defaultBridge.tempOverride.v1.'
 
 export interface TempChannelOverride {
-  channel: DefaultChannelId
+  /** 'settle-chain-only' = 用户在成交前明确选了只在成交链交付（同样是一次性抉择，不落常设） */
+  channel: DefaultChannelId | 'settle-chain-only'
   settleChainId: number
   asset: string
   createdAt: number

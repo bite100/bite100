@@ -1,0 +1,103 @@
+/* 跨链默认通道设置区（第四十一轮）：沿用全站白卡片视觉，只加 dbs- 前缀类 */
+.dbs {
+  margin-bottom: 16px;
+}
+.dbs-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.dbs-guide {
+  border: 1px solid #eee;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.dbs-guide p {
+  margin: 4px 0;
+}
+.dbs-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin: 10px 0;
+  font-size: 14px;
+}
+.dbs-row select {
+  min-height: 44px;
+  border-radius: 10px;
+  padding: 0 10px;
+  font-size: 14px;
+}
+.dbs-warn {
+  border: 1px solid #f5c542;
+  background: #fff8e1;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.dbs-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.dbs-card {
+  border: 1px solid #e5e5e5;
+  border-radius: 16px;
+  padding: 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.dbs-card.selected {
+  border-color: #ff007a;
+}
+.dbs-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.dbs-card p {
+  margin: 4px 0;
+}
+.dbs-open {
+  margin-top: 8px;
+  min-height: 44px;
+  width: 100%;
+}
+.dbs-disclosure {
+  border-top: 1px dashed #ddd;
+  margin-top: 12px;
+  padding-top: 10px;
+}
+.dbs-disclosure ul {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+.dbs-disclosure li {
+  margin: 3px 0;
+}
+.dbs-ack {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 10px 0;
+  cursor: pointer;
+}
+.dbs-ack input {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin-top: 2px;
+}
+.dbs-save {
+  min-height: 44px;
+  width: 100%;
+}

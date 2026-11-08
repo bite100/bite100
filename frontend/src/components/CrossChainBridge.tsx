@@ -9,6 +9,7 @@ import {
   wrapTkaExact,
   fetchLayerZeroStatus,
 } from '../services/bridgeExecutors'
+import { DefaultBridgeSettings } from './bridge/DefaultBridgeSettings'
 import {
   fetchFastLaneQuote,
   fetchFastLaneStatus,
@@ -604,6 +605,9 @@ export function CrossChainBridge({ account, currentChainId }: CrossChainBridgePr
       <p className="hint">关于 CCIP 与 Wormhole 的代币：这两家桥目前只支持 wTKA（TKA 的 1:1 包装代币）。发起时页面会自动把你的 TKA 按 1:1 换成 wTKA 再跨链（随时可 1:1 换回，不收差价）；目标链收到的是 wTKA，在目标链换回 TKA 后即可交易。LayerZero 通道直接转 TKA。</p>
 
       <ErrorDisplay error={error} onDismiss={() => setError(null)} className="bridge-error" />
+
+      {/* 第四十一轮：跨链默认通道设置区（设计 §2.2 主入口，在四通道列表上方） */}
+      <DefaultBridgeSettings account={account} />
 
       <div className="bridge-form">
         <div className="bridge-field">

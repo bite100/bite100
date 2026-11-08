@@ -1,0 +1,60 @@
+/* 跨链交付记录区（第四十一轮）：白卡片 + 状态药丸，挂在订单历史下方 */
+.drec {
+  margin-top: 16px;
+}
+.drec-title {
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+.drec-card {
+  border: 1px solid #e5e5e5;
+  border-radius: 16px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.drec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.drec-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #555;
+  margin: 4px 0;
+}
+.drec-btn {
+  min-height: 44px;
+  margin-top: 8px;
+}
+.drec-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.drec-error {
+  color: #c00;
+}
+.drec-status-anomaly {
+  background: #fdecec;
+  color: #b3261e;
+}
+.drec-status-delivered {
+  background: #e6f4ea;
+  color: #137333;
+}
+.drec-status-in-flight,
+.drec-status-initiating {
+  background: #e8f0fe;
+  color: #1a56db;
+}
+.drec-status-ask-required,
+.drec-status-suspended-disclosure {
+  background: #fff8e1;
+  color: #8d6e00;
+}

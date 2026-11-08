@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Contract, JsonRpcProvider } from 'ethers'
 import { useLocalStorage } from '@mantine/hooks'
 import { TRADE_PAIRS } from '../../config/pairs'
+import { pairSameChainOnly } from '../../services/defaultBridge/support'
 import { getChainConfig } from '../../config/chains'
 import { VAULT_ABI } from '../../config'
 import { usePairStats } from '../../hooks/usePairStats'
@@ -291,6 +292,7 @@ function MarketRows(props: {
               <span className="markets-pairline">
                 <b>{r.pair}</b>
                 <span className="pill pill-spot">现货</span>
+                {pairSameChainOnly(r.pair) && <span className="pill">仅同链交易</span>}
                 <button
                   type="button"
                   className={isFav ? 'markets-star on' : 'markets-star'}

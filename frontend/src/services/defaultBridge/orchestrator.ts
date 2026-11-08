@@ -177,6 +177,11 @@ export function planDelivery(
 
   // §6 三级的一次性临时授权：用户在下单时已当场选过临时通道 → 直接按它规划
   const override = consumeTempOverride(account, fill.settleChainId, mine.asset)
+  if (override?.channel === 'settle-chain-only') {
+    base.status = 'not-needed'
+    const { created } = upsertDelivery(account, base)
+    return { record: base, created }
+  }
   if (override && channelSupports(override.channel, fill.settleChainId, settings.homeChainId, mine.asset)) {
     base.channel = override.channel
     base.status = hasValidConfirmation(settings, override.channel) ? 'pending-decision' : 'suspended-disclosure'

@@ -2,6 +2,7 @@ import { Paper, Text, Button, Select } from '@mantine/core'
 import type { PairStats } from '../../hooks/usePairStats'
 import { TRADE_PAIRS, type TradePair } from '../../config/pairs'
 import { fmtPrice, fmtAmount } from './tradeFormat'
+import { pairSameChainOnly } from '../../services/defaultBridge/support'
 
 export interface PairStatsBarProps {
   pair: string
@@ -36,7 +37,10 @@ export function PairStatsBar({ pair, stats, midPrice, onPairChange, onShowFullOr
         {onPairChange ? (
           <Select
             aria-label="交易对"
-            data={TRADE_PAIRS.map((p) => ({ value: p, label: p }))}
+            data={TRADE_PAIRS.map((p) => ({
+              value: p,
+              label: pairSameChainOnly(p) ? `${p}（仅同链交易）` : p,
+            }))}
             value={pair}
             onChange={(v) => {
               if (v) onPairChange(v as TradePair)
