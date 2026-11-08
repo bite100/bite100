@@ -221,6 +221,46 @@ query Bit100Trades($chainId: Int!, $limit: Int!, $offset: Int!, $base: [String!]
   }
 }`
 
+/** 节点源取数超时（第 39 轮）：节点在本机/隧道近端，5 秒足够判活 */
+export const NODE_TRADES_TIMEOUT_MS = 5000
+/** 索引器源取数超时（第 39 轮）：Envio GraphQL 跨公网且有冷查询，宽放至 8 秒 */
+export const INDEXER_TRADES_TIMEOUT_MS = 8000
+
+/** 双源取数器：接收超时控制器信号，须把 signal 真传进底层 fetch */
+export type SourceFetcher<T> = (signal: AbortSignal) => Promise<T>
+
+export interface DualTradesTimeouts {
+  nodeTimeoutMs?: number
+  indexerTimeoutMs?: number
+}
+
+/**
+ * 第 39 轮：带真取消的超时调用。第 35 轮 D6 的 allSettled 只能隔离
+ * reject——请求永不返回（挂死）时 allSettled 永不落定，健康源已取到的
+ * 数据也被拖住不展示。本函数以平台标准 AbortController 在超时时真
+ * abort 底层 fetch（连接随之释放），同时以竞速兜底：即使对端 promise
+ * 不理会 signal，也准时判该源失败。
+ */
+async function callWithTimeout<T>(
+  timeoutMs: number,
+  label: string,
+  run: SourceFetcher<T>,
+): Promise<T> {
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(new Error(`${label} timeout after ${timeoutMs}ms`))
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([run(controller.signal), timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 export interface DualTradesOutcome {
   result: MergeResult
   /** 节点源本轮失败（Envio 数据不受影响，照常展示） */
@@ -236,13 +276,25 @@ export interface DualTradesOutcome {
  * 一把清——节点宕机时 Envio 明明有数据也被整页盖掉，与「配置索引后以
  * 索引为权威」矛盾。本函数以 allSettled 并发取两源：任一源失败只降级
  * 该源（失败标记随结果返回供界面明示），合并口径仍走 mergeTradeSources。
+ *
+ * 第 39 轮：两源各加取数超时（callWithTimeout，默认节点 5 秒 / 索引器
+ * 8 秒，可注入更小值供测试）——超时按该源失败降级，语义与 D6 一致；
+ * 任一源被拖死不再连累另一源的展示。
  */
 export async function loadDualTrades(
-  fetchNode: () => Promise<NodeTrade[]>,
-  fetchIndexer: () => Promise<IndexerTrade[]>,
+  fetchNode: SourceFetcher<NodeTrade[]>,
+  fetchIndexer: SourceFetcher<IndexerTrade[]>,
   baseToken: string,
+  timeouts: DualTradesTimeouts = {},
 ): Promise<DualTradesOutcome> {
-  const [n, i] = await Promise.allSettled([fetchNode(), fetchIndexer()])
+  const [n, i] = await Promise.allSettled([
+    callWithTimeout(timeouts.nodeTimeoutMs ?? NODE_TRADES_TIMEOUT_MS, 'node trades', fetchNode),
+    callWithTimeout(
+      timeouts.indexerTimeoutMs ?? INDEXER_TRADES_TIMEOUT_MS,
+      'indexer trades',
+      fetchIndexer,
+    ),
+  ])
   const nodeFailed = n.status === 'rejected'
   const indexerFailed = i.status === 'rejected'
   return {
@@ -288,7 +340,7 @@ export function buildTradesQueryVariables(
 
 export type FetchFn = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>
 
 const defaultFetch: FetchFn = async (url, init) => {
@@ -296,10 +348,25 @@ const defaultFetch: FetchFn = async (url, init) => {
   return { ok: res.ok, status: res.status, json: () => res.json() }
 }
 
+export interface FetchIndexerOptions {
+  /**
+   * 外部取消信号（双源路径由 loadDualTrades 的超时控制器传入）；传入时
+   * 以外部信号为准，本函数不再另设计时。
+   */
+  signal?: AbortSignal
+  /** 未传 signal 时的内部超时（毫秒），默认 INDEXER_TRADES_TIMEOUT_MS；主要供测试注入小值 */
+  timeoutMs?: number
+}
+
 /**
  * 拉取 Envio 成交：交易对过滤以 GraphQL where 服务端过滤为主（第 35 轮
  * D5），返回后再做一层客户端精确集合校验作兜底（索引实体只有代币地址、
  * 无 pair 符号；无序集合比对，两个方向都算本对成交）。
+ *
+ * 第 39 轮：① 取数超时真取消——双源路径用外部 signal，直接调用时自建
+ * AbortController 按 INDEXER_TRADES_TIMEOUT_MS 兜底，signal 真传进
+ * fetch；② GraphQL 在 HTTP 200 下仍可带 errors（执行/部分失败），非空
+ * errors 视为索引源失败抛错，走既有降级路径，不当成「成功查到 0 笔」。
  */
 export async function fetchIndexerTrades(
   chainId: number,
@@ -308,46 +375,63 @@ export async function fetchIndexerTrades(
   fetchFn: FetchFn = defaultFetch,
   endpoint: string = INDEXER_URL,
   offset = 0,
+  options: FetchIndexerOptions = {},
 ): Promise<IndexerTrade[]> {
   if (!endpoint) return []
   const tokens = getPairTokens(chainId, pair)
   if (!tokens) return []
-  const res = await fetchFn(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      query: TRADES_QUERY,
-      variables: buildTradesQueryVariables(chainId, tokens.base, tokens.quote, limit, offset),
-    }),
-  })
-  if (!res.ok) throw new Error(`indexer http ${res.status}`)
-  const json = (await res.json()) as { data?: { Trade?: unknown[] } }
-  const rows = Array.isArray(json?.data?.Trade) ? json.data!.Trade : []
-  const pairSet = new Set([lc(tokens.base), lc(tokens.quote)])
-  return rows
-    .map((r) => {
-      const o = r as Record<string, unknown>
-      return {
-        id: String(o.id ?? ''),
-        chainId: Number(o.chainId ?? chainId),
-        txHash: String(o.txHash ?? ''),
-        logIndex: Number(o.logIndex ?? 0),
-        blockTimestamp: Number(o.blockTimestamp ?? 0),
-        maker: String(o.maker ?? ''),
-        taker: String(o.taker ?? ''),
-        tokenIn: String(o.tokenIn ?? ''),
-        tokenOut: String(o.tokenOut ?? ''),
-        amountIn: String(o.amountIn ?? '0'),
-        amountOut: String(o.amountOut ?? '0'),
-        feeAmount: String(o.feeAmount ?? '0'),
-        makerDigest: (o.makerDigest as string | null) ?? null,
-        takerDigest: (o.takerDigest as string | null) ?? null,
-      } satisfies IndexerTrade
+  const ownController = options.signal ? null : new AbortController()
+  const signal = options.signal ?? ownController!.signal
+  const timer = ownController
+    ? setTimeout(
+        () => ownController.abort(),
+        options.timeoutMs ?? INDEXER_TRADES_TIMEOUT_MS,
+      )
+    : undefined
+  try {
+    const res = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        query: TRADES_QUERY,
+        variables: buildTradesQueryVariables(chainId, tokens.base, tokens.quote, limit, offset),
+      }),
+      signal,
     })
-    .filter(
-      (t) =>
-        pairSet.has(lc(t.tokenIn)) &&
-        pairSet.has(lc(t.tokenOut)) &&
-        lc(t.tokenIn) !== lc(t.tokenOut),
-    )
+    if (!res.ok) throw new Error(`indexer http ${res.status}`)
+    const json = (await res.json()) as { data?: { Trade?: unknown[] }; errors?: unknown[] }
+    if (Array.isArray(json?.errors) && json.errors.length > 0) {
+      throw new Error('indexer graphql query failed')
+    }
+    const rows = Array.isArray(json?.data?.Trade) ? json.data!.Trade : []
+    const pairSet = new Set([lc(tokens.base), lc(tokens.quote)])
+    return rows
+      .map((r) => {
+        const o = r as Record<string, unknown>
+        return {
+          id: String(o.id ?? ''),
+          chainId: Number(o.chainId ?? chainId),
+          txHash: String(o.txHash ?? ''),
+          logIndex: Number(o.logIndex ?? 0),
+          blockTimestamp: Number(o.blockTimestamp ?? 0),
+          maker: String(o.maker ?? ''),
+          taker: String(o.taker ?? ''),
+          tokenIn: String(o.tokenIn ?? ''),
+          tokenOut: String(o.tokenOut ?? ''),
+          amountIn: String(o.amountIn ?? '0'),
+          amountOut: String(o.amountOut ?? '0'),
+          feeAmount: String(o.feeAmount ?? '0'),
+          makerDigest: (o.makerDigest as string | null) ?? null,
+          takerDigest: (o.takerDigest as string | null) ?? null,
+        } satisfies IndexerTrade
+      })
+      .filter(
+        (t) =>
+          pairSet.has(lc(t.tokenIn)) &&
+          pairSet.has(lc(t.tokenOut)) &&
+          lc(t.tokenIn) !== lc(t.tokenOut),
+      )
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }

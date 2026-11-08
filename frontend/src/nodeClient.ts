@@ -29,12 +29,23 @@ export async function tryNodes<T>(
   throw lastErr ?? new Error('所有节点均不可用')
 }
 
-/** 使用当前节点列表发起 GET */
-export async function nodeGet<T>(path: string, params?: Record<string, string>): Promise<{ data: T; baseUrl: string }> {
+/**
+ * 使用当前节点列表发起 GET。
+ * 第 39 轮：新增可选 options.signal（调用方超时/取消控制，如成交双源
+ * 取数）；不传时与此前行为完全一致（无信号、逐节点尝试）。信号一旦
+ * abort，后续节点的尝试也会立即失败——即整源判失败，符合超时语义。
+ */
+export async function nodeGet<T>(
+  path: string,
+  params?: Record<string, string>,
+  options?: { signal?: AbortSignal },
+): Promise<{ data: T; baseUrl: string }> {
   return tryNodes(async (baseUrl) => {
     const url = new URL(path, baseUrl)
     if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
-    const r = await fetch(url.toString())
+    const r = options?.signal
+      ? await fetch(url.toString(), { signal: options.signal })
+      : await fetch(url.toString())
     if (!r.ok) throw new Error(r.statusText || String(r.status))
     return r.json() as Promise<T>
   })

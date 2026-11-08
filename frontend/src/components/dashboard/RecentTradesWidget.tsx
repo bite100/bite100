@@ -38,6 +38,10 @@ export interface RecentTradesWidgetProps {
  * 第 35 轮 D6：双源独立取数——节点宕机时照常展示链上索引数据（页首会
  * 明示「节点暂不可达」），索引宕机时回退节点数据；两源皆不可达才显示
  * 「成交数据暂不可用」，不再把单源故障误报成整页不可用。
+ *
+ * 第 39 轮：双源取数加超时真取消（节点 5 秒 / 索引器 8 秒，见
+ * services/tradesDual.ts），轮询加 in-flight 守卫——单源挂死不再拖住
+ * 整表，慢请求不在轮询下叠加。
  */
 export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetProps = {}) {
   const [trades, setTrades] = useState<RecentTrade[]>([])
@@ -51,17 +55,27 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
 
   useEffect(() => {
     let cancelled = false
+    // 第 39 轮：in-flight 守卫——上一轮取数未完成时跳过本轮 tick，避免
+    // 慢/挂死请求在 5 秒轮询下叠加（双源取数已有超时兜底，此处再防堆积）。
+    let inFlight = false
     const fetchTrades = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
       if (INDEXER_ENABLED) {
         // 第 35 轮 D6：两源独立取数（loadDualTrades 内部 allSettled），
         // 任一源失败只降级该源；两源皆失败才置 failed（不可用态）。
         const baseToken = getPairTokens(CHAIN_ID, pair)?.base ?? ''
         const outcome = await loadDualTrades(
-          async () => {
-            const { data } = await nodeGet<unknown>('/api/trades', {
-              pair,
-              limit: '30',
-            })
+          async (signal) => {
+            const { data } = await nodeGet<unknown>(
+              '/api/trades',
+              {
+                pair,
+                limit: '30',
+              },
+              { signal },
+            )
             const list = Array.isArray(data) ? data : []
             return list.map((t: unknown): NodeTrade => {
               const o: Record<string, unknown> =
@@ -81,7 +95,7 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
               }
             })
           },
-          () => fetchIndexerTrades(CHAIN_ID, pair, 50),
+          (signal) => fetchIndexerTrades(CHAIN_ID, pair, 50, undefined, undefined, 0, { signal }),
           baseToken,
         )
         if (cancelled) return
@@ -122,6 +136,9 @@ export function RecentTradesWidget({ pair = DEFAULT_PAIR }: RecentTradesWidgetPr
         }
       } finally {
         if (!cancelled) setLoading(false)
+      }
+      } finally {
+        inFlight = false
       }
     }
     fetchTrades()
