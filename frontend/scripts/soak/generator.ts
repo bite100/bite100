@@ -240,6 +240,7 @@ export async function generateBatch(
       timestamp: data.timestamp,
       expiresAt: data.expiresAt,
       nonce: data.nonce,
+      side: data.side,
     } satisfies OrderData
     raw.signature = await w.wallet.signTypedData(
       getEIP712Domain(chainId) as ethers.TypedDataDomain,
@@ -292,9 +293,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /**
  * 双发一单：节点 POST /api/order（主）、中继 POST /orders（副，带 chainId）。
  * relaySideOverride（对抗场景专用）：向中继投递 side 被改写的同一签名
- * 订单——中继按 digest 去重、先到先得，故改写副本必须先于正本到达
- * 中继；节点只收正本。双读状态机应把该单判为冲突/未知（第 35 轮 D2
- * 的真实链路验证手段），压测中低频使用。
+ * 订单；节点只收正本。
+ * 阶段 3 前（side 未签名）：改写副本与正本同 digest，中继先到先得、
+ * 双读判冲突/未知（第 35 轮 D2 的验证手段）。
+ * 阶段 3 后（side 进签名）：改写副本的 digest 已变、中继在入库验签处
+ * 直接拒绝（400），节点正本不受影响、双读判 VALID——本场景自切换起
+ * 改测「中继入库验签拦截篡改」，账本仍按 tampered 单独计数、不进有效
+ * 样本口径（与 report.mjs 一致），压测中低频使用。
  */
 export async function submitOrder(
   nodeUrl: string,

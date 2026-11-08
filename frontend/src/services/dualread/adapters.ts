@@ -19,16 +19,23 @@ import type { RawOrder, SourceBook } from './types'
 /** relay /orderbook 单侧返回上限（relay/src/index.ts 现行合同） */
 export const RELAY_BOOK_SIDE_CAP = 100
 
+/** 负零规范化（第 40 轮复审跟进）：数字 -0 经 toString 得 "0"，字符串
+ * "-0" 若原样保留则两路不一致；整数形态与定点形态的整数部分统一把
+ * "-0"/"-00…" 归一为 "0"（数值等价，只动表示）。 */
+function canonIntString(s: string): string {
+  return /^-0+$/.test(s) ? '0' : s
+}
+
 function asIntString(v: unknown): string | null {
   if (typeof v === 'string') {
     const s = v.trim()
-    if (/^-?\d+$/.test(s)) return s
+    if (/^-?\d+$/.test(s)) return canonIntString(s)
     // 定点小数字符串：第 38 轮——节点撮合引擎以 big.Float.Text('f', 18)
     // 回写 amount/filled（如 "1000000000000000.000000000000000000"），
     // 小数部分全为零时归一化为整数串；含任何非零数字则判无效返回
     // null（走既有丢弃路径），绝不静默截断小数。
     const m = /^(-?\d+)\.(\d+)$/.exec(s)
-    if (m && /^0+$/.test(m[2])) return m[1]
+    if (m && /^0+$/.test(m[2])) return canonIntString(m[1])
     return null
   }
   // 数字路径与字符串路径同口径（第 40 轮，第 38 轮复审 F1）：只有安全
@@ -134,6 +141,11 @@ export function requireBookSides(
   data: unknown,
   sourceLabel: string,
 ): { bids: unknown[]; asks: unknown[] } {
+  // 顶层数组也是 object（第 40 轮复审跟进）：不先排除数组，解构出的
+  // bids/asks 恒为 undefined，会被误当成空盘口——按源错误抛错。
+  if (Array.isArray(data)) {
+    throw new Error(`${sourceLabel} orderbook response is a top-level array`)
+  }
   if (!data || typeof data !== 'object') {
     throw new Error(`${sourceLabel} orderbook response is not an object`)
   }
@@ -192,9 +204,11 @@ export function createRelayBookAdapter(
       const url = `${baseUrl}/orderbook?pair=${encodeURIComponent(pair)}&chain=${chainId}`
       const res = await doFetch(url)
       if (!res.ok) throw new Error(`relay orderbook http ${res.status}`)
-      const data = (await res.json()) as { bids?: unknown[]; asks?: unknown[] }
-      const rawBids = Array.isArray(data?.bids) ? data.bids : []
-      const rawAsks = Array.isArray(data?.asks) ? data.asks : []
+      const data = await res.json()
+      // 与节点适配器同一口径（第 40 轮 F3 的 requireBookSides）：顶层非
+      // 对象/数组、或 bids/asks 存在但非数组 → 抛错按源错误处理，
+      // 不静默当空簿；字段缺失才按空盘口。
+      const { bids: rawBids, asks: rawAsks } = requireBookSides(data, 'relay book')
       const nb = normalizeBookRows(rawBids)
       const na = normalizeBookRows(rawAsks)
       const bids = sortBookSide(nb.orders, 'buy')

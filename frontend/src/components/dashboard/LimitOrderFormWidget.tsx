@@ -5,6 +5,7 @@ import { formatError, formatTokenAmount, getProvider } from '../../utils'
 import { nodePost } from '../../nodeClient'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
+import { sideToSignedValue } from '../../services/orderSigningTypes'
 import { dualSendOrderToRelay } from '../../services/relayDualSend'
 import { verifyOrderSignatureSignedData } from '../../services/orderVerification'
 import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
@@ -302,6 +303,7 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         timestamp,
         expiresAt,
         nonce,
+        side: sideToSignedValue(side),
       }
       const signature = await signOrder(orderData, signer, CHAIN_ID)
       const valid = await verifyOrderSignatureSignedData(orderData, signature, { chainId: CHAIN_ID })

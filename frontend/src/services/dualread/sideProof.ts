@@ -1,42 +1,39 @@
 /**
- * 第 37 轮 — 逐单方向证明门禁（第 36 轮推送后复审高优先项 #2）。
+ * 逐单方向证明门禁（第 37 轮建立；阶段 3 定版）。
  *
- * 第 36 轮的过渡期设计里，解除 SIDE_UNPROVABLE 阻断的条件只写在
- * protocol.ts 的注释里：代码中把 SIDE_PROOF_AVAILABLE 改成 true，
- * done() 就会给所有订单清空阻断码——没有任何逐单证据检查。本模块
- * 把解除条件落成代码事实：
- *
- *   阻断移除 ⇔ 协议能力声明为真（SIDE_PROOF_AVAILABLE）
+ * 阻断移除 ⇔ 协议能力声明为真（SIDE_PROOF_AVAILABLE）
  *              ∧ 本单的签名证据证明其方向（orderSideProof 通过）
  *
  * 证明口径：订单的 EIP-712 签名类型集（验签/重算 digest 实际使用的
  * 那一份，即 digest.ts 传入 ethers TypedDataEncoder 的 types）必须
- * 在主类型（primaryType）中声明一个方向成员——成员名为 side 或
- * direction（阶段 3 协议轮二选一并写入 eip712-order-spec），且该
- * 成员的签名值与来源自报的 side 相符（buy/sell 规范化比较）。
+ * 在主类型（primaryType）中声明方向成员 `side`（阶段 3 已定名，见
+ * docs/eip712-order-spec.md §2），且重构出的签名消息中的 side 值与
+ * 各来源自报的 side 相符（buy/sell 规范化比较）。
  * 类型集不声明方向成员 ⇒ 签名根本没绑方向 ⇒ 证明恒不成立。
  *
- * 现行 ORDER_TYPES（services/orderSigningTypes.ts）的 Order 结构
- * 不含方向成员，所以在现行协议下本函数对任何可构造订单恒返回
- * false——这是设计意图：阶段 3 协议轮把 side 写入签名结构、四方
- * 同步（前端签名/验签、节点、 中继、Settlement）并双链重部署后，
- * 本门禁才会逐单放行；仅改常量无法伪造认证（回归测试锁死）。
+ * 阶段 3 现实：ORDER_TYPES（services/orderSigningTypes.ts）的 Order
+ * 结构已含 `side`（uint8，末位），重构（digest.ts buildSignedOrderData）
+ * 把源行自报 side 写进签名消息参与 digest 与验签——自报被篡改的行
+ * 重构出的 digest 与签名对不上、验签先行失败；验签通过的候选，其
+ * data.side 即密码学意义上的签名方向。本门禁再核对全部副本自报值
+ * 与之一致，任一不符即不成立（fail-closed）。第 36–37 轮的过渡体制
+ * （SIDE_UNPROVABLE 恒阻断）自此结束：证明可得、逐单判定。
  *
  * 骑乘：类型集直接读 digest.ts 的同一份 ORDER_TYPES，不另建表。
  */
-import { ORDER_TYPES } from '../orderSigningTypes'
+import { ORDER_TYPES, type OrderData } from '../orderSigningTypes'
 import type { BookSource, RawOrder } from './types'
 
-/** 方向成员的候选名（阶段 3 协议轮定名后只保留其一并同步规范文档） */
-const SIDE_MEMBER_NAMES = ['side', 'direction'] as const
+/** 方向成员名（阶段 3 已定名 side，不再留 direction 候选） */
+const SIDE_MEMBER_NAME = 'side'
 
 /** 方向成员可接受的签名值形态 → 自报 side 的规范化映射 */
 const SIDE_VALUE_ALIASES: Record<string, 'buy' | 'sell'> = {
   buy: 'buy',
   sell: 'sell',
-  '0': 'buy', // 枚举形态预留：0=buy / 1=sell（阶段 3 定名时确认）
+  '0': 'buy', // 签名枚举口径（阶段 3 定版）：0=buy / 1=sell
   '1': 'sell',
-  true: 'buy', // 布尔形态预留：true=buy（isBuy 式命名时）
+  true: 'buy', // 布尔形态兼容（防御性保留，现行协议不产生）
   false: 'sell',
 }
 
@@ -46,13 +43,14 @@ export interface SideProofInput {
   /**
    * 实际用于本单验签/摘要的类型集（与 digest.ts 传给
    * TypedDataEncoder 的同一份）。缺省 = 现行 ORDER_TYPES。
-   * 测试经 evaluateCandidate 的 opts 注入未来类型集夹具。
+   * 测试经 evaluateCandidate 的 opts 注入类型集夹具（如旧协议
+   * 无 side 成员的类型集，用以锁死「无签名成员 ⇒ 证明不成立」）。
    */
   types?: Record<string, Array<{ name: string; type: string }>>
   /**
-   * 签名消息中的方向成员值。数据源在阶段 3 协议下随订单行携带
-   * （RawOrder.side 签名后即成为签名消息的一部分）；现行协议无
-   * 此值，缺省 undefined → 证明不成立。
+   * 签名消息中的方向成员值。数据源 = 候选重构出的 OrderData.side
+   * （经 digest 重算 + 验签后即签名方向本身）；缺省 undefined →
+   * 证明不成立。
    */
   signedSideValue?: unknown
 }
@@ -67,10 +65,8 @@ export function orderSideProof(input: SideProofInput): boolean {
   if (!types) return false
   const primary = types.Order ?? Object.values(types)[0]
   if (!Array.isArray(primary)) return false
-  const member = primary.find((f) =>
-    (SIDE_MEMBER_NAMES as readonly string[]).includes(f?.name),
-  )
-  if (!member) return false // 现行协议走这里：类型集不含方向成员
+  const member = primary.find((f) => f?.name === SIDE_MEMBER_NAME)
+  if (!member) return false // 旧协议类型集走这里：不含方向成员
   if (input.signedSideValue === undefined || input.signedSideValue === null) {
     return false
   }
@@ -80,12 +76,17 @@ export function orderSideProof(input: SideProofInput): boolean {
   return input.reportedSides.every((s) => s === signed)
 }
 
-/** 从候选的各来源副本提取证明输入（现行 RawOrder 无签名字段 → signedSideValue 恒缺省） */
+/**
+ * 从候选的各来源副本与重构签名消息提取证明输入。
+ * data 为 digest.ts 重构出的签名订单（data.side 即参与 digest 的
+ * 方向值）；缺省不传 data 时 signedSideValue 缺失、证明不成立。
+ */
 export function sideProofInputFromRaws(
   raws: Partial<Record<BookSource, RawOrder>>,
+  data?: OrderData,
 ): SideProofInput {
   const reportedSides = (Object.values(raws) as RawOrder[])
     .map((r) => r?.side)
     .filter((s): s is 'buy' | 'sell' => s === 'buy' || s === 'sell')
-  return { reportedSides }
+  return { reportedSides, signedSideValue: data?.side }
 }

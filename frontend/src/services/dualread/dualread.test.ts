@@ -59,6 +59,7 @@ function messageOf(d: OrderData) {
     timestamp: d.timestamp,
     expiresAt: d.expiresAt,
     nonce: d.nonce,
+    side: d.side,
   }
 }
 
@@ -174,9 +175,10 @@ describe('digest 重算（规范向量与公式）', () => {
       timestamp: 1700000000,
       expiresAt: 1700086400,
       nonce: 0,
+      side: 1,
     }
     expect(hashOrderWithDomain(domain, data)).toBe(
-      '0x6a3c557cec5b51cb843652a7a36b96bccc9eecc4eca030745110706cbfc8d2f1',
+      '0xd793d795036c2d1b548120e9e73ea43a608529b4a23f0d3254c263fde391cec0',
     )
   })
 
@@ -293,11 +295,11 @@ describe('状态机（mock 链上快照）', () => {
     expect(ev.lockState).toBe('released')
   })
 
-  it('无锁无墓碑 + 单源（公告栏先行）→ 观察 VALID/unlocked，但认证被 SIDE_UNPROVABLE 阻断', async () => {
-    // 第 34 轮口径判 VALID/unlocked；第 35 轮 D2 曾降为 UNKNOWN/
-    // SIDE_UNCORROBORATED；第 36 轮起口径分离：观察分类回到 VALID
-    // （状态机+签名+链上状态都通过），不可成交的原因单独记在
-    // tradableBlockers——当前协议方向不可证（protocol.ts）。
+  it('无锁无墓碑 + 单源（公告栏先行）→ VALID/unlocked；阶段 3 起签名方向可证 → 无阻断', async () => {
+    // 第 34 轮口径判 VALID/unlocked；第 36 轮起观察与认证分离，观察
+    // 判 VALID、认证因方向不可证恒被 SIDE_UNPROVABLE 阻断。阶段 3
+    // side 进签名后：本单签名方向（sell）经重构+验签证明成立，
+    // tradableBlockers 为空——无锁不再影响认证（落锁与认证本就无关）。
     const raw = await signedRaw()
     const cand = await prepareOne({ relay: raw })
     const ev = evaluateCandidate(
@@ -307,10 +309,10 @@ describe('状态机（mock 链上快照）', () => {
     expect(ev.validity).toBe('VALID')
     expect(ev.reasons).not.toContain('SIDE_UNCORROBORATED')
     expect(ev.lockState).toBe('unlocked')
-    expect(ev.tradableBlockers).toContain('SIDE_UNPROVABLE')
+    expect(ev.tradableBlockers).toEqual([])
   })
 
-  it('单源 + 锁仓义务方向与自报一致 → 观察 VALID；锁不再构成认证（第 36 轮 N1）', async () => {
+  it('单源 + 锁仓义务方向与自报一致 → VALID；认证来自签名证明而非锁（第 36 轮 N1 结论保留）', async () => {
     const raw = await signedRaw() // side=sell，夹具锁 tokenIn(base) → 派生 sell
     const cand = await prepareOne({ relay: raw })
     const ev = evaluateCandidate(
@@ -319,9 +321,9 @@ describe('状态机（mock 链上快照）', () => {
     )
     expect(ev.validity).toBe('VALID')
     expect(ev.lockState).toBe('locked')
-    // 锁仓方向由落锁调用者自填（lockForOrder 无许可），相符什么都不证明：
-    // 认证仍被 SIDE_UNPROVABLE 阻断，不进可成交集。
-    expect(ev.tradableBlockers).toContain('SIDE_UNPROVABLE')
+    // 阶段 3：认证由逐单签名方向证明给出（side 已签名），锁仓一致与否
+    // 都不参与认证——本例无阻断是因为证明成立，不是因为锁相符。
+    expect(ev.tradableBlockers).toEqual([])
   })
 
   it('签名伪造（他人私钥冒签）且链上验签未过 → INVALID/BAD_SIGNATURE', async () => {
@@ -362,23 +364,28 @@ describe('状态机（mock 链上快照）', () => {
     expect(ev.reasons).toContain('CHAIN_STATE_MISSING')
   })
 
-  it('状态冲突：同 digest 两源 side 不一致 → CONFLICT，剔出可成交集', async () => {
+  it('阶段 3：源改写 side（未重签）→ 改写副本自成候选且验签失败，真单不受影响', async () => {
+    // 旧协议下 side 未签名：改写副本与真单同 digest、靠 CONFLICT 剔除。
+    // 阶段 3 side 进签名：改写 side 重构出另一个 digest，自成候选，
+    // 本地验签必失败（签名绑的是原方向的消息），真单照常可成交。
     const nodeRaw = await signedRaw({ side: 'sell' })
-    const relayRaw = { ...nodeRaw, side: 'buy' as const } // side 未签名，可被源改写
+    const relayRaw = { ...nodeRaw, side: 'buy' as const }
     const prepared = await prepareCandidates(CHAIN, [
       book('node', [nodeRaw]),
-      book('relay', [{ ...relayRaw, side: 'buy' }]),
+      book('relay', [relayRaw]),
     ])
-    // relay 侧行 side=buy 会进 bids，但重构与 digest 不受 side 影响 → 同一候选
-    expect(prepared.candidates.length).toBe(1)
-    const cand = prepared.candidates[0]
+    expect(prepared.candidates.length).toBe(2)
     const snap = snapshot(new Map([[digestOf(nodeRaw), state()]]))
-    const ev = evaluateCandidate(cand, snap)
-    expect(ev.conflict).toBe(true)
-    expect(ev.validity).toBe('UNKNOWN')
     const view = mergeBooks(CHAIN, PAIR, prepared, snap)
-    expect(view.tradeable.length).toBe(0)
-    expect(view.all.length).toBe(1)
+    expect(view.all.length).toBe(2)
+    const good = view.all.find((o) => o.identity.digest === digestOf(nodeRaw))!
+    const bad = view.all.find((o) => o.identity.digest !== digestOf(nodeRaw))!
+    expect(good.validity).toBe('VALID')
+    expect(good.tradableBlockers).toEqual([])
+    expect(bad.validity).toBe('UNKNOWN')
+    expect(bad.reasons).toContain('SIGNATURE_UNPROVEN')
+    expect(view.tradeable.length).toBe(1)
+    expect(view.tradeable[0].orderId).toBe(nodeRaw.orderId)
   })
 
   it('软撤单：订单只在一源消失不推断撤销——仍按链上状态判 VALID', async () => {
@@ -448,34 +455,33 @@ describe('第 35 轮 D1：分页完整度进入状态机', () => {
   })
 })
 
-describe('第 36 轮 N1/N3：方向不可证过渡期（观察照常、认证关闭）', () => {
-  it('(a) 两源同写被改的 side、无锁 → 观察 VALID，但不可成交（SIDE_UNPROVABLE）', async () => {
-    // N3 场景：节点与中继同吃一份广播，两份副本一致地写着被改写的
-    // side——来源一致不是独立证据。第 35 轮口径下此单无锁时单源降级、
-    // 双源反而漏过；第 36 轮起观察如实判 VALID，认证一律关闭。
+describe('阶段 3：方向进签名后的 N1/N3 场景（篡改必露馅、证明逐单放行）', () => {
+  it('(a) 两源同写被改的 side → 改写改变 digest、验签失败 → UNKNOWN/SIGNATURE_UNPROVEN，不可成交', async () => {
+    // N3 场景的阶段 3 结局：旧协议下两源一致地改写 side 无痕（观察
+    // VALID、仅认证关闭）；side 进签名后，改写副本重构出的 digest 与
+    // 签名对不上，两源同写也救不回来——验签先行失败。
     const raw = await signedRaw({ side: 'sell' })
-    const flipped = { ...raw, side: 'buy' as const } // side 未签名：改写不改变 digest/验签
+    const flipped = { ...raw, side: 'buy' as const }
     const prepared = await prepareCandidates(CHAIN, [
       book('node', [flipped]),
       book('relay', [flipped]),
     ])
-    expect(prepared.candidates.length).toBe(1)
+    expect(prepared.candidates.length).toBe(1) // 两份改写副本彼此一致、同 digest
+    expect(prepared.candidates[0].anyLocalValid).toBe(false)
     const snap = snapshot(
-      new Map([[digestOf(raw), state({ lock: null, tombstone: null })]]),
+      new Map([[digestOf(flipped), state({ lock: null, tombstone: null })]]),
     )
     const ev = evaluateCandidate(prepared.candidates[0], snap)
-    expect(ev.conflict).toBe(false) // 两源彼此一致，冲突检查抓不到
-    expect(ev.validity).toBe('VALID')
-    expect(ev.reasons).not.toContain('SIDE_LOCK_MISMATCH') // 无锁可比，不编造旗标
-    expect(ev.tradableBlockers).toContain('SIDE_UNPROVABLE')
+    expect(ev.conflict).toBe(false) // 两源彼此一致，冲突检查抓不到——但验签抓得到
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SIGNATURE_UNPROVEN')
     expect(mergeBooks(CHAIN, PAIR, prepared, snap).tradeable.length).toBe(0)
   })
 
-  it('(b) 两源同写被改 side + 锁按调用者自选的反向义务落锁 → 仍不可成交', async () => {
-    // N1 场景：攻击者（或任何人）对他人订单调用无许可的 lockForOrder，
-    // 以 payWithTokenIn=false 按「买单义务」落锁（锁 tokenOut/quote），
-    // 与被改写的自报 side=buy 恰好相符。第 35 轮口径会把这当作方向
-    // 佐证放行；第 36 轮：相符什么都不证明，认证仍关。
+  it('(b) 改写 side + 伪造的「相符」落锁 → 签名门先行拦截，锁旗标不参与判定', async () => {
+    // N1 场景的阶段 3 结局：旧协议下攻击者可按自选方向落锁冒充方向
+    // 佐证；阶段 3 落锁方向由 Vault 从签名派生、伪造无从下手，且本单
+    // 在签名门就被拦下（链上无此 digest 的验签背书），到不了锁比对。
     const raw = await signedRaw({ side: 'sell' })
     const flipped = { ...raw, side: 'buy' as const }
     const prepared = await prepareCandidates(CHAIN, [
@@ -484,16 +490,16 @@ describe('第 36 轮 N1/N3：方向不可证过渡期（观察照常、认证关
     ])
     const buyObligationLock = { ...LOCK, token: PAIR_TOKENS.quote }
     const snap = snapshot(
-      new Map([[digestOf(raw), state({ lock: buyObligationLock })]]),
+      new Map([[digestOf(flipped), state({ lock: buyObligationLock })]]),
     )
     const ev = evaluateCandidate(prepared.candidates[0], snap)
-    expect(ev.validity).toBe('VALID')
-    expect(ev.reasons).not.toContain('SIDE_LOCK_MISMATCH') // 落锁义务与自报恰好相符
-    expect(ev.tradableBlockers).toContain('SIDE_UNPROVABLE')
+    expect(ev.validity).toBe('UNKNOWN')
+    expect(ev.reasons).toContain('SIGNATURE_UNPROVEN')
+    expect(ev.reasons).not.toContain('SIDE_LOCK_MISMATCH') // 签名门先行返回
     expect(mergeBooks(CHAIN, PAIR, prepared, snap).tradeable.length).toBe(0)
   })
 
-  it('(c) 两源一致的正常单（含共同声称 market）→ 观察全 VALID，认证全关', async () => {
+  it('(c) 两源一致的正常单（含共同声称 market）→ 观察全 VALID，逐单证明放行进可成交集', async () => {
     const plain = await signedRaw({ orderId: 'r36plain' })
     const mkt = await signedRaw({ orderId: 'r36mkt', execType: 'market' })
     const prepared = await prepareCandidates(CHAIN, [
@@ -508,46 +514,47 @@ describe('第 36 轮 N1/N3：方向不可证过渡期（观察照常、认证关
     )
     const view = mergeBooks(CHAIN, PAIR, prepared, snap)
     expect(view.all.every((o) => o.validity === 'VALID')).toBe(true)
-    expect(view.tradeable.length).toBe(0) // 过渡期可成交集按构造为空
-    expect(
-      view.all.every((o) => o.tradableBlockers.includes('SIDE_UNPROVABLE')),
-    ).toBe(true)
+    expect(view.tradeable.length).toBe(2) // 阶段 3：证明成立即放行
+    expect(view.all.every((o) => o.tradableBlockers.length === 0)).toBe(true)
   })
 
-  it('(d) 仅节点携带被改写的 side（落锁义务 sell、节点写 buy）→ 观察旗标 SIDE_LOCK_MISMATCH，validity 不动', async () => {
-    const raw = await signedRaw({ side: 'sell' })
-    const flipped = { ...raw, side: 'buy' as const }
-    const prepared = await prepareCandidates(CHAIN, [book('node', [flipped])])
-    expect(prepared.candidates.length).toBe(1)
-    const snap = snapshot(new Map([[digestOf(raw), state()]]))
-    const ev = evaluateCandidate(prepared.candidates[0], snap)
-    expect(ev.validity).toBe('VALID') // 旗标只是观察信号，不再降级
-    expect(ev.reasons).toContain('SIDE_LOCK_MISMATCH')
-    expect(mergeBooks(CHAIN, PAIR, prepared, snap).tradeable.length).toBe(0)
-  })
-
-  it('(d) 仅公告栏携带被改写的 side → 同样只记观察旗标', async () => {
-    const raw = await signedRaw({ side: 'sell' })
-    const flipped = { ...raw, side: 'buy' as const }
-    const prepared = await prepareCandidates(CHAIN, [book('relay', [flipped])])
-    const snap = snapshot(new Map([[digestOf(raw), state()]]))
-    const ev = evaluateCandidate(prepared.candidates[0], snap)
+  it('(d) 签名方向与链上落锁代币不符（快照/簿不一致）→ 观察旗标 SIDE_LOCK_MISMATCH，validity 与认证不动', async () => {
+    // 阶段 3 后锁由 Vault 从签名 side 派生，真实世界里此旗标只可能
+    // 来自链上快照过期或簿数据不一致；夹具直接构造不一致快照验证
+    // 旗标语义不变：只记观察信号，不降级、不阻断（认证只认签名证明）。
+    const raw = await signedRaw({ side: 'sell' }) // 签名 sell → 付款侧 tokenIn(base)
+    const cand = await prepareOne({ node: raw })
+    const snap = snapshot(
+      new Map([[digestOf(raw), state({ lock: { ...LOCK, token: PAIR_TOKENS.quote } })]]),
+    )
+    const ev = evaluateCandidate(cand, snap)
     expect(ev.validity).toBe('VALID')
     expect(ev.reasons).toContain('SIDE_LOCK_MISMATCH')
-    expect(mergeBooks(CHAIN, PAIR, prepared, snap).tradeable.length).toBe(0)
+    expect(ev.tradableBlockers).toEqual([])
+    expect(mergeBooks(CHAIN, PAIR, { candidates: [cand], unbuildable: [] }, snap).tradeable.length).toBe(1)
   })
 
-  it('(d) 两源同写被改的 side、落锁义务为 sell → 旗标仍出现（冲突检查抓不到、旗标抓得到）', async () => {
+  it('(d) 公告栏单源 + 落锁不符 → 同样只记观察旗标', async () => {
     const raw = await signedRaw({ side: 'sell' })
-    const flipped = { ...raw, side: 'buy' as const }
+    const cand = await prepareOne({ relay: raw })
+    const snap = snapshot(
+      new Map([[digestOf(raw), state({ lock: { ...LOCK, token: PAIR_TOKENS.quote } })]]),
+    )
+    const ev = evaluateCandidate(cand, snap)
+    expect(ev.validity).toBe('VALID')
+    expect(ev.reasons).toContain('SIDE_LOCK_MISMATCH')
+  })
+
+  it('(d) 两源同单 + 落锁不符 → 旗标出现且 conflict=false（冲突检查与旗标各管一摊）', async () => {
+    const raw = await signedRaw({ side: 'sell' })
     const prepared = await prepareCandidates(CHAIN, [
-      book('node', [flipped]),
-      book('relay', [flipped]),
+      book('node', [raw]),
+      book('relay', [raw]),
     ])
     expect(prepared.candidates.length).toBe(1)
     const ev = evaluateCandidate(
       prepared.candidates[0],
-      snapshot(new Map([[digestOf(raw), state()]])),
+      snapshot(new Map([[digestOf(raw), state({ lock: { ...LOCK, token: PAIR_TOKENS.quote } })]])),
     )
     expect(ev.conflict).toBe(false)
     expect(ev.validity).toBe('VALID')
@@ -563,7 +570,7 @@ describe('第 36 轮 N1/N3：方向不可证过渡期（观察照常、认证关
     )
     expect(ev.validity).toBe('VALID')
     expect(ev.reasons).not.toContain('EXEC_TYPE_UNPROVEN')
-    expect(ev.tradableBlockers).toContain('SIDE_UNPROVABLE')
+    expect(ev.tradableBlockers).toEqual([]) // 阶段 3：方向证明成立
   })
 
   it('execType 一源写 limit、一源不写 → 同为缺省语义，不算冲突', async () => {
@@ -819,9 +826,11 @@ describe('影子指标口径', () => {
     const aNode = { ...a, filled: (30n * E18).toString(), status: 'partial' }
     // B: 仅节点有，源自报 open 但链上已全成交 → 朴素误判
     const b = await signedRaw({ orderId: 'mB' })
-    // C: 两源共同但 side 冲突
+    // C: 两源共同但未签名字段冲突。阶段 3 起 side 已进签名（改写 side
+    // 会自成候选、不再同单冲突），冲突场景改由 execType 承载——语义
+    // 不变：同 digest、两源对未签名字段说法不一 → CONFLICT。
     const c = await signedRaw({ orderId: 'mC', side: 'sell' })
-    const cRelay = { ...c, side: 'buy' as const }
+    const cRelay = { ...c, execType: 'market' }
     const prepared = await prepareCandidates(CHAIN, [
       book('node', [aNode, b, c]),
       book('relay', [aRelay, cRelay]),
@@ -931,9 +940,10 @@ describe('编排与故障恢复', () => {
     const r1 = await runDualReadRound(base, CHAIN, [PAIR])
     expect(r1.errors.relay).toContain('relay down')
     expect(r1.metrics?.availability.relay).toEqual({ num: 0, den: 1, rate: 0 })
-    // 节点单观察评估照常 VALID；可成交认证在过渡期关闭（SIDE_UNPROVABLE）
+    // 节点单观察评估照常 VALID；阶段 3 起逐单证明成立即进可成交集
+    // （公告栏故障不影响已证明订单的认证）
     expect(r1.views[0].all[0].validity).toBe('VALID')
-    expect(r1.views[0].tradeable.length).toBe(0)
+    expect(r1.views[0].tradeable.length).toBe(1)
 
     const base2 = depsWith({ rows: [raw] })
     base2.observer = observer
@@ -952,15 +962,22 @@ describe('编排与故障恢复', () => {
   })
 })
 
-describe('第 37 轮：逐单方向证明门禁（能力声明不再是唯一开关）', () => {
-  const FUTURE_TYPES = {
-    Order: [
-      ...ORDER_TYPES.Order,
-      { name: 'side', type: 'string' },
-    ],
+describe('逐单方向证明门禁（第 37 轮建立，阶段 3 定版）', () => {
+  // 旧协议类型集夹具：阶段 3 之前的 Order 结构（无 side 成员）。
+  // 锁死回归：仅有能力声明、没有签名方向成员时证明恒不成立。
+  const LEGACY_TYPES = {
+    Order: ORDER_TYPES.Order.filter((f) => f.name !== 'side'),
   }
 
-  it('(a) 能力被强制为 true、无逐单证明 → 仍带 SIDE_UNPROVABLE、可成交集仍空', async () => {
+  it('(a) 旧协议类型集（无 side 成员）→ 证明恒不成立，能力声明单独改 true 也放行不了', async () => {
+    expect(
+      orderSideProof({
+        reportedSides: ['sell'],
+        types: LEGACY_TYPES,
+        signedSideValue: 1,
+      }),
+    ).toBe(false)
+    // 端到端：强制能力为 true 但注入旧类型集证明输入 → 仍阻断
     const raw = await signedRaw({ orderId: 'r37a' })
     const prepared = await prepareCandidates(CHAIN, [
       book('node', [raw]),
@@ -969,42 +986,102 @@ describe('第 37 轮：逐单方向证明门禁（能力声明不再是唯一开
     const snap = snapshot(new Map([[digestOf(raw), state()]]))
     const ev = evaluateCandidate(prepared.candidates[0], snap, {
       sideProofAvailable: true,
+      sideProofInput: {
+        reportedSides: ['sell'],
+        types: LEGACY_TYPES,
+        signedSideValue: 1,
+      },
     })
     expect(ev.validity).toBe('VALID')
     expect(ev.tradableBlockers).toContain('SIDE_UNPROVABLE')
-    // orderSideProof 对现行类型集恒 false（无方向成员）
-    expect(orderSideProof({ reportedSides: ['buy'] })).toBe(false)
   })
 
-  it('(b) 未来类型集声明 side 成员且签名值与自报相符 → 证明在单元级通过', () => {
+  it('(b) 现行类型集（含 side 成员）+ 签名值与自报相符 → 证明成立', () => {
     expect(
-      orderSideProof({
-        reportedSides: ['buy'],
-        types: FUTURE_TYPES,
-        signedSideValue: 'buy',
-      }),
+      orderSideProof({ reportedSides: ['sell'], signedSideValue: 1 }),
+    ).toBe(true)
+    expect(
+      orderSideProof({ reportedSides: ['buy'], signedSideValue: 0 }),
+    ).toBe(true)
+    // 字符串别名形态兼容
+    expect(
+      orderSideProof({ reportedSides: ['sell'], signedSideValue: '1' }),
     ).toBe(true)
   })
 
-  it('(c) 方向成员在场但签名值与自报不符 → 证明不成立', () => {
+  it('(c) 签名值与自报不符 / 任一副本不符 / 无签名值 → 证明不成立', () => {
     expect(
-      orderSideProof({
-        reportedSides: ['buy'],
-        types: FUTURE_TYPES,
-        signedSideValue: 'sell',
-      }),
+      orderSideProof({ reportedSides: ['buy'], signedSideValue: 1 }),
     ).toBe(false)
-    // 任一副本自报与签名值不符同样不成立
     expect(
-      orderSideProof({
-        reportedSides: ['buy', 'sell'],
-        types: FUTURE_TYPES,
-        signedSideValue: 'buy',
-      }),
+      orderSideProof({ reportedSides: ['buy', 'sell'], signedSideValue: 0 }),
     ).toBe(false)
-    // 有成员但无签名值 → 不成立
+    expect(orderSideProof({ reportedSides: ['buy'] })).toBe(false)
     expect(
-      orderSideProof({ reportedSides: ['buy'], types: FUTURE_TYPES }),
+      orderSideProof({ reportedSides: [], signedSideValue: 0 }),
     ).toBe(false)
+  })
+
+  it('(d) 能力声明被关（opts 强制 false）→ 证明成立也仍阻断（双条件缺一不可）', async () => {
+    const raw = await signedRaw({ orderId: 'r37d' })
+    const cand = await prepareOne({ node: raw })
+    const snap = snapshot(new Map([[digestOf(raw), state()]]))
+    const ev = evaluateCandidate(cand, snap, { sideProofAvailable: false })
+    expect(ev.validity).toBe('VALID')
+    expect(ev.tradableBlockers).toContain('SIDE_UNPROVABLE')
+  })
+
+  it('(e) 缺省路径（生产常量）：签名订单逐单证明成立 → 无阻断、进可成交集', async () => {
+    const raw = await signedRaw({ orderId: 'r37e' })
+    const prepared = await prepareCandidates(CHAIN, [
+      book('node', [raw]),
+      book('relay', [raw]),
+    ])
+    const snap = snapshot(new Map([[digestOf(raw), state()]]))
+    const view = mergeBooks(CHAIN, PAIR, prepared, snap)
+    expect(view.tradeable.length).toBe(1)
+    expect(view.tradeable[0].tradableBlockers).toEqual([])
+  })
+})
+
+describe('第 40 轮复审骑乘（阶段 3 并入）：负零口径与顶层数组拒绝', () => {
+  const baseRow = {
+    orderId: 'r40x',
+    trader: TRADER,
+    pair: PAIR,
+    side: 'buy',
+    price: '2000000000000000000000',
+    filled: '0',
+    status: 'open',
+    nonce: 0,
+    createdAt: 1700000000,
+    expiresAt: 1700086400,
+    signature: '0xabc',
+  }
+
+  it('负零：数字 -0 与字符串 "-0" 两路同口径输出 "0"', () => {
+    expect(toRawOrder({ ...baseRow, amount: -0 })!.amount).toBe('0')
+    expect(toRawOrder({ ...baseRow, amount: '-0' })!.amount).toBe('0')
+  })
+
+  it('负零：定点分支 "-0.000…" 整数部分同样规范化为 "0"；"-0.5" 仍拒绝', () => {
+    expect(
+      toRawOrder({ ...baseRow, amount: '-0.000000000000000000' })!.amount,
+    ).toBe('0')
+    expect(toRawOrder({ ...baseRow, amount: '-0.5' })).toBeNull()
+  })
+
+  it('顶层数组响应 → 节点/中继适配器均抛错按源错误处理（不静默当空簿）', async () => {
+    const nodeAdapter = createNodeBookAdapter(async () => ({
+      data: [] as never,
+      baseUrl: 'http://node.example',
+    }))
+    await expect(nodeAdapter.fetchBook(CHAIN, PAIR)).rejects.toThrow(/top-level array/)
+    const relayAdapter = createRelayBookAdapter('https://relay.example', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => [],
+    }))
+    await expect(relayAdapter.fetchBook(CHAIN, PAIR)).rejects.toThrow(/top-level array/)
   })
 })

@@ -6,7 +6,9 @@
  * 字段重构口径与节点（node/internal/orderbook.BuildSignedOrder）、中继
  * （relay/src/orders.ts 的 buildSignedOrder）三方一致：
  * - tokenIn/tokenOut 恒为交易对 (Token0, Token1)，与买卖方向无关（方向由
- *   未签名的 side 字段表达，见 docs/eip712-order-spec.md §2/§4）；
+ *   签名字段 side 表达——阶段 3 起 side 进入 EIP-712 结构，源行自报 side
+ *   参与重构：自报与签名不符的行重构出的 digest 对不上、验签必失败，
+ *   见 docs/eip712-order-spec.md §2/§4）；
  * - amountOut 按第 29 轮规范整数公式 amountIn × price / 1e18 重算
  *   （源行里的 amountOut 字段一律不采信，防舍入漂移/伪造）；
  * - timestamp = createdAt；expiresAt 为 0/缺失时按默认 7 天推导
@@ -19,6 +21,7 @@ import { ethers } from 'ethers'
 import {
   ORDER_TYPES,
   getEIP712Domain,
+  sideToSignedValue,
   type OrderData,
 } from '../orderSigningTypes'
 import { getPairTokens } from '../../config/pairs'
@@ -66,6 +69,7 @@ export function buildSignedOrderData(raw: RawOrder, chainId: number): OrderData 
     timestamp: createdAt,
     expiresAt,
     nonce: Number(raw.nonce) || 0,
+    side: sideToSignedValue(raw.side),
   }
 }
 
@@ -89,6 +93,7 @@ export function hashOrderWithDomain(
     timestamp: data.timestamp,
     expiresAt: data.expiresAt,
     nonce: data.nonce,
+    side: data.side,
   }
   return ethers.TypedDataEncoder.hash(
     domain as ethers.TypedDataDomain,

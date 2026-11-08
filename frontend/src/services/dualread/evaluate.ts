@@ -37,6 +37,16 @@
  *   （protocol.ts 的 SIDE_PROOF_AVAILABLE=false），每单恒带
  *   SIDE_UNPROVABLE 阻断，可成交集按构造为空——观察照常全量运行，
  *   只是不再认证任何订单可成交，直到协议升级轮把方向纳入签名。
+ *
+ * 阶段 3 修订（Route A 落地）：side 已进入 EIP-712 签名结构——重构
+ * （digest.ts）把源行自报 side 写进签名消息，digest 与本地验签随之
+ * 绑定方向：自报被篡改的副本重构出不同 digest、成为独立候选且验签
+ * 失败，不再与真单同候选。SIDE_PROOF_AVAILABLE=true（protocol.ts），
+ * 逐单证明（sideProof.ts）对验签通过的候选给出签名方向并与全部副本
+ * 自报核对，过渡期恒空的可成交集自此按逐单证据开合。锁仓方向观察
+ * 旗标保留：阶段 3 后锁由 Vault 从签名 side 派生，SIDE_LOCK_MISMATCH
+ * 只可能源于链上快照与簿数据不一致，仍只记旗标、不作认证依据
+ * （认证只认签名证明）。
  */
 import { getChainConfig } from '../../config/chains'
 import { type OrderData } from '../orderSigningTypes'
@@ -176,7 +186,12 @@ export function normalizeExecType(x?: string): string {
   return v === '' || v === 'limit' ? 'limit' : v
 }
 
-/** 未签名业务字段冲突判定（side/pair/execType——这些字段不进 EIP-712 签名） */
+/**
+ * 未签名业务字段冲突判定（pair/execType 不进 EIP-712 签名；side 自
+ * 阶段 3 起已进签名——同候选的两副本 side 必然相同（不同 side 重构出
+ * 不同 digest、根本不会同候选），此处的 side 比较只作防御性冗余，
+ * 保留以防未来重构口径变化时静默放行）。
+ */
 export function unsignedFieldConflict(c: PreparedCandidate): boolean {
   const n = c.raws.node
   const r = c.raws.relay
@@ -188,16 +203,17 @@ export function unsignedFieldConflict(c: PreparedCandidate): boolean {
 }
 
 /**
- * 从 Vault 链上锁仓代币派生「落锁义务方向」——第 36 轮起仅作观察提示，
- * 绝不是方向证据，更不是认证依据。
+ * 从 Vault 链上锁仓代币派生「落锁义务方向」——仅作观察提示，不作
+ * 认证依据（认证只认 sideProof 的签名证明）。
  *
  * 第 35 轮曾把它当作方向的权威链上证据，第 35 轮推送后复审（N1）证伪：
- * Vault.lockForOrder(order, signature, payWithTokenIn) 的方向参数由
- * 调用者自填、函数无许可（第 30 轮 L2），任何人可按任一方向义务对
- * 他人订单落锁且先到先得——锁定代币只证明「有人这样落了锁」。
- * 本函数保留的唯一用途：落锁义务方向与来源自报方向不符时记观察旗标
- * SIDE_LOCK_MISMATCH（数据不一致信号，进一致率口径）；相符时什么也
- * 不证明，不得据此把订单推向可成交。
+ * 旧 Vault.lockForOrder 的方向参数由调用者自填、函数无许可，锁定代币
+ * 只证明「有人这样落了锁」。阶段 3 后落锁方向已改为 Vault 从签名
+ * side 派生（方向参数删除）：锁按 digest 键入、代币必等于签名方向的
+ * 付款侧。本函数保留的用途不变：落锁义务方向与来源自报方向不符时记
+ * 观察旗标 SIDE_LOCK_MISMATCH——阶段 3 后不符只可能来自链上快照过期
+ * 或簿数据不一致，仍是数据一致性信号，进一致率口径；相符也不单独
+ * 把任何订单推向可成交（放行只走逐单签名证明）。
  */
 export function deriveSideFromLock(
   data: OrderData,
@@ -295,7 +311,7 @@ export function evaluateCandidate(
     // 起证明恒按现行类型集判定——ORDER_TYPES 无方向成员 ⇒ 证明对任何
     // 现行订单恒不成立 ⇒ 阻断恒在，与常量取值无关。
     const capable = opts?.sideProofAvailable ?? SIDE_PROOF_AVAILABLE
-    const proof = orderSideProof(opts?.sideProofInput ?? sideProofInputFromRaws(c.raws))
+    const proof = orderSideProof(opts?.sideProofInput ?? sideProofInputFromRaws(c.raws, c.data))
     merged.tradableBlockers = capable && proof ? [] : [SIDE_UNPROVABLE]
     if (merged.validity === 'VALID') {
       // D1 上限：仅不完整来源证明、或未签名字段冲突时，「有效」结论

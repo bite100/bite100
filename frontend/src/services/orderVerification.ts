@@ -26,6 +26,7 @@ function toMessage(orderData: OrderData) {
     timestamp: orderData.timestamp,
     expiresAt: orderData.expiresAt,
     nonce: orderData.nonce ?? 0,
+    side: orderData.side ?? 0,
   }
 }
 

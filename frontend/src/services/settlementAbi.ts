@@ -90,6 +90,11 @@ export const SETTLEMENT_ABI = [
                     "name": "nonce",
                     "type": "uint256",
                     "internalType": "uint256"
+                  },
+                  {
+                    "name": "side",
+                    "type": "uint8",
+                    "internalType": "uint8"
                   }
                 ]
               },
@@ -159,6 +164,11 @@ export const SETTLEMENT_ABI = [
                     "name": "nonce",
                     "type": "uint256",
                     "internalType": "uint256"
+                  },
+                  {
+                    "name": "side",
+                    "type": "uint8",
+                    "internalType": "uint8"
                   }
                 ]
               },
@@ -273,6 +283,11 @@ export const SETTLEMENT_ABI = [
                     "name": "nonce",
                     "type": "uint256",
                     "internalType": "uint256"
+                  },
+                  {
+                    "name": "side",
+                    "type": "uint8",
+                    "internalType": "uint8"
                   }
                 ]
               },
@@ -342,6 +357,11 @@ export const SETTLEMENT_ABI = [
                     "name": "nonce",
                     "type": "uint256",
                     "internalType": "uint256"
+                  },
+                  {
+                    "name": "side",
+                    "type": "uint8",
+                    "internalType": "uint8"
                   }
                 ]
               },
@@ -456,6 +476,11 @@ export const SETTLEMENT_ABI = [
                     "name": "nonce",
                     "type": "uint256",
                     "internalType": "uint256"
+                  },
+                  {
+                    "name": "side",
+                    "type": "uint8",
+                    "internalType": "uint8"
                   }
                 ]
               },
@@ -525,6 +550,11 @@ export const SETTLEMENT_ABI = [
                     "name": "nonce",
                     "type": "uint256",
                     "internalType": "uint256"
+                  },
+                  {
+                    "name": "side",
+                    "type": "uint8",
+                    "internalType": "uint8"
                   }
                 ]
               },
@@ -654,6 +684,11 @@ export const SETTLEMENT_ABI = [
                     "name": "nonce",
                     "type": "uint256",
                     "internalType": "uint256"
+                  },
+                  {
+                    "name": "side",
+                    "type": "uint8",
+                    "internalType": "uint8"
                   }
                 ]
               },
@@ -723,6 +758,11 @@ export const SETTLEMENT_ABI = [
                     "name": "nonce",
                     "type": "uint256",
                     "internalType": "uint256"
+                  },
+                  {
+                    "name": "side",
+                    "type": "uint8",
+                    "internalType": "uint8"
                   }
                 ]
               },
