@@ -1,5 +1,7 @@
 # P2P 节点 - 无需单独安装 Go
-FROM golang:1.24-alpine AS builder
+# builder 的 Go 版本必须 >= go.mod 的 go 指令（当前 1.26.8）；版本漂移由
+# node-tests.yml 的 docker-build job 兜底检查（第 32 轮起）。
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

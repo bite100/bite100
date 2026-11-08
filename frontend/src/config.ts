@@ -72,12 +72,17 @@ export const ERC20_ABI = [
 
 export const GOVERNANCE_ABI = [
   'function proposalCount() view returns (uint256)',
-  'function getProposal(uint256 proposalId) view returns (address target, bytes memory callData, uint256 activeCount, uint256 createdAt, uint256 votingEndsAt, uint256 yesCount, uint256 noCount, bool executed)',
+  // 第 32 轮对齐：合约 getProposal 返回 9 字段，executableAt 在 executed 之前；
+  // 旧手工 ABI 缺 executableAt，executableAt 时间戳会被解码成 executed。
+  'function getProposal(uint256 proposalId) view returns (address target, bytes memory callData, uint256 activeCount, uint256 createdAt, uint256 votingEndsAt, uint256 yesCount, uint256 noCount, uint256 executableAt, bool executed)',
+  // 第 32 轮补齐：治理页多步提案回退读取一直调用此函数，但旧 ABI 缺失，
+  // 调用恒抛错、多步提案永远显示不出来。字段顺序与合约 10 字段返回一致。
+  'function getMultiStepProposal(uint256 proposalId) view returns (address[] memory targets, bytes[] memory callDataArray, bytes32 merkleRoot, uint256 activeCount, uint256 createdAt, uint256 votingEndsAt, uint256 yesCount, uint256 noCount, uint256 executableAt, bool executed)',
   'function createProposal(address target, bytes calldata callData, bytes32 merkleRoot, uint256 activeCount) returns (uint256)',
   'function vote(uint256 proposalId, bool support, bytes32[] calldata proof)',
   'function execute(uint256 proposalId)',
-  'event ProposalCreated(uint256 indexed proposalId, address target, uint256 activeCount)',
-  'event Voted(uint256 indexed proposalId, address indexed voter, bool support)',
+  'event ProposalCreated(uint256 indexed proposalId, address indexed target, uint256 activeCount)',
+  'event Voted(uint256 indexed proposalId, address indexed voter, bool support, uint256 weight)',
   'event ProposalExecuted(uint256 indexed proposalId)',
 ] as const
 

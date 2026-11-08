@@ -152,8 +152,17 @@ func main() {
 		time.Sleep(2 * time.Second) // 留时间让并行连接完成
 	}
 
+	// 2.5 DHT：启动 Kademlia DHT 并作为 GossipSub 的发现层（第 32 轮接上；
+	// 此前 StartDHT 从未被调用，节点实际只有直连互通）。启动失败不致命：
+	// 记录后以无 DHT 发现模式继续运行（-connect/bootstrap 直连仍可用）。
+	kad, derr := p2p.StartDHT(ctx, h, cfg.Network.Bootstrap)
+	if derr != nil {
+		log.Printf("DHT 启动失败（继续以无 DHT 发现模式运行）: %v", derr)
+		kad = nil
+	}
+
 	// 3. GossipSub
-	ps, err := p2p.NewGossipSub(ctx, h)
+	ps, err := p2p.NewGossipSub(ctx, h, kad)
 	if err != nil {
 		exitFatalf("GossipSub: %v", err)
 	}
