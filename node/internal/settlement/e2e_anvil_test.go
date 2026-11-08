@@ -264,12 +264,12 @@ func TestAnvilE2E(t *testing.T) {
 		t.Logf("settle without lock correctly failed: %v", err)
 	}
 	// 部署脚本已把 locker 设为部署者（owner）；节点驱动落锁：maker 卖、taker 买
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, trade.MakerOrder, "sell"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, trade.MakerOrder); err != nil {
 		t.Fatalf("LockOrder(maker): %v", err)
 	} else {
 		t.Logf("maker locked tx=%s", tx)
 	}
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, trade.TakerOrder, "buy"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, trade.TakerOrder); err != nil {
 		t.Fatalf("LockOrder(taker): %v", err)
 	} else {
 		t.Logf("taker locked tx=%s", tx)
@@ -496,20 +496,20 @@ func TestAnvilVaultERC1271Settles(t *testing.T) {
 	tSell.Signature = sigT
 
 	// 落锁：金库买（锁 USDT）+ taker 卖（锁 BTC）
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, vBuy, "buy"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, vBuy); err != nil {
 		t.Fatalf("LockOrder(vault buy): %v", err)
 	} else {
 		t.Logf("vault buy locked tx=%s", tx)
 	}
 	// 幂等：同一订单再次落锁不得发交易，直接成功
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, vBuy, "buy"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, vBuy); err != nil {
 		t.Fatalf("LockOrder(vault buy) retry: %v", err)
 	} else if tx != "" {
 		t.Fatalf("idempotent LockOrder must not send a tx, got %s", tx)
 	} else {
 		t.Logf("LockOrder idempotency verified: retry returned success with no tx")
 	}
-	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, tSell, "sell"); err != nil {
+	if _, tx, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, tSell); err != nil {
 		t.Fatalf("LockOrder(taker sell): %v", err)
 	} else {
 		t.Logf("taker sell locked tx=%s", tx)

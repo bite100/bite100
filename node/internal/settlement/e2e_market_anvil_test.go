@@ -181,11 +181,11 @@ func TestAnvilMarketOrderE2E(t *testing.T) {
 
 	// 落锁：maker 卖单各锁 50 TKA；taker 按保护价锁 80 × 2.2 = 176 TKB
 	for _, o := range []*storage.Order{ask1, ask2} {
-		if _, _, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, match.BuildSignedOrder(o, &pairTokens), "sell"); err != nil {
+		if _, _, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, match.BuildSignedOrder(o, &pairTokens)); err != nil {
 			t.Fatalf("LockOrder(%s): %v", o.OrderID, err)
 		}
 	}
-	if _, _, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, takerSO, "buy"); err != nil {
+	if _, _, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, takerSO); err != nil {
 		t.Fatalf("LockOrder(taker market): %v", err)
 	}
 	_, lockedT, _, err := VaultBalances(ctx, client, vaultAddr.Hex(), taker, tokenBAddr)
@@ -282,11 +282,11 @@ func TestAnvilMarketOrderE2E(t *testing.T) {
 	if !eng.AddOrder(ask3) {
 		t.Fatal("AddOrder(ask3) rejected")
 	}
-	if _, _, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, match.BuildSignedOrder(ask3, &pairTokens), "sell"); err != nil {
+	if _, _, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, match.BuildSignedOrder(ask3, &pairTokens)); err != nil {
 		t.Fatalf("LockOrder(ask3): %v", err)
 	}
 	// taker 按保护价 2.05 锁 10 × 2.05 = 20.5 TKB（可用 37 足够）
-	if _, _, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, takerSO2, "buy"); err != nil {
+	if _, _, err := LockOrder(ctx, rpc, vaultAddr.Hex(), settlementAddr.Hex(), anvilOwnerKeyHex, takerSO2); err != nil {
 		t.Fatalf("LockOrder(taker market 2): %v", err)
 	}
 	exec2 := eng.ExecuteMarketOrder(mktBuy2)

@@ -4,8 +4,10 @@ package settlement
 //
 // 节点在订单被接受进订单簿时驱动 Vault 落锁：先按订单方向算义务
 // （卖方 = tokenIn × amountIn；买方 = tokenOut × amountOut——签名订单是
-// 交易对朝向的，方向只在订单簿 Side 字段里），校验可用余额
-// （balanceOf − locked）后以 locker 身份调用 Vault.lockForOrder；
+// 交易对朝向的；阶段 3 起方向即签名订单的 side 字段本身，义务与落锁
+// 方向都只从 SignedOrder.Side 派生，Vault.lockForOrder 已删除调用者
+// 方向参数 payWithTokenIn，见 docs/eip712-order-spec.md §2/§4），校验
+// 可用余额（balanceOf − locked）后以 locker 身份调用 Vault.lockForOrder；
 // Vault 验签并从订单本身派生锁定量，节点无法虚增。撤单时按订单摘要
 // 释放剩余锁定；成交的锁定消耗由 Settlement 结算时在链上完成，节点
 // 不参与。过期订单的剩余锁定任何人可释放（Vault.releaseExpiredOrderLock），
@@ -33,7 +35,7 @@ import (
 )
 
 const vaultLockABIJSON = `[
-  {"inputs":[{"components":[{"internalType":"string","name":"orderId","type":"string"},{"internalType":"address","name":"userAddress","type":"address"},{"internalType":"address","name":"tokenIn","type":"address"},{"internalType":"address","name":"tokenOut","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"uint256","name":"price","type":"uint256"},{"internalType":"uint256","name":"timestamp","type":"uint256"},{"internalType":"uint256","name":"expiresAt","type":"uint256"},{"internalType":"uint256","name":"nonce","type":"uint256"}],"internalType":"struct IVaultOrder","name":"order","type":"tuple"},{"internalType":"bytes","name":"signature","type":"bytes"},{"internalType":"bool","name":"payWithTokenIn","type":"bool"}],"name":"lockForOrder","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"stateMutability":"nonpayable","type":"function"},
+  {"inputs":[{"components":[{"internalType":"string","name":"orderId","type":"string"},{"internalType":"address","name":"userAddress","type":"address"},{"internalType":"address","name":"tokenIn","type":"address"},{"internalType":"address","name":"tokenOut","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"uint256","name":"price","type":"uint256"},{"internalType":"uint256","name":"timestamp","type":"uint256"},{"internalType":"uint256","name":"expiresAt","type":"uint256"},{"internalType":"uint256","name":"nonce","type":"uint256"},{"internalType":"uint8","name":"side","type":"uint8"}],"internalType":"struct IVaultOrder","name":"order","type":"tuple"},{"internalType":"bytes","name":"signature","type":"bytes"}],"name":"lockForOrder","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"stateMutability":"nonpayable","type":"function"},
   {"inputs":[{"internalType":"bytes32","name":"digest","type":"bytes32"}],"name":"releaseOrderLock","outputs":[],"stateMutability":"nonpayable","type":"function"},
   {"inputs":[{"internalType":"address","name":"user","type":"address"},{"internalType":"address","name":"token","type":"address"}],"name":"locked","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
   {"inputs":[{"internalType":"address","name":"user","type":"address"},{"internalType":"address","name":"token","type":"address"}],"name":"availableBalance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},
@@ -42,7 +44,7 @@ const vaultLockABIJSON = `[
 ]`
 
 const settlementDigestABIJSON = `[
-  {"inputs":[{"components":[{"internalType":"string","name":"orderId","type":"string"},{"internalType":"address","name":"userAddress","type":"address"},{"internalType":"address","name":"tokenIn","type":"address"},{"internalType":"address","name":"tokenOut","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"uint256","name":"price","type":"uint256"},{"internalType":"uint256","name":"timestamp","type":"uint256"},{"internalType":"uint256","name":"expiresAt","type":"uint256"},{"internalType":"uint256","name":"nonce","type":"uint256"}],"internalType":"struct IOrderDigest","name":"order","type":"tuple"}],"name":"orderDigest","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"stateMutability":"pure","type":"function"}
+  {"inputs":[{"components":[{"internalType":"string","name":"orderId","type":"string"},{"internalType":"address","name":"userAddress","type":"address"},{"internalType":"address","name":"tokenIn","type":"address"},{"internalType":"address","name":"tokenOut","type":"address"},{"internalType":"uint256","name":"amountIn","type":"uint256"},{"internalType":"uint256","name":"amountOut","type":"uint256"},{"internalType":"uint256","name":"price","type":"uint256"},{"internalType":"uint256","name":"timestamp","type":"uint256"},{"internalType":"uint256","name":"expiresAt","type":"uint256"},{"internalType":"uint256","name":"nonce","type":"uint256"},{"internalType":"uint8","name":"side","type":"uint8"}],"internalType":"struct IOrderDigest","name":"order","type":"tuple"}],"name":"orderDigest","outputs":[{"internalType":"bytes32","name":"","type":"bytes32"}],"stateMutability":"pure","type":"function"}
 ]`
 
 var (
@@ -63,26 +65,30 @@ func init() {
 }
 
 // ObligationForOrder 按订单方向返回付款义务（token, amount, payWithTokenIn）。
-// side 取订单簿方向："sell" 付 tokenIn、"buy" 付 tokenOut。
-func ObligationForOrder(so *storage.SignedOrder, side string) (common.Address, *big.Int, bool, error) {
+// 方向只从签名订单的 side 字段派生（阶段 3：side 已进 EIP-712 签名，不再
+// 接受调用方自报方向）：1=sell 付 tokenIn、0=buy 付 tokenOut；非法 side
+// fail-closed 报错。返回的 payWithTokenIn 同样由 side 派生（sell→true），
+// 仅供调用方/测试核对，不再作为 Vault.lockForOrder 的入参（合约已删除该
+// 参数、自行从 order.side 派生）。
+func ObligationForOrder(so *storage.SignedOrder) (common.Address, *big.Int, bool, error) {
 	if so == nil {
 		return common.Address{}, nil, false, fmt.Errorf("signed order is nil")
 	}
-	switch side {
-	case "sell":
+	switch so.Side {
+	case 1: // sell
 		amt, ok := new(big.Int).SetString(so.AmountIn, 10)
 		if !ok {
 			return common.Address{}, nil, false, fmt.Errorf("bad amountIn %q", so.AmountIn)
 		}
 		return common.HexToAddress(so.TokenIn), amt, true, nil
-	case "buy":
+	case 0: // buy
 		amt, ok := new(big.Int).SetString(so.AmountOut, 10)
 		if !ok {
 			return common.Address{}, nil, false, fmt.Errorf("bad amountOut %q", so.AmountOut)
 		}
 		return common.HexToAddress(so.TokenOut), amt, false, nil
 	default:
-		return common.Address{}, nil, false, fmt.Errorf("unknown order side %q", side)
+		return common.Address{}, nil, false, fmt.Errorf("invalid signed order side %d", so.Side)
 	}
 }
 
@@ -277,8 +283,11 @@ func suggestDynamicFees(ctx context.Context, client *ethclient.Client) (tipCap, 
 // "order already locked" 拒绝，故既有锁定量覆盖义务时直接返回成功，不再发交易。
 // （注意顺序：先查锁、再查可用余额——已落锁的义务量已从可用余额中扣除，
 // 先查余额会把「已落锁」误判为余额不足。）
-func LockOrder(ctx context.Context, rpcURL, vaultAddr, settlementAddr, lockerKeyHex string, so *storage.SignedOrder, side string) (common.Hash, string, error) {
-	token, amount, payWithTokenIn, err := ObligationForOrder(so, side)
+// LockOrder 的方向口径（阶段 3）：不再接受调用方 side 参数——义务与落锁
+// 方向都只从签名订单 so.Side 派生，与 Vault 从 order.side 派生的口径恒一致，
+// 「按错误方向为他人订单落锁」在接口层即不可能表达（见 Vault.lockForOrder）。
+func LockOrder(ctx context.Context, rpcURL, vaultAddr, settlementAddr, lockerKeyHex string, so *storage.SignedOrder) (common.Hash, string, error) {
+	token, amount, _, err := ObligationForOrder(so)
 	if err != nil {
 		return common.Hash{}, "", err
 	}
@@ -311,7 +320,9 @@ func LockOrder(ctx context.Context, rpcURL, vaultAddr, settlementAddr, lockerKey
 		return common.Hash{}, "", fmt.Errorf("insufficient available balance: need %s, available %s (user %s token %s)", amount, available, so.UserAddress, token.Hex())
 	}
 	sigBytes := common.FromHex(so.Signature)
-	data, err := vaultLockABI.Pack("lockForOrder", signedOrderToABI(so).Order, sigBytes, payWithTokenIn)
+	// 阶段 3：lockForOrder(order, signature) 已无方向参数——方向由合约从
+	// order.side 派生（signedOrderToABI 已贯通 Side 字段）。
+	data, err := vaultLockABI.Pack("lockForOrder", signedOrderToABI(so).Order, sigBytes)
 	if err != nil {
 		return common.Hash{}, "", fmt.Errorf("pack lockForOrder: %w", err)
 	}

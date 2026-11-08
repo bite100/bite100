@@ -10,7 +10,7 @@ import (
 	"github.com/P2P-P2P/p2p/node/internal/storage"
 )
 
-func testSignedOrder(user, tokenIn, tokenOut, amountIn, amountOut, price string, nonce int64) *storage.SignedOrder {
+func testSignedOrder(user, tokenIn, tokenOut, amountIn, amountOut, price string, nonce int64, side uint8) *storage.SignedOrder {
 	return &storage.SignedOrder{
 		OrderID:     "o-" + user[len(user)-4:],
 		UserAddress: user,
@@ -22,6 +22,7 @@ func testSignedOrder(user, tokenIn, tokenOut, amountIn, amountOut, price string,
 		Timestamp:   1700000000,
 		ExpiresAt:   1700086400,
 		Nonce:       nonce,
+		Side:        side,
 		Signature:   "0x" + "11",
 	}
 }
@@ -37,9 +38,9 @@ func TestTradeToFill_MakerSellsToken0(t *testing.T) {
 		TokenOut: t1,
 		Amount:   "100.000000000000000000", // 100 个 Token0（最小单位口径下即 100）
 		MakerOrder: testSignedOrder("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", t0, t1,
-			"100000000000000000000", "200000000000000000000", "2000000000000000000", 0),
+			"100000000000000000000", "200000000000000000000", "2000000000000000000", 0, 1),
 		TakerOrder: testSignedOrder("0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", t0, t1,
-			"100000000000000000000", "200000000000000000000", "2000000000000000000", 0),
+			"100000000000000000000", "200000000000000000000", "2000000000000000000", 0, 0),
 	}
 	fill, err := TradeToFill(tr)
 	if err != nil {
@@ -54,6 +55,10 @@ func TestTradeToFill_MakerSellsToken0(t *testing.T) {
 	if fill.MakerOrder.Order.Nonce.Cmp(big.NewInt(0)) != 0 {
 		t.Errorf("maker nonce not carried")
 	}
+	// 阶段 3：side 必须经 TradeToFill 贯通到链上 Fill 的订单元组（maker sell=1 / taker buy=0）
+	if fill.MakerOrder.Order.Side != 1 || fill.TakerOrder.Order.Side != 0 {
+		t.Errorf("side not carried into fill: maker=%d taker=%d, want 1/0", fill.MakerOrder.Order.Side, fill.TakerOrder.Order.Side)
+	}
 }
 
 // maker 买 Token0（付出 Token1）：fill.amountIn 为 Token1 量（qty*price/1e18），amountOut 为 Token0 量
@@ -67,9 +72,9 @@ func TestTradeToFill_MakerBuysToken0(t *testing.T) {
 		TokenOut: t0,
 		Amount:   "50.000000000000000000",
 		MakerOrder: testSignedOrder("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", t0, t1,
-			"50000000000000000000", "100000000000000000000", "2000000000000000000", 1),
+			"50000000000000000000", "100000000000000000000", "2000000000000000000", 1, 0),
 		TakerOrder: testSignedOrder("0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", t0, t1,
-			"50000000000000000000", "100000000000000000000", "2000000000000000000", 2),
+			"50000000000000000000", "100000000000000000000", "2000000000000000000", 2, 1),
 	}
 	fill, err := TradeToFill(tr)
 	if err != nil {
@@ -80,6 +85,10 @@ func TestTradeToFill_MakerBuysToken0(t *testing.T) {
 	}
 	if fill.AmountOut.Cmp(big.NewInt(50)) != 0 {
 		t.Errorf("amountOut = %s, want 50", fill.AmountOut)
+	}
+	// 阶段 3：side 贯通（maker buy=0 / taker sell=1）
+	if fill.MakerOrder.Order.Side != 0 || fill.TakerOrder.Order.Side != 1 {
+		t.Errorf("side not carried into fill: maker=%d taker=%d, want 0/1", fill.MakerOrder.Order.Side, fill.TakerOrder.Order.Side)
 	}
 }
 
@@ -96,7 +105,7 @@ func TestPackFailureCharge(t *testing.T) {
 		t1 = "0x2222222222222222222222222222222222222222"
 	)
 	so := testSignedOrder("0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", t0, t1,
-		"100000000000000000000", "100000000000000000000", "1000000000000000000", 5)
+		"100000000000000000000", "100000000000000000000", "1000000000000000000", 5, 1)
 	data, err := packFailureCharge(so, FailReasonOrderExpired, big.NewInt(500_000))
 	if err != nil {
 		t.Fatal(err)
