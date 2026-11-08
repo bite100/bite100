@@ -16,13 +16,21 @@
 // 或 frontend/ 下跑 `node frontend/scripts/check-governance-abi.mjs`
 // （或 frontend 内 `npm run check:abi`）。CI 接在 contracts.yml 的
 // forge build 之后。零依赖，纯 Node。
+//
+// 第 34 轮 M2 加固：解析为空过防护——旧实现以单引号正则抓声明，若
+// config.ts 的引号风格变化（如改双引号）或数组被清空，正则抓到 0 条、
+// 循环不执行、检查会以「0 条一致」空过。现行口径：双引号声明直接报错；
+// 单引号声明数为 0 直接报错；任一声明解析失败直接报错；通过时声明
+// 总数 = 实际比对数。自检：`npm run check:abi:selftest`（负例为空 ABI
+// 与双引号形式）。路径可用环境变量 GOVERNANCE_ABI_CONFIG_PATH /
+// GOVERNANCE_ABI_ARTIFACT_PATH 覆盖（自检用）。
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const artifactPath = join(repoRoot, 'contracts/out/Governance.sol/Governance.json')
-const configPath = join(repoRoot, 'frontend/src/config.ts')
+const artifactPath = process.env.GOVERNANCE_ABI_ARTIFACT_PATH || join(repoRoot, 'contracts/out/Governance.sol/Governance.json')
+const configPath = process.env.GOVERNANCE_ABI_CONFIG_PATH || join(repoRoot, 'frontend/src/config.ts')
 
 // 把单个参数声明归一化为 { type, indexed }：去掉数据位置标注与参数名。
 // 例："bytes32[] calldata proof" -> { type: "bytes32[]", indexed: false }
@@ -78,6 +86,60 @@ function sigKey(s) {
   return `${s.kind} ${s.name}(${ins}) ${s.mutability} returns (${outs})`
 }
 
+// 去掉块内的 // 行注释（跟踪单引号状态，引号内的 // 不处理；本仓库
+// 的人类可读签名不含斜杠）。注释里可能出现引号，不剔除会污染声明计数。
+function stripLineComments(text) {
+  return text.split('\n').map((line) => {
+    let inQuote = false
+    for (let i = 0; i < line.length - 1; i++) {
+      if (line[i] === "'") inQuote = !inQuote
+      if (!inQuote && line[i] === '/' && line[i + 1] === '/') return line.slice(0, i)
+    }
+    return line
+  }).join('\n')
+}
+
+// 从 config.ts 的 GOVERNANCE_ABI 数组块提取并解析全部声明（M2 加固点）：
+// 声明总数以块内引号字符串计数为准，任一环节异常都以 exit(1) 失败，
+// 绝不允许「解析到 0 条」时空过。
+function extractFrontendSigs(configText) {
+  const start = configText.indexOf('export const GOVERNANCE_ABI = [')
+  if (start < 0) {
+    console.error('config.ts 中找不到 GOVERNANCE_ABI')
+    process.exit(2)
+  }
+  const end = configText.indexOf('] as const', start)
+  if (end < 0) {
+    console.error('config.ts 中 GOVERNANCE_ABI 数组未以 ] as const 结尾')
+    process.exit(1)
+  }
+  const block = stripLineComments(configText.slice(start, end))
+  const doubleQuoted = [...block.matchAll(/"([^"]+)"/g)]
+  if (doubleQuoted.length > 0) {
+    console.error(`GOVERNANCE_ABI 含 ${doubleQuoted.length} 条双引号声明，本检查只认单引号口径——引号风格变化不得让检查空过，请改回单引号或同步升级本脚本`)
+    process.exit(1)
+  }
+  const rawDecls = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1])
+  if (rawDecls.length === 0) {
+    console.error('GOVERNANCE_ABI 解析到 0 条声明（数组为空或格式已变）——拒绝空过，检查失败')
+    process.exit(1)
+  }
+  const sigs = []
+  for (const raw of rawDecls) {
+    try {
+      sigs.push(parseFrontendSig(raw))
+    } catch (e) {
+      console.error(`GOVERNANCE_ABI 声明解析失败：${e.message}`)
+      process.exit(1)
+    }
+  }
+  if (sigs.length !== rawDecls.length) {
+    console.error(`GOVERNANCE_ABI 声明对账失败：块内 ${rawDecls.length} 条、成功解析 ${sigs.length} 条`)
+    process.exit(1)
+  }
+  return sigs
+}
+
 function main() {
   let artifact
   try {
@@ -94,14 +156,7 @@ function main() {
   }
 
   const configText = readFileSync(configPath, 'utf8')
-  const start = configText.indexOf('export const GOVERNANCE_ABI = [')
-  if (start < 0) {
-    console.error('config.ts 中找不到 GOVERNANCE_ABI')
-    process.exit(2)
-  }
-  const end = configText.indexOf('] as const', start)
-  const block = configText.slice(start, end)
-  const frontendSigs = [...block.matchAll(/'([^']+)'/g)].map((m) => parseFrontendSig(m[1]))
+  const frontendSigs = extractFrontendSigs(configText)
 
   let failed = 0
   for (const fs of frontendSigs) {

@@ -276,14 +276,62 @@ func (e *Engine) checkInsertable(ob *OrderBook, o *storage.Order) bool {
 	return true
 }
 
+// orderInBook 判断某 orderID 是否在该交易对簿内（任一侧）。
+func orderInBook(ob *OrderBook, orderID string) bool {
+	for _, x := range ob.Bids {
+		if x.OrderID == orderID {
+			return true
+		}
+	}
+	for _, x := range ob.Asks {
+		if x.OrderID == orderID {
+			return true
+		}
+	}
+	return false
+}
+
+// checkInsertableAfterReplacement 预判一笔已归一化订单在「同 ID 旧单
+// 被移除」的前提下能否入簿（须持 e.mu）；不改动任何状态。与
+// checkInsertable 的差别仅在容量口径：旧单若位于目标侧，移除后该侧
+// 长度先减一再与上限比较（同侧满员替换可成）；旧单位于对侧时不减
+// （跨侧替换不因移除旧单而腾出目标侧名额）。ID 全局唯一口径不变。
+// 第 34 轮 M1 用它把 AddOrder 的替换做成原子操作：先预判、通过才动簿。
+func (e *Engine) checkInsertableAfterReplacement(ob *OrderBook, o *storage.Order) bool {
+	target := ob.Bids
+	if o.Side != "buy" {
+		target = ob.Asks
+	}
+	n := len(target)
+	for _, x := range target {
+		if x.OrderID == o.OrderID {
+			n--
+			break
+		}
+	}
+	if n >= e.maxOrdersPerPair {
+		return false
+	}
+	if p, exists := e.orderIDToPair[o.OrderID]; exists && p != ob.Pair {
+		return false
+	}
+	return true
+}
+
 // AddOrder 将订单加入订单簿（未撮合部分）；同 orderID 先移除再插入；返回是否插入成功；已过期订单不加入（Replay/过期防护）
 // 容量策略（第 32 轮）：单侧达到上限时**拒绝新单**（如实返回 false），不
 // 再静默截掉尾单；同 ID 替换先腾位再入簿，满员时仍可成功。
 // 第 33 轮 N2：全部校验通过后才触碰簿与索引，任一失败路径都保证簿与
 // orderIDToPair 索引同生同灭——归一化（过期/剩余量）在动簿之前完成，
 // 剩余量 ≤ 0 的替换单直接拒绝、同 ID 旧单原样留簿（旧实现先删旧单再算
-// 剩余量，提前返回时旧单已删而索引残留）；跨 pair 重 ID 在动簿之前拒绝；
-// 容量拒绝时若索引指向本 pair（同 ID 旧单已被移除或历史残留）一并清除。
+// 剩余量，提前返回时旧单已删而索引残留）；跨 pair 重 ID 在动簿之前拒绝。
+// 第 34 轮 M1：替换须原子——上一版先 removeOrderFromBook 再
+// checkInsertable，跨侧替换（旧单在对侧）且目标侧满员时，旧单已被删、
+// 新单又被拒，一笔有效挂单被静默销毁。现改为动簿前用
+// checkInsertableAfterReplacement 按「移除旧单之后的目标侧容量」预判，
+// 全部校验通过才移除 + 插入 + 更新索引；拒绝即零副作用（旧单与索引
+// 原样保留；仅簿内无此 ID 而索引残留指向本 pair 时顺手清残留，承
+// 第 33 轮口径）。
 func (e *Engine) AddOrder(o *storage.Order) bool {
 	if o.OrderID == "" || o.Pair == "" || o.Side == "" || o.Price == "" || o.Amount == "" {
 		return false
@@ -303,16 +351,15 @@ func (e *Engine) AddOrder(o *storage.Order) bool {
 		ob = &OrderBook{Pair: o.Pair}
 		e.pairs[o.Pair] = ob
 	}
-	// 同 orderID 先移除（避免重复挂单，并为满员时的同侧替换腾位）
-	removeOrderFromBook(ob, o.OrderID)
-	if !e.checkInsertable(ob, o2) {
-		// 容量拒绝：同 ID 旧单已移除（或索引本就残留指向本 pair），
-		// 索引同步清除，保持簿/索引一致。
-		if e.orderIDToPair[o.OrderID] == o.Pair {
+	// 原子替换预判：不通过则零副作用拒绝（旧单留簿、索引不动）。
+	if !e.checkInsertableAfterReplacement(ob, o2) {
+		if !orderInBook(ob, o.OrderID) && e.orderIDToPair[o.OrderID] == o.Pair {
 			delete(e.orderIDToPair, o.OrderID)
 		}
 		return false
 	}
+	// 同 orderID 先移除（避免重复挂单，并为满员时的同侧替换腾位）
+	removeOrderFromBook(ob, o.OrderID)
 	e.orderIDToPair[o.OrderID] = o.Pair
 	if o.Side == "buy" {
 		ob.Bids = append(ob.Bids, o2)
