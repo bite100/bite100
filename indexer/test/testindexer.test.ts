@@ -17,7 +17,7 @@ import { orderDigest, tradeEntityId, type DecodedOrder } from '../src/lib/associ
 
 const SEPOLIA = 11155111
 const BASE = 84532
-const SETTLEMENT: Record<number, string> = {
+const SETTLEMENT: Record<number, `0x${string}`> = {
   [SEPOLIA]: '0xa3F8cBCDc1533299D37836ea80d5004FF59f9094',
   [BASE]: '0x39037dE0a1d6ca567d50055522f7Ef825dF4FCf9',
 }
@@ -100,7 +100,7 @@ describe('createTestIndexer 合成事件', () => {
                 gasRecipient: TAKER,
                 gasUsed: 150000n,
                 gasCostWei: 3000000000000000n,
-                reason: 0,
+                reason: 0n,
                 makerToken: T_OUT,
                 makerDeduct: 100n,
                 makerShortfall: 0n,
@@ -128,7 +128,7 @@ describe('createTestIndexer 合成事件', () => {
 
     const shares = await indexer.GasShare.getWhere({ chainId: { _eq: SEPOLIA } })
     expect(shares.length).toBe(1)
-    expect(shares[0].trade_id?.id ?? shares[0].trade_id).toBe(tradeEntityId(SEPOLIA, TX, 5))
+    expect(shares[0].trade_id_id).toBe(tradeEntityId(SEPOLIA, TX, 5))
   })
 
   it('calldata 缺失时 digest 留空未关联，不猜测', async () => {

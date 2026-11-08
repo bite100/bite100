@@ -19,9 +19,26 @@ disable_default_cross_chain: true
 contracts:
   - name: Settlement
     events:
+      # field_selection（v3）：声明 handler/测试实际读取的 transaction 字段，
+      # 未声明的字段在生成类型里是 FieldNotSelected。block 的
+      # number/timestamp/hash 为常选字段，无需（也不能）在此列出。
+      # handler 注册处的 fields 选项与此处保持一致（注册处优先）。
       - event: "TradeSettled(address indexed maker, address indexed taker, address indexed tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 feeAmount)"
+        field_selection:
+          transaction_fields:
+            - hash
+            - input
+            - from
       - event: "TradeSettledWithGasReimburse(address indexed maker, address indexed taker, address indexed tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut, uint256 feeAmount, uint256 gasReimburseIn, uint256 gasReimburseOut, address gasRecipient)"
+        field_selection:
+          transaction_fields:
+            - hash
+            - input
+            - from
       - event: "GasCostShared(address indexed maker, address indexed taker, address indexed gasRecipient, uint256 gasUsed, uint256 gasCostWei, uint8 reason, address makerToken, uint256 makerDeduct, uint256 makerShortfall, address takerToken, uint256 takerDeduct, uint256 takerShortfall)"
+        field_selection:
+          transaction_fields:
+            - hash
 chains:
   - id: 11155111
     start_block: 12087251

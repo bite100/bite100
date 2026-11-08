@@ -14,6 +14,7 @@
  * 纯逻辑在 src/lib/association.ts（解码 + 按序对应 + 规范重算），解不出留空。
  */
 import { indexer } from 'envio'
+import type { EvmEvent, EvmEventWithFields, EvmOnEventContext } from 'envio'
 import {
   decodeSettleCalldata,
   digestsForFillIndex,
@@ -21,63 +22,27 @@ import {
   tradeEntityId,
 } from '../lib/association'
 
-const TRADE_FIELDS = { transaction: ['hash', 'input', 'from'] } as const
-const GAS_FIELDS = { transaction: ['hash'] } as const
+// 字段选择（v3 模型）：handler 实际读取的 block/transaction 字段必须在此
+// 声明，未选字段在 codegen 类型里是 FieldNotSelected，读写都会报错。
+const TRADE_FIELDS = {
+  transaction: ['hash', 'input', 'from'],
+  block: ['number', 'timestamp', 'hash'],
+} as const
+const GAS_FIELDS = {
+  transaction: ['hash'],
+  block: ['number', 'timestamp'],
+} as const
 
-type TradeEvent = {
-  chainId: number
-  srcAddress: string
-  logIndex: number
-  block: { number: number; timestamp: number; hash: string }
-  transaction: { hash: string; input?: string }
-  params: {
-    maker: string
-    taker: string
-    tokenIn: string
-    tokenOut: string
-    amountIn: bigint
-    amountOut: bigint
-    feeAmount: bigint
-    gasReimburseIn?: bigint
-    gasReimburseOut?: bigint
-    gasRecipient?: string
-  }
-}
-
-type GasEvent = {
-  chainId: number
-  srcAddress: string
-  logIndex: number
-  block: { number: number; timestamp: number; hash: string }
-  transaction: { hash: string }
-  params: {
-    maker: string
-    taker: string
-    gasRecipient: string
-    gasUsed: bigint
-    gasCostWei: bigint
-    reason: number | bigint
-    makerToken: string
-    makerDeduct: bigint
-    makerShortfall: bigint
-    takerToken: string
-    takerDeduct: bigint
-    takerShortfall: bigint
-  }
-}
-
-// context 的实体面由 envio codegen 按 schema.graphql 生成；此处只声明用到的形状
-type Ctx = {
-  Trade: {
-    get: (id: string) => Promise<{ maker: string; taker: string } | undefined>
-    set: (entity: Record<string, unknown>) => void
-  }
-  GasShare: { set: (entity: Record<string, unknown>) => void }
-  TxCursor: {
-    get: (id: string) => Promise<{ id: string; tradeIds: string[]; gasCount: number } | undefined>
-    set: (entity: { id: string; tradeIds: string[]; gasCount: number }) => void
-  }
-}
+// 事件/context 类型一律取 envio codegen 生成类型（.envio/types.d.ts，
+// 经根目录 envio-env.d.ts 接入 tsconfig），不手写形状。
+type TradeEvent =
+  | EvmEventWithFields<EvmEvent<'Settlement', 'TradeSettled'>, typeof TRADE_FIELDS>
+  | EvmEventWithFields<
+      EvmEvent<'Settlement', 'TradeSettledWithGasReimburse'>,
+      typeof TRADE_FIELDS
+    >
+type GasEvent = EvmEventWithFields<EvmEvent<'Settlement', 'GasCostShared'>, typeof GAS_FIELDS>
+type Ctx = EvmOnEventContext
 
 async function handleTrade(event: TradeEvent, context: Ctx, eventKind: string) {
   const txHash = event.transaction.hash
@@ -111,9 +76,10 @@ async function handleTrade(event: TradeEvent, context: Ctx, eventKind: string) {
     amountIn: event.params.amountIn,
     amountOut: event.params.amountOut,
     feeAmount: event.params.feeAmount,
-    gasReimburseIn: event.params.gasReimburseIn,
-    gasReimburseOut: event.params.gasReimburseOut,
-    gasRecipient: event.params.gasRecipient,
+    // gas 三字段只存在于 TradeSettledWithGasReimburse 的 params，TradeSettled 无此三字段
+    gasReimburseIn: 'gasReimburseIn' in event.params ? event.params.gasReimburseIn : undefined,
+    gasReimburseOut: 'gasReimburseOut' in event.params ? event.params.gasReimburseOut : undefined,
+    gasRecipient: 'gasRecipient' in event.params ? event.params.gasRecipient : undefined,
     makerDigest: digests?.makerDigest,
     takerDigest: digests?.takerDigest,
     digestAssociated: digests !== null,
@@ -145,7 +111,7 @@ async function handleGasShare(event: GasEvent, context: Ctx) {
     logIndex: event.logIndex,
     blockNumber: event.block.number,
     blockTimestamp: event.block.timestamp,
-    trade_id: tradeId,
+    trade_id_id: tradeId,
     maker: event.params.maker,
     taker: event.params.taker,
     gasRecipient: event.params.gasRecipient,
@@ -167,20 +133,20 @@ async function handleGasShare(event: GasEvent, context: Ctx) {
 indexer.onEvent(
   { contract: 'Settlement', event: 'TradeSettled', fields: TRADE_FIELDS },
   async ({ event, context }) => {
-    await handleTrade(event as TradeEvent, context as Ctx, 'TradeSettled')
+    await handleTrade(event, context, 'TradeSettled')
   },
 )
 
 indexer.onEvent(
   { contract: 'Settlement', event: 'TradeSettledWithGasReimburse', fields: TRADE_FIELDS },
   async ({ event, context }) => {
-    await handleTrade(event as TradeEvent, context as Ctx, 'TradeSettledWithGasReimburse')
+    await handleTrade(event, context, 'TradeSettledWithGasReimburse')
   },
 )
 
 indexer.onEvent(
   { contract: 'Settlement', event: 'GasCostShared', fields: GAS_FIELDS },
   async ({ event, context }) => {
-    await handleGasShare(event as GasEvent, context as Ctx)
+    await handleGasShare(event, context)
   },
 )
