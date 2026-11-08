@@ -6,6 +6,12 @@
 > （`contracts/src/Settlement.sol`）三方必须与本文件逐字一致；改任何字段/域参数，
 > 三方同步修改并更新跨语言测试向量。
 >
+> **阶段 3 修订（2026-11-08，无节点迁移 §8 阶段 3 合约轮）**：Order 结构新增
+> 签名字段 `side`（Route A，见 §2）——旧结构体（无 side）订单自切换日起
+> **全部作废**（切换口径见 §9）。同时同轮落地：Settlement 提交者模型 B
+> （开放提交，见 §4）、ERC-1271 签名长度门修复（见 §8）。四方（前端/节点/
+> 中继/合约）+ 索引器必须同轮切换，不得新旧混跑。
+>
 > 背景：此前三方各有一套（前端/节点域 "比特100" 无 nonce 且域类型不一致——前端含
 > verifyingContract、Go 不含；合约 `verifyOrderSignature` 域 "P2P Exchange" 含 nonce
 > 却从未被调用；Go 派生 amountOut 时漏了 /1e18）。本规范一次性消除全部漂移。
@@ -31,7 +37,7 @@
 类型字符串（字段顺序即编码顺序，不得增删改序）：
 
 ```
-Order(string orderId,address userAddress,address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOut,uint256 price,uint256 timestamp,uint256 expiresAt,uint256 nonce)
+Order(string orderId,address userAddress,address tokenIn,address tokenOut,uint256 amountIn,uint256 amountOut,uint256 price,uint256 timestamp,uint256 expiresAt,uint256 nonce,uint8 side)
 ```
 
 字段语义：
@@ -40,13 +46,14 @@ Order(string orderId,address userAddress,address tokenIn,address tokenOut,uint25
 |---|---|
 | orderId | 订单唯一 ID（前端 `generateOrderId` 生成） |
 | userAddress | 签名者（下单用户）地址 |
-| tokenIn / tokenOut | **交易对方向固定**：恒为该交易对的 (Token0, Token1)，与买卖方向无关（买卖由订单簿 side 字段表达，不进签名）。结算时以签名金额为上限做双向校验（见 §4），方向不影响资金安全 |
-| amountIn | 愿以 tokenIn 支付/卖出的总量上限（最小单位整数） |
-| amountOut | 愿换得的 tokenOut 总量（最小单位整数），必须满足 §3 公式 |
+| tokenIn / tokenOut | **交易对方向固定**：恒为该交易对的 (Token0, Token1)，与买卖方向无关。方向由签名字段 `side` 表达（见下行）；结算时合约强制成交付款侧与签名方向一致（见 §4） |
+| amountIn | tokenIn 侧的总量（最小单位整数）：SELL 时为支付上限、BUY 时为收取上限 |
+| amountOut | tokenOut 侧的总量（最小单位整数）：BUY 时为支付上限、SELL 时为收取上限，必须满足 §3 公式 |
 | price | 报价，1e18 定点缩放：`price = amountOut * 1e18 / amountIn` |
 | timestamp | 下单时间（Unix 秒），不得晚于链上当前时间 |
 | expiresAt | 过期时间（Unix 秒），必填；链上时间超过即不可结算 |
 | nonce | 签名者的**链上结算 nonce**：下单时读取 `Settlement.getCurrentNonce(user)`；不是时间戳、不是消息去重 nonce（P2P 广播层的同名字段是另一概念，不得混用） |
+| side | **订单方向（阶段 3 新增签名字段，`uint8`，置于结构末尾）**：`0 = BUY`（签名者付 tokenOut、收 tokenIn）、`1 = SELL`（签名者付 tokenIn、收 tokenOut）。与订单簿/中继行的自报 side 字符串一一对应（`buy ↔ 0`、`sell ↔ 1`，前端 sideProof 的枚举别名口径一致）。非法值（∉ {0,1}）在结算与落锁时均被拒 |
 
 字符串字段（orderId）按 EIP-712 规则以 `keccak256(bytes(value))` 进 structHash。
 
@@ -65,9 +72,19 @@ amountOut = amountIn * price / 1e18      （整数除法，向下取整）
 与实际成交量（tokenIn/tokenOut/amountIn/amountOut，方向以 maker 为准：
 tokenIn = maker 卖出、tokenOut = taker 卖出）。合约逐项校验：
 
-1. **验签**：对双方订单各算 EIP-712 digest，`ecrecover` 必须等于 `order.userAddress`。
+1. **验签**：对双方订单各算 EIP-712 digest，`ecrecover` 必须等于 `order.userAddress`
+   （合约用户走 ERC-1271，见 §8）。
 2. **同对校验**：双方订单的 (tokenIn, tokenOut) 必须相同；Fill 的 tokenIn 必须是该
    对中的一侧，tokenOut 为另一侧。
+2a. **方向校验（阶段 3 新增）**：双方订单的 `side` 必须合法（0/1），且成交付款侧
+   必须与签名方向派生的付款侧一致——SELL 付 tokenIn、BUY 付 tokenOut；Fill 的
+   tokenIn 是 maker 的付款侧、tokenOut 是 taker 的付款侧。方向相反的成交在链上
+   不可能成立。Vault 落锁方向同样只从 `side` 派生（`lockForOrder` 不再接受
+   调用者方向参数）。
+2b. **提交者（阶段 3 改版，模型 B 开放提交）**：`settleTrade` 与批量入口无调用者
+   限制，任何地址可提交有效 Fill；安全性由验签/方向/落锁/累计/ nonce 强制校验
+   承担，无效提交 revert 且 gas 由发起者自担。批量入口批大小硬顶
+   `MAX_BATCH_SIZE = 50`，整批原子（任一腿失败整批回滚）。
 3. **时效**：`timestamp <= block.timestamp <= expiresAt`。
 4. **累计上限**：合约按订单 digest 记账 `orderFilledIn/orderFilledOut`（以订单自身
    方向计）。每笔成交按方向折算后累加，两侧都不得超过签名量。此规则同时支持
@@ -159,12 +176,15 @@ reason, gasUsedClaimed)`，由结算调用方（owner/治理/白名单 relayer�
   Settlement 换地址时域随之切换（第 27 轮：Sepolia
   `0x9f063683…`、Base Sepolia `0x230887F4…`——均为历史地址，现行地址
   以最新轮次文档为准，见 §1 的历史地址提示）。
-- **链上校验（Settlement.verifyOrderSignature）**：先走 EOA `ecrecover`
-  快速路径；失败且 `userAddress` 有代码时，走 ERC-1271 回退——
+- **链上校验（Settlement.verifyOrderSignature）**：65 字节且 v 合法时先走
+  EOA `ecrecover` 快速路径；失败且 `userAddress` 有代码时，走 ERC-1271 回退——
   `SignatureChecker.isValidSignatureNow(userAddress, digest, signature)`
- （staticcall，失败 → false）。`_verifySignedOrder` 委托同一函数。注意：
-  签名 `v` 值非法（如非 27/28）时 `_splitSignature` 会 revert 而非返回
-  false（真实签名恒为 27/28；节点 eth_call 路径对此 fail-closed）。
+ （staticcall，失败 → false）。`_verifySignedOrder` 委托同一函数。
+  **阶段 3 修复（签名长度门）**：旧实现「长度 != 65 直接 false」挡在 1271
+  路径之前，智能钱包的变长签名永远不可达 1271；现改为仅 65 字节走快路径，
+  其余长度只要 `userAddress` 有代码一律交 1271 判定，无代码则 false。
+  签名 `v` 值非法（如非 27/28 且非 0/1）时跳过快路径（不再于 `_splitSignature`
+  revert），由 1271 路径或 false 收口；真实 EOA 签名恒为 27/28，语义不变。
 - **合约侧（MakerVault.isValidSignature）**：仅当签名者已注册且未暂停时
   返回 magic `0x1626ba7e`，否则 `0xffffffff`；永不 revert。撤单 digest
   同样走 `isValidSignature`（CancelOrder 结构见 §5）。
@@ -178,3 +198,19 @@ reason, gasUsedClaimed)`，由结算调用方（owner/治理/白名单 relayer�
 - **安全边界**：ERC-1271 回退只认 `isValidSignature` 的返回值；金库合约
   的签名者注册表由 owner 控制，签名者只能交易、不能提款（见
   `docs/round27-maker-vault-2026-11-08.md` §1.1、§8）。
+
+## 9. 阶段 3 切换与历史订单处置（2026-11-08 新增）
+
+- **旧结构体订单全部作废**：类型哈希随 `side` 字段改变，旧订单的 digest 与
+  新 Settlement 的重算结果永不相等——旧单在新栈上验签必失败，报错口径为
+  既有的签名无效类错误（`Settlement: invalid maker/taker signature`、
+  节点/中继的验签拒绝），不设兼容路径、不做双格式过渡。
+- **切换清理（三处同口径）**：切换日部署新栈后——节点清空本地订单簿与
+  未结算成交账本（旧簿不进新簿）；中继清空 D1 订单表（旧公告不进新簿）；
+  前端以新 Settlement 地址重算域，旧单 digest 全部对不上而自然出局，
+  且双读评估对旧单给出 INVALID（验签失败）而非 UNKNOWN。
+- **旧锁处置**：旧 Vault 上的落锁随旧栈弃置；用户资产仍在旧 Vault 中，
+  切换公告须引导用户在旧 Vault 释放未成交订单的锁并提回/重存（切换
+  runbook 见阶段 3 轮文档 `docs/stage3-contract-matching-2026-11-08.md`）。
+- **跨语言向量**：§6 的向量参数不变（同一私钥/域），但订单消息自本版起
+  必须含 `side`；三方向量测试以含 side 的新消息为准，旧向量仅作历史记录。
