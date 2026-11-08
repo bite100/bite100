@@ -154,6 +154,10 @@ func ArgsFromProof(p *metrics.ContributionProof) (*SubmitProofArgs, error) {
 	if uptimeScaled.Cmp(new(big.Int).SetUint64(scale18)) > 0 {
 		uptimeScaled = new(big.Int).SetUint64(scale18)
 	}
+	// 第 42 轮权重定版后，链上四线身份已改记：nodeType 1 = 盘口挂单（原存储线）、
+	// 2 = 结算提交（原撮合线）、0 = 中继、3 = gas 库存款（走 submitLiquidityProof）。
+	// 节点侧 "storage"/"match" 证明是节点时代的遗留通道，数值映射不变；其证明
+	// 语义与新线的对应关系见 docs/round42-weights-gas-vault-2026-11-08.md。
 	var nodeType uint8
 	switch p.NodeType {
 	case "relay":

@@ -36,6 +36,9 @@ type ContributionProof struct {
 
 // GenerateProof 生成带签名的贡献证明；privKey 为节点私钥（可从 host.Peerstore().PrivKey(host.ID()) 获取）
 // 撮合节点请传 nodeType "match"，并填 tradesMatched、volumeMatched。
+// 注（第 42 轮）：链上贡献四线已按定版权重改记（挂单 35 / gas 库存款 25 / 中继 20 /
+// 结算提交 20），nodeType 数值映射不变；"match" 证明在链上计入结算提交线、
+// "storage" 证明计入挂单线，口径见 docs/round42-weights-gas-vault-2026-11-08.md。
 func GenerateProof(
 	nodeID peer.ID,
 	nodeType string,

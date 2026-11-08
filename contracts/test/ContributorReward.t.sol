@@ -24,6 +24,25 @@ contract ContributorRewardTest is Test {
         token.transfer(owner, 1000e18);
     }
 
+    /// @notice 以指定 nodeType、uptime=1e18、无附加计量为 signer 提交一期证明
+    /// （四线等基准夹具：各线 base 同为 SCALE，分数应只由定版权重决定）
+    function _submitBareProof(string memory period, uint256 key, address who, uint8 nodeType) internal {
+        bytes32 digest = keccak256(abi.encodePacked(
+            period, uint256(1e18), uint256(0), uint256(0), uint256(0), nodeType
+        ));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
+        vm.prank(who);
+        reward.submitProof(period, 1e18, 0, 0, 0, nodeType, abi.encodePacked(r, s, v));
+    }
+
+    /// @notice 以 gas 库存款人身份提交存款证明（submitLiquidityProof，nodeType=3）
+    function _submitGasVaultProof(string memory period, uint256 key, address who, uint256 amount) internal {
+        bytes32 digest = keccak256(abi.encodePacked(period, amount, uint8(3)));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
+        vm.prank(who);
+        reward.submitLiquidityProof(period, amount, abi.encodePacked(r, s, v));
+    }
+
     /// @notice 以 relay 节点（nodeType=0、uptime=1e18）身份为 signer 提交一期证明，返回签名者地址
     function _submitRelayProof(string memory period, uint256 key, address who) internal {
         bytes32 digest = keccak256(abi.encodePacked(
@@ -185,7 +204,7 @@ contract ContributorRewardTest is Test {
     function test_RolloverUnclaimedToNextPeriod() public {
         string memory period = "2025-02-01_2025-02-07";
         string memory nextPeriod = "2025-02-08_2025-02-14";
-        // Alice 与 Bob 同分（各 15e18），各应得可分配额的一半
+        // Alice 与 Bob 同为中继线、同分，各应得可分配额的一半
         _submitRelayProof(period, aliceKey, alice);
         _submitRelayProof(period, bobKey, bob);
 
@@ -236,5 +255,83 @@ contract ContributorRewardTest is Test {
         vm.prank(bob);
         reward.claimReward(nextPeriod, address(token));
         assertEq(token.balanceOf(bob), 11.5e18);
+    }
+
+    /// @notice 定版权重（第 42 轮）：四线等基准（base 同为 SCALE、无附加计量）时，
+    /// 分数应恰为 35/25/20/20 的比例——挂单（nodeType=1）35、gas 库存款（nodeType=3）25、
+    /// 中继（nodeType=0）20、结算提交（nodeType=2）20。存款线的等基准同池
+    /// 分配断言见 test_FinalWeightsFourLineDistribution。
+    function test_WeightsFinalVersionRatios() public {
+        string memory period = "2026-11-02_2026-11-15";
+        (address poster, uint256 posterKey) = makeAddrAndKey("poster");
+        (address relayer, uint256 relayerKey) = makeAddrAndKey("relayer");
+        (address submitter, uint256 submitterKey) = makeAddrAndKey("submitter");
+
+        _submitBareProof(period, posterKey, poster, 1); // 挂单
+        _submitBareProof(period, relayerKey, relayer, 0); // 中继
+        _submitBareProof(period, submitterKey, submitter, 2); // 结算提交
+
+        // base 均为 SCALE：分数 = SCALE * weight
+        assertEq(reward.getContributionScore(period, poster), 35e18, "posting weight 35");
+        assertEq(reward.getContributionScore(period, relayer), 20e18, "relay weight 20");
+        assertEq(reward.getContributionScore(period, submitter), 20e18, "submitter weight 20");
+        assertEq(reward.getPeriodTotalScore(period), 75e18);
+    }
+
+    /// @notice 定版权重 + 尺度对齐（第 42 轮）：四人各居一线、等基准同池分配，
+    /// 待领总额应按 35:25:20:20 分配可分配额（池 100e18、储备 15% → 可分配 85e18）。
+    /// gas 库存款 amount 取 CAP_LIQUIDITY 使 part 封顶 SCALE、base=2*SCALE，
+    /// 与其余三线不同——为使四线 base 可比，本测试改用 amount=0 不可（函数拒零），
+    /// 故单独校验存款线分数公式：score = (SCALE + part) * 25。
+    function test_GasVaultScoreScaleAligned() public {
+        string memory period = "2026-11-02_2026-11-15";
+        (address depositor, uint256 depositorKey) = makeAddrAndKey("depositor");
+
+        // amount = CAP/2 → part = SCALE/2 → score = 1.5e18 * 25 = 37.5e18
+        _submitGasVaultProof(period, depositorKey, depositor, 50000e18);
+        assertEq(reward.getContributionScore(period, depositor), 37.5e18, "gas vault score = (1 + 0.5) * 25 SCALE");
+
+        // amount = CAP → part 封顶 SCALE → score = 2e18 * 25 = 50e18
+        _submitGasVaultProof(period, depositorKey, depositor, 100000e18);
+        assertEq(reward.getContributionScore(period, depositor), 50e18, "gas vault score capped part");
+    }
+
+    /// @notice 定版权重同池分配断言：四线各一人、等基准（base 同为 SCALE）同池时，
+    /// 待领总额恰按 35:25:20:20 分配可分配额。存款线 amount=1 wei 时
+    /// part = 1 * SCALE / CAP_LIQUIDITY 经整除为 0，base 恰为 SCALE，与其余三线可比。
+    function test_FinalWeightsFourLineDistribution() public {
+        string memory period = "2026-11-16_2026-11-29";
+        (address poster, uint256 posterKey) = makeAddrAndKey("poster");
+        (address depositor, uint256 depositorKey) = makeAddrAndKey("depositor");
+        (address relayer, uint256 relayerKey) = makeAddrAndKey("relayer");
+        (address submitter, uint256 submitterKey) = makeAddrAndKey("submitter");
+
+        _submitBareProof(period, posterKey, poster, 1); // 35e18
+        _submitGasVaultProof(period, depositorKey, depositor, 1); // 25e18（part 整除为 0）
+        _submitBareProof(period, relayerKey, relayer, 0); // 20e18
+        _submitBareProof(period, submitterKey, submitter, 2); // 20e18
+        assertEq(reward.getPeriodTotalScore(period), 100e18, "total score = 100 SCALE");
+
+        token.approve(address(reward), 100e18);
+        reward.setPeriodReward(period, address(token), 100e18); // 可分配 85e18
+
+        assertEq(reward.claimableTotal(period, address(token), poster), 29.75e18, "posting 35%");
+        assertEq(reward.claimableTotal(period, address(token), depositor), 21.25e18, "gas vault 25%");
+        assertEq(reward.claimableTotal(period, address(token), relayer), 17e18, "relay 20%");
+        assertEq(reward.claimableTotal(period, address(token), submitter), 17e18, "submitter 20%");
+    }
+
+    /// @notice 挂单线计量入口：postingMetric 按 CAP_POSTING 归一化进分（base + part）* 35
+    function test_PostingMetricNormalized() public {
+        string memory period = "2026-11-16_2026-11-29";
+        (address poster, uint256 posterKey) = makeAddrAndKey("poster");
+        // uptime=1e18、postingMetric=CAP/2 → part=SCALE/2 → score = 1.5e18 * 35
+        bytes32 digest = keccak256(abi.encodePacked(
+            period, uint256(1e18), uint256(5e23), uint256(0), uint256(0), uint8(1)
+        ));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(posterKey, digest);
+        vm.prank(poster);
+        reward.submitProof(period, 1e18, 5e23, 0, 0, 1, abi.encodePacked(r, s, v));
+        assertEq(reward.getContributionScore(period, poster), 52.5e18, "posting score = 1.5 * 35 SCALE");
     }
 }

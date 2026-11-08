@@ -18,18 +18,24 @@ contract ContributorReward {
     uint256 public constant CAP_STORAGE_GB = 1000;
     /// 贡献分计算上限（字节），1e12 ≈ 1TB 转发量
     uint256 public constant CAP_BYTES_RELAYED = 1e12;
-    /// 撮合贡献：笔数上限（归一化后参与 40% 权重）
+    /// 结算提交贡献：笔数上限（归一化后参与 20% 权重；原撮合线改记）
     uint256 public constant CAP_TRADES_MATCHED = 1e6;
-    /// 撮合贡献：成交量上限（最小单位，如 wei）
+    /// 结算提交贡献：成交量上限（最小单位，如 wei）
     uint256 public constant CAP_VOLUME_MATCHED = 1e24;
-    /// 流动性贡献：上限（以稳定币计价，如 USDC）
+    /// gas 库存款贡献：上限（以稳定币计价，如 USDC；原流动性线改记此线）
     uint256 public constant CAP_LIQUIDITY = 100000e18; // 100,000 USDC
+    /// 挂单贡献：时长×深度积分上限（积分单位与归一化口径见 docs/round42 设计）
+    uint256 public constant CAP_POSTING = 1e24;
     uint256 private constant SCALE = 1e18;
-    /// 分配权重（更新：撮合 40%、存储 25%、流动性 20%、中继 15%）
-    uint256 private constant WEIGHT_MATCH = 40;
-    uint256 private constant WEIGHT_STORAGE = 25;
-    uint256 private constant WEIGHT_LIQUIDITY = 20;
-    uint256 private constant WEIGHT_RELAY = 15;
+    /// 分配权重（第 42 轮定版，Ren 2026-11-08 拍板：盘口挂单 35%、gas 库存款 25%、
+    /// 中继 20%、结算提交 20%，合计 100；取代做市时代口径与旧合约常量
+    /// 撮合 40 / 存储 25 / 流动性 20 / 中继 15。四线身份映射：
+    /// nodeType 1 = 挂单（原存储线改记）、nodeType 3 = gas 库存款（原流动性线改记）、
+    /// nodeType 0 = 中继、nodeType 2 = 结算提交（原撮合线改记）。）
+    uint256 private constant WEIGHT_POSTING = 35;
+    uint256 private constant WEIGHT_GAS_VAULT = 25;
+    uint256 private constant WEIGHT_RELAY = 20;
+    uint256 private constant WEIGHT_SUBMITTER = 20;
     /// 领取期限（方案 A 定案，2026-11-07）：周期结束后此时长（秒）内可领取，逾期禁止领取
     uint256 public constant CLAIM_DEADLINE_SECONDS = 90 days;
 
@@ -110,7 +116,7 @@ contract ContributorReward {
         _verifyAndApplyScore(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, 0, 0, nodeType, signature, digest);
     }
 
-    /// @notice 提交贡献证明（扩展版：含撮合 tradesMatched/volumeMatched，nodeType=2 为撮合）
+    /// @notice 提交贡献证明（扩展版：含结算提交 tradesMatched/volumeMatched（字段名沿用），nodeType=2 为结算提交）
     /// @param signature 65 字节 ECDSA：对 keccak256(abi.encodePacked(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType)) 的签名
     function submitProofEx(
         string calldata period,
@@ -184,48 +190,53 @@ contract ContributorReward {
         emit ProofSubmitted(pid, msg.sender, newScore);
     }
 
-    /// @dev 贡献分：按 nodeType 应用 40/25/20/15 权重（撮合 40%、存储 25%、流动性 20%、中继 15%）
+    /// @dev 贡献分：按 nodeType 应用定版权重（挂单 35%、gas 库存款 25%、中继 20%、结算提交 20%）
+    /// @dev 四线同尺度：score = (base + part) * weight，base/part 均为 SCALE 归一量；
+    ///      权重只有在同一尺度下才有分配含义（见 _computeGasVaultScore 的尺度对齐说明）。
     function _computeScore(
         uint256 uptime,
-        uint256 storageUsedGB,
+        uint256 postingMetric,
         uint256 /* storageTotalGB */,
         uint256 bytesRelayed,
-        uint256 tradesMatched,
-        uint256 volumeMatched,
+        uint256 tradesSettled,
+        uint256 volumeSettled,
         uint8 nodeType
     ) internal pure returns (uint256) {
         uint256 base = uptime;
         if (nodeType == 2) {
-            // 撮合：matchPart 由笔数+成交量归一化，权重 40
-            uint256 matchPart = 0;
-            if (CAP_TRADES_MATCHED > 0 && tradesMatched > 0) {
-                uint256 t = tradesMatched * SCALE / CAP_TRADES_MATCHED;
+            // 结算提交（原撮合线改记）：settlePart 由提交笔数+成交量归一化，权重 20
+            uint256 settlePart = 0;
+            if (CAP_TRADES_MATCHED > 0 && tradesSettled > 0) {
+                uint256 t = tradesSettled * SCALE / CAP_TRADES_MATCHED;
                 if (t > SCALE) t = SCALE;
-                matchPart += t / 2; // 50% 笔数
+                settlePart += t / 2; // 50% 笔数
             }
-            if (CAP_VOLUME_MATCHED > 0 && volumeMatched > 0) {
-                uint256 v = volumeMatched * SCALE / CAP_VOLUME_MATCHED;
+            if (CAP_VOLUME_MATCHED > 0 && volumeSettled > 0) {
+                uint256 v = volumeSettled * SCALE / CAP_VOLUME_MATCHED;
                 if (v > SCALE) v = SCALE;
-                matchPart += v / 2; // 50% 成交量
+                settlePart += v / 2; // 50% 成交量
             }
-            if (matchPart > SCALE) matchPart = SCALE;
-            return (base + matchPart) * WEIGHT_MATCH;
+            if (settlePart > SCALE) settlePart = SCALE;
+            return (base + settlePart) * WEIGHT_SUBMITTER;
         }
         if (nodeType == 1) {
-            // 存储：权重 25
-            if (CAP_STORAGE_GB > 0 && storageUsedGB > 0) {
-                uint256 storagePart = storageUsedGB * SCALE / CAP_STORAGE_GB;
-                if (storagePart > SCALE) storagePart = SCALE;
-                base += storagePart;
+            // 挂单（原存储线改记）：权重 35（四线第一位）。
+            // postingMetric = 链下按「挂单时长 × 深度」算出的积分（口径见
+            // docs/round42 设计与 frontend/src/services/contribution/postingMeter.ts），
+            // 按 CAP_POSTING 归一化；uptime 字段承载挂单在线时长比。
+            if (CAP_POSTING > 0 && postingMetric > 0) {
+                uint256 postingPart = postingMetric * SCALE / CAP_POSTING;
+                if (postingPart > SCALE) postingPart = SCALE;
+                base += postingPart;
             }
-            return base * WEIGHT_STORAGE;
+            return base * WEIGHT_POSTING;
         }
         if (nodeType == 3) {
-            // 流动性：权重 20（通过 submitLiquidityProof 调用）
-            // 注意：流动性贡献分通过单独的接口提交，这里仅占位
-            return base * WEIGHT_LIQUIDITY;
+            // gas 库存款：权重 25（通过 submitLiquidityProof 调用，函数名沿用）
+            // 注意：存款贡献分通过单独的接口提交，这里仅占位
+            return base * WEIGHT_GAS_VAULT;
         }
-        // 中继 nodeType == 0：权重 15
+        // 中继 nodeType == 0：权重 20
         if (CAP_BYTES_RELAYED > 0 && bytesRelayed > 0) {
             uint256 relayPart = bytesRelayed * SCALE / CAP_BYTES_RELAYED;
             if (relayPart > SCALE) relayPart = SCALE;
@@ -477,9 +488,10 @@ contract ContributorReward {
         emit ProofSubmitted(pid, account, score);
     }
 
-    /// @notice 提交流动性贡献证明（节点注入流动性后调用）
+    /// @notice 提交 gas 库存款贡献证明（函数名沿用 submitLiquidityProof：该线
+    ///         原为 AMM 流动性线，第 42 轮改记 gas 库存款——存款人向 gas 库注资后调用）
     /// @param period 周期
-    /// @param liquidityAmount 流动性数量（以稳定币计价，如 USDC）
+    /// @param liquidityAmount 存款数量（以稳定币计价，如 USDC；参数名沿用）
     /// @param signature 签名：对 keccak256(abi.encodePacked(period, liquidityAmount, nodeType=3)) 的签名
     function submitLiquidityProof(
         string calldata period,
@@ -508,7 +520,7 @@ contract ContributorReward {
 
         bytes32 pid = _periodId(period);
         uint256 oldScore = contributionScore[pid][msg.sender];
-        uint256 newScore = _computeLiquidityScore(liquidityAmount);
+        uint256 newScore = _computeGasVaultScore(liquidityAmount);
 
         if (oldScore > 0) {
             periodTotalScore[pid] -= oldScore;
@@ -530,16 +542,20 @@ contract ContributorReward {
         emit ProofSubmitted(pid, msg.sender, newScore);
     }
 
-    /// @notice 计算流动性贡献分
-    /// @param liquidityAmount 流动性数量（以稳定币计价）
-    function _computeLiquidityScore(uint256 liquidityAmount) internal pure returns (uint256) {
+    /// @notice 计算 gas 库存款贡献分
+    /// @param liquidityAmount 存款数量（以稳定币计价；参数名沿用）
+    /// @dev 尺度对齐（第 42 轮修正）：旧实现为 base * weight / 100，与其他三线
+    ///      (base + part) * weight 的尺度差 100 倍——同一周期内跨线分配时，
+    ///      该线实际占比被压到名义权重的 1/100，权重数字失去含义。本轮起
+    ///      与其他线同尺度：base * WEIGHT_GAS_VAULT（权重 25%）。
+    function _computeGasVaultScore(uint256 liquidityAmount) internal pure returns (uint256) {
         uint256 base = SCALE; // 基础分 1e18
         if (CAP_LIQUIDITY > 0 && liquidityAmount > 0) {
             uint256 liquidityPart = liquidityAmount * SCALE / CAP_LIQUIDITY;
             if (liquidityPart > SCALE) liquidityPart = SCALE;
             base += liquidityPart;
         }
-        return base * WEIGHT_LIQUIDITY / 100; // 权重 20%
+        return base * WEIGHT_GAS_VAULT; // 权重 25%
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
