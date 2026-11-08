@@ -16,7 +16,7 @@
  *   纯传播延迟），不混为一谈。
  *
  * 适配器说明：节点适配器在本文件内以裸 fetch 实现（复用 dualread/
- * adapters 的 toRawOrder/sortBookSide 做行规范化）——既有
+ * adapters 的 normalizeBookRows/sortBookSide 做行规范化与丢弃计数）——既有
  * createNodeBookAdapter 绑死浏览器端 nodeClient 的多节点配置，
  * 服务端需要按链指定任意节点 URL，故不复用其取数外壳；中继适配器
  * 直接复用 createRelayBookAdapter（合同与完整度口径一致）。
@@ -24,8 +24,8 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import {
   createRelayBookAdapter,
+  normalizeBookRows,
   sortBookSide,
-  toRawOrder,
   type BookAdapter,
 } from '../../src/services/dualread/adapters'
 import {
@@ -60,14 +60,13 @@ function createDirectNodeAdapter(nodeUrl: string): BookAdapter {
       )
       if (!res.ok) throw new Error(`node orderbook http ${res.status}`)
       const data = (await res.json()) as { bids?: unknown[]; asks?: unknown[] }
-      const bids = sortBookSide(
-        (data?.bids ?? []).map(toRawOrder).filter((r): r is RawOrder => r !== null),
-        'buy',
-      )
-      const asks = sortBookSide(
-        (data?.asks ?? []).map(toRawOrder).filter((r): r is RawOrder => r !== null),
-        'sell',
-      )
+      const rawBids = data?.bids ?? []
+      const rawAsks = data?.asks ?? []
+      // 第 38 轮：与前端共用 normalizeBookRows 规范化 + 丢弃计数
+      const nb = normalizeBookRows(rawBids)
+      const na = normalizeBookRows(rawAsks)
+      const bids = sortBookSide(nb.orders, 'buy')
+      const asks = sortBookSide(na.orders, 'sell')
       return {
         source: 'node',
         chainId,
@@ -76,6 +75,8 @@ function createDirectNodeAdapter(nodeUrl: string): BookAdapter {
         asks,
         complete: true, // 节点 orderbook 全量开簿、无分页（与前端适配器同口径）
         fetchedAt: Date.now(),
+        rawRows: rawBids.length + rawAsks.length,
+        droppedRows: nb.droppedRows + na.droppedRows,
       }
     },
   }
@@ -112,8 +113,12 @@ export interface RoundRecord {
   metrics: DualReadRound['metrics']
   filterOutcomes: { valid: number; unknown: number; invalid: number; tradeable: number }
   submittedTotal: number
+  /** 本轮节点源原始行数（全部交易对 bids+asks 合计；第 38 轮加法字段，旧 round 行无此字段） */
+  nodeRawRows: number
+  /** 本轮节点源被规范化丢弃的行数（第 38 轮；与 nodeRawRows 对照发现整源被字段形态吞掉） */
+  nodeDroppedRows: number
   discovery: {
-    /** 已提交且超过宽限期、至少一源接单成功的自造订单数 */
+    /** 已提交且超过宽限期、至少一源接单成功、且未被标记篡改的自造订单数（第 38 轮起排除 tampered，与 report.mjs/§6.3 定义对齐） */
     eligible: number
     discoveredAny: number
     discoveredBoth: number
@@ -214,6 +219,7 @@ export class SoakLedger {
     let discoveredBoth = 0
     for (const sub of this.submitted.values()) {
       if (sub.chainId !== chainId) continue
+      if (sub.tampered) continue // 第 38 轮：与 report.mjs absorb() 及 §6.3「有效订单」定义对齐
       if (!sub.nodeOk && !sub.relayOk) continue
       if (nowMs - sub.submittedAt < graceMs) continue
       eligible += 1
@@ -279,6 +285,8 @@ export function createSoakRunner(jsonlPath: string, graceMs = 60_000): SoakRunne
         submittedTotal: [...ledger.submitted.values()].filter(
           (s) => s.chainId === cfg.chainId,
         ).length,
+        nodeRawRows: round.books.reduce((n, b) => n + (b.node?.rawRows ?? 0), 0),
+        nodeDroppedRows: round.books.reduce((n, b) => n + (b.node?.droppedRows ?? 0), 0),
         discovery: ledger.discoveryStats(cfg.chainId, nowMs, graceMs),
         newFirstSeen,
         errors: round.errors,
