@@ -56,7 +56,8 @@
 | 33 | [round33-hardening-2026-11-08.md](round33-hardening-2026-11-08.md) | 安全加固：Vault 重入保护（N1）、订单簿写入路径统一（N2/N3）、NodeRegistry 钱包占用（N4）、双链重部署（**现行合约地址在此**）、门禁补强、CI/ABI 对齐 | 已上线 |
 | 34 | [round34-nodeless-stage2-2026-11-08.md](round34-nodeless-stage2-2026-11-08.md) | 无节点阶段 2：双读基础设施 + 影子指标（阶段 3 准入线）、Envio 索引器 + 成交双源、中继就绪核对与 Settlement 权限事实（阶段 3 定 B 开放提交）；附 M1/M2 修复与行情页无成交行参考价修复 | 已合并推送（main 9627125）；推送后 ChatGPT 复审有条件通过，整改见第 35 轮；中继已部署（免费版）、索引器待部署；§6.3 准入门槛已于第 36 轮拆为 3A/3B 并补方向过渡规则 |
 | 35 | [round35-review-fixes-2026-11-08.md](round35-review-fixes-2026-11-08.md) | 第 34 轮复审整改：双读可信边界 D1–D4（完整度入门/锁仓方向证据/零值/钉块）、成交双源 D5/D6、ABI 守卫 M2-R、D8 active 未接线门禁；阶段 3 准入门槛改合成压测口径 + 压测工具（frontend/scripts/soak/）与冒烟实证 | 已合并推送（main 9adf762）；推送后 ChatGPT 复审不通过（N1 锁仓方向证据证伪 / N2 ABI 结尾定位 / N3 双源一致非独立 / N4 压测计时），整改见第 36 轮；压测已于 2026-11-08 启动（第 36 轮口径下只计试运行，3A 正式计数自第 36 轮合并起算） |
-| 36 | [round36-direction-trust-2026-11-08.md](round36-direction-trust-2026-11-08.md) | 第 35 轮复审整改：方向不可证过渡期（双读观察与可成交认证分离，SIDE_PROOF_AVAILABLE/SIDE_UNPROVABLE，锁仓降为观察旗标）、ABI 守卫词法结尾检测（N2）、soak 逐单真实提交时刻（N4）+ 交易对全表轮转、阶段 3 准入拆 3A/3B 并记方向过渡规则与解除条件 | 待合并（本轮分支 round36-direction-trust；合约/Go 零 diff） |
+| 36 | [round36-direction-trust-2026-11-08.md](round36-direction-trust-2026-11-08.md) | 第 35 轮复审整改：方向不可证过渡期（双读观察与可成交认证分离，SIDE_PROOF_AVAILABLE/SIDE_UNPROVABLE，锁仓降为观察旗标）、ABI 守卫词法结尾检测（N2）、soak 逐单真实提交时刻（N4）+ 交易对全表轮转、阶段 3 准入拆 3A/3B 并记方向过渡规则与解除条件 | 已合并推送（main a0d906a）；推送后 ChatGPT 复审不通过（逐单方向证明门缺失 / Pages 工作流同组互取消），整改见第 37 轮 |
+| 37 | [round37-review-fixes-2026-11-08.md](round37-review-fixes-2026-11-08.md) | 第 36 轮复审五项最小修复：Pages 部署工作流收敛为单一、逐单方向证明门 sideProof、ABI 扫描模板表达式显式失败、3A 覆盖与计数汇总工具（soak report）、文档同步（中继已部署口径 / Kaia 措辞 / 3A 声明与计数定义 / 阶段 3 同步清单） | 待合并（本轮分支 round37-review-fixes；合约/节点/中继零 diff） |
 
 ## 三、分支上的设计文档（未合入 main）
 
