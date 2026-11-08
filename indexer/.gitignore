@@ -1,4 +1,6 @@
 node_modules/
-.envio/
-generated/
 .env
+# 注：.envio/ 不在此忽略——codegen 自带的 .envio/.gitignore 只忽略
+# types.d.ts，本目录需提交 .envio/.gitignore 本身（Envio V3 官方口径）。
+# V2 的 generated/ 包在 V3 已不存在，勿再忽略同名目录
+# （Envio Cloud 构建会跳过任何名为 generated 的目录）。

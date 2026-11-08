@@ -96,7 +96,7 @@ export function orderDigest(
       chainId,
       verifyingContract: settlementAddress as `0x${string}`,
     },
-    types: ORDER_TYPES as never,
+    types: ORDER_TYPES,
     primaryType: 'Order',
     message: {
       orderId: order.orderId,
