@@ -102,6 +102,7 @@ forge test
 
 ## 文档
 
+- [docs/INDEX.md](docs/INDEX.md) — 全部设计与轮次文档的索引（状态口径与现行地址指向以此为准）
 - [node/README.md](node/README.md) — 节点运行、M1/M2 连通、存储与中继
 - [contracts/README.md](contracts/README.md) — 合约说明与部署
 - [contracts/DEPLOY-SEPOLIA.md](contracts/DEPLOY-SEPOLIA.md) — 测试网部署
