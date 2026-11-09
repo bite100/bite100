@@ -135,6 +135,58 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 
 const CHAIN_CYCLE_TIMEOUT_MS = 420_000
 const RECHECK_TIMEOUT_MS = 240_000
+
+// ------------------------------------------------------- 调用打点
+/**
+ * 卡点隔离埋点（第 45 轮块 1）：阶段 4 实测中 Sepolia 周期 2 起会
+ * 卡死在一个无超时的网络等待上，但从未隔离到具体调用。本埋点给
+ * 周期路径上的每个网络调用命名并计时：调用前先同步落一行
+ * call-start（ledger.line 走 appendFileSync，同步写盘——进程即使
+ * 随后永久挂死，这行也已在 metrics 里），结束落 call-end（耗时 +
+ * 成败）。下轮运行若再卡死，metrics 中最后一个未配对的 call-start
+ * 的 call 名即卡住的调用，ms 缺失本身就是证据。sink 由 runStage4
+ * 在 ledger 建好后注入；check 模式不注入（只执行、不打点）。
+ */
+let traceSink: ((line: Record<string, unknown>) => void) | null = null
+
+export function setTraceSink(
+  fn: ((line: Record<string, unknown>) => void) | null,
+): void {
+  traceSink = fn
+}
+
+async function traceCall<T>(
+  call: string,
+  chainId: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!traceSink) return fn()
+  const startedAt = Date.now()
+  traceSink({ kind: 'call-start', ts: startedAt, chainId, call })
+  try {
+    const out = await fn()
+    traceSink({
+      kind: 'call-end',
+      ts: Date.now(),
+      chainId,
+      call,
+      ms: Date.now() - startedAt,
+      ok: true,
+    })
+    return out
+  } catch (e) {
+    traceSink({
+      kind: 'call-end',
+      ts: Date.now(),
+      chainId,
+      call,
+      ms: Date.now() - startedAt,
+      ok: false,
+      error: (e instanceof Error ? e.message : String(e)).slice(0, 160),
+    })
+    throw e
+  }
+}
 const lc = (s: string) => (s ?? '').toLowerCase()
 export const log = (msg: string) =>
   console.log(`[stage4 ${new Date().toISOString()}] ${msg}`)
@@ -405,6 +457,43 @@ function createDirectNodeAdapter(nodeUrl: string): BookAdapter {
   }
 }
 
+const RELAY_BOOK_TIMEOUT_MS = 30_000
+
+/** 簿适配器打点包裹（运行器侧胶水，产品适配器不动）：每次拉簿落 call-start/call-end */
+function tracedBookAdapter(inner: BookAdapter, call: string): BookAdapter {
+  return {
+    fetchBook: (chainId: number, pair: string) =>
+      traceCall(call, chainId, () => inner.fetchBook(chainId, pair)),
+  }
+}
+
+/**
+ * 中继簿适配器：打点之外再套 30s 硬超时。产品 createRelayBookAdapter
+ * 的 fetch 无任何超时——经 VM 代理的连接一旦挂死，拉簿永不返回，
+ * 这正是阶段 4 卡死形态的头号候选点；运行器侧包裹后，超时按拉簿
+ * 失败处理（双读记源错误、在场探针记无结论），周期不再被拖死。
+ */
+function tracedRelayBookAdapter(inner: BookAdapter): BookAdapter {
+  return {
+    fetchBook: (chainId: number, pair: string) =>
+      traceCall('book.relay', chainId, () =>
+        withTimeout(
+          inner.fetchBook(chainId, pair),
+          RELAY_BOOK_TIMEOUT_MS,
+          `中继拉簿 chain ${chainId} ${pair}`,
+        ),
+      ),
+  }
+}
+
+/** 链上状态读取器打点包裹：snapshot 内部走 viem multicall（自带 http 超时），此处只命名计时 */
+function tracedChainReader(inner: ChainStateReader): ChainStateReader {
+  return {
+    snapshot: (chainId, requests) =>
+      traceCall('chain.snapshot', chainId, () => inner.snapshot(chainId, requests)),
+  }
+}
+
 export function buildChainCtx(
   cfg: Stage4Config,
   chainId: number,
@@ -444,9 +533,9 @@ export function buildChainCtx(
       provider,
     ),
     nonceCursor: new Map(),
-    nodeAdapter: createDirectNodeAdapter(cfg.nodeUrls[chainId]),
-    relayAdapter: createRelayBookAdapter(cfg.relayUrl),
-    chainReader: createChainStateReader(createViemChainTransport()),
+    nodeAdapter: tracedBookAdapter(createDirectNodeAdapter(cfg.nodeUrls[chainId]), 'book.node'),
+    relayAdapter: tracedRelayBookAdapter(createRelayBookAdapter(cfg.relayUrl)),
+    chainReader: tracedChainReader(createChainStateReader(createViemChainTransport())),
   }
 }
 
@@ -470,12 +559,14 @@ export async function postToRelay(
     ...(sideOverride ? { side: sideOverride } : {}),
   }
   try {
-    const res = await fetch(`${relayUrl}/orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    })
+    const res = await traceCall('relay.postOrder', gen.chainId, () =>
+      fetch(`${relayUrl}/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
+      }),
+    )
     if (!res.ok) {
       return {
         ok: false,
@@ -497,11 +588,8 @@ async function genAndPost(
   spec: OrderSpec,
   opts: { tamper?: boolean } = {},
 ): Promise<{ gen: GeneratedOrder | null; skipReason?: string }> {
-  const { generated, skipped } = await generateBatch(
-    ctx.chainId,
-    [ctx.maker, ctx.taker],
-    [spec],
-    ctx.nonceCursor,
+  const { generated, skipped } = await traceCall('gen.generateBatch', ctx.chainId, () =>
+    generateBatch(ctx.chainId, [ctx.maker, ctx.taker], [spec], ctx.nonceCursor),
   )
   if (generated.length === 0) {
     return { gen: null, skipReason: skipped[0]?.reason ?? '生成被跳过（无原因）' }
@@ -643,19 +731,21 @@ async function attemptMatch(
   let last: MatchAttemptResult | null = null
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await sleep(10_000)
-    const outcome = await executeFrontendMatch(
-      {
-        chainId: ctx.chainId,
-        pair: takerSpec.pair,
-        takerData: data,
-        takerSignature: String(gen.body.signature),
-        signer: ctx.takerSigner,
-      },
-      {
-        nodeAdapter: ctx.nodeAdapter,
-        relayAdapter: ctx.relayAdapter,
-        chainReader: ctx.chainReader,
-      },
+    const outcome = await traceCall('match.execute', ctx.chainId, () =>
+      executeFrontendMatch(
+        {
+          chainId: ctx.chainId,
+          pair: takerSpec.pair,
+          takerData: data,
+          takerSignature: String(gen.body.signature),
+          signer: ctx.takerSigner,
+        },
+        {
+          nodeAdapter: ctx.nodeAdapter,
+          relayAdapter: ctx.relayAdapter,
+          chainReader: ctx.chainReader,
+        },
+      ),
     )
     last = {
       status: outcome.status,
@@ -977,15 +1067,17 @@ async function processExpiryChecks(
       detail: `过期单在 expiresAt+17min 后仍在中继簿 orderId=${chk.orderId}`,
       digest: chk.digest,
     })
-    const round = await runDualReadRound(
-      {
-        mode: 'shadow',
-        nodeAdapter: ctx.nodeAdapter,
-        relayAdapter: ctx.relayAdapter,
-        chainReader: ctx.chainReader,
-      },
-      chk.chainId,
-      [chk.pair],
+    const round = await traceCall('dualread.round', chk.chainId, () =>
+      runDualReadRound(
+        {
+          mode: 'shadow',
+          nodeAdapter: ctx.nodeAdapter,
+          relayAdapter: ctx.relayAdapter,
+          chainReader: ctx.chainReader,
+        },
+        chk.chainId,
+        [chk.pair],
+      ),
     )
     const view = round.views.find((v) => v.pair === chk.pair)
     const inTradeable = view?.tradeable.some(
@@ -1011,11 +1103,13 @@ async function scenarioTamper(
   ctx: ChainCtx,
   pair: string,
 ): Promise<void> {
-  const { generated, skipped } = await generateBatch(
-    ctx.chainId,
-    [ctx.maker, ctx.taker],
-    [{ role: 'maker', pair, side: 'sell', amount: '0.0005', price: PRICE }],
-    ctx.nonceCursor,
+  const { generated, skipped } = await traceCall('gen.generateBatch', ctx.chainId, () =>
+    generateBatch(
+      ctx.chainId,
+      [ctx.maker, ctx.taker],
+      [{ role: 'maker', pair, side: 'sell', amount: '0.0005', price: PRICE }],
+      ctx.nonceCursor,
+    ),
   )
   if (generated.length === 0) {
     scenarioLine(ledger, ctx.chainId, 'tamper', 'skipped', `生成跳过：${skipped[0]?.reason ?? ''}`)
@@ -1096,9 +1190,13 @@ async function scenarioCancel(
     ctx.makerSigner,
   )
   const contractOrder = orderDataToContractOrder(data)
-  const lockTx = await vaultWrite.lockForOrder(contractOrder, String(gen.body.signature))
-  await lockTx.wait()
-  const lock = await ctx.vaultRead.orderLocks(gen.digest)
+  await traceCall('tx.lockForOrder', ctx.chainId, async () => {
+    const lockTx = await vaultWrite.lockForOrder(contractOrder, String(gen.body.signature))
+    await lockTx.wait()
+  })
+  const lock = await traceCall('rpc.orderLocks', ctx.chainId, () =>
+    ctx.vaultRead.orderLocks(gen.digest),
+  )
   const remaining = BigInt(lock.remaining ?? lock[2] ?? 0n)
   if (remaining <= 0n) {
     ledger.fail({
@@ -1110,8 +1208,10 @@ async function scenarioCancel(
     })
     return
   }
-  const relTx = await vaultWrite.releaseOrderLock(gen.digest)
-  await relTx.wait()
+  await traceCall('tx.releaseOrderLock', ctx.chainId, async () => {
+    const relTx = await vaultWrite.releaseOrderLock(gen.digest)
+    await relTx.wait()
+  })
   // 中继无撤单路由：单仍在中继簿属预期（记录观察），防线是链上过滤
   const book = await ctx.relayAdapter.fetchBook(ctx.chainId, pair)
   const stillListed = [...book.bids, ...book.asks].some(
@@ -1234,19 +1334,21 @@ async function scenarioRace(
   const runOne = async (gen: GeneratedOrder) => {
     const data = buildSignedOrderData(asRaw(gen), ctx.chainId)
     if (!data) return { status: 'aborted' as const, legsKept: 0, message: '重构失败' }
-    const outcome = await executeFrontendMatch(
-      {
-        chainId: ctx.chainId,
-        pair,
-        takerData: data,
-        takerSignature: String(gen.body.signature),
-        signer: ctx.takerSigner,
-      },
-      {
-        nodeAdapter: ctx.nodeAdapter,
-        relayAdapter: ctx.relayAdapter,
-        chainReader: ctx.chainReader,
-      },
+    const outcome = await traceCall('match.execute', ctx.chainId, () =>
+      executeFrontendMatch(
+        {
+          chainId: ctx.chainId,
+          pair,
+          takerData: data,
+          takerSignature: String(gen.body.signature),
+          signer: ctx.takerSigner,
+        },
+        {
+          nodeAdapter: ctx.nodeAdapter,
+          relayAdapter: ctx.relayAdapter,
+          chainReader: ctx.chainReader,
+        },
+      ),
     )
     return outcome
   }
@@ -1351,11 +1453,13 @@ async function scenarioAttribution(
     [...VAULT_LOCK_ABI, ...VAULT_EXTRA_ABI] as unknown as ethers.InterfaceAbi,
     ctx.makerSigner,
   )
-  const lockTx = await vaultWrite.lockForOrder(
-    orderDataToContractOrder(data),
-    String(gen.body.signature),
-  )
-  await lockTx.wait()
+  await traceCall('tx.lockForOrder', ctx.chainId, async () => {
+    const lockTx = await vaultWrite.lockForOrder(
+      orderDataToContractOrder(data),
+      String(gen.body.signature),
+    )
+    await lockTx.wait()
+  })
   const digest = gen.digest
   const makerData = data
   const makerSig = String(gen.body.signature)
@@ -1365,18 +1469,22 @@ async function scenarioAttribution(
     run: async () => {
       const steps: Record<string, string> = {}
       try {
-        const relTx = await vaultWrite.releaseExpiredOrderLock(digest)
-        const relReceipt = await relTx.wait()
+        const relReceipt = await traceCall('tx.releaseExpiredOrderLock', ctx.chainId, async () => {
+          const relTx = await vaultWrite.releaseExpiredOrderLock(digest)
+          return relTx.wait()
+        })
         steps.releaseExpired = `tx=${relReceipt?.hash} status=${relReceipt?.status}`
       } catch (e) {
         steps.releaseExpired = `error: ${e instanceof Error ? e.message.slice(0, 140) : String(e)}`
       }
       // 组 taker 单 + Fill（fills.ts 同口径内联，与 stage3-e2e 驱动同法）
-      const { generated } = await generateBatch(
-        ctx.chainId,
-        [ctx.maker, ctx.taker],
-        [{ role: 'taker', pair, side: 'buy', amount: '0.0005', price: PRICE }],
-        ctx.nonceCursor,
+      const { generated } = await traceCall('gen.generateBatch', ctx.chainId, () =>
+        generateBatch(
+          ctx.chainId,
+          [ctx.maker, ctx.taker],
+          [{ role: 'taker', pair, side: 'buy', amount: '0.0005', price: PRICE }],
+          ctx.nonceCursor,
+        ),
       )
       if (generated.length === 0) {
         scenarioLine(ledger, ctx.chainId, 'attribution', 'blocked', `taker 生成跳过；steps=${JSON.stringify(steps)}`)
@@ -1402,15 +1510,19 @@ async function scenarioAttribution(
         ctx.takerSigner,
       )
       try {
-        await settleTaker.settleTrade.staticCall(fill)
+        await traceCall('tx.settleTradeStatic', ctx.chainId, () =>
+          settleTaker.settleTrade.staticCall(fill),
+        )
         steps.staticCall = 'UNEXPECTED-SUCCESS'
       } catch (e) {
         steps.staticCall = `reverted: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`
       }
       let failGasUsed: bigint | null = null
       try {
-        const tx = await settleTaker.settleTrade(fill, { gasLimit: 1_500_000n })
-        const rc = await tx.wait()
+        const rc = await traceCall('tx.settleTrade', ctx.chainId, async () => {
+          const tx = await settleTaker.settleTrade(fill, { gasLimit: 1_500_000n })
+          return tx.wait()
+        })
         steps.realTx = `tx=${rc?.hash} status=${rc?.status}`
         if (rc && rc.status === 1) {
           const filled = (await ctx.settlementRead.orderFilledIn(digest)) as bigint
@@ -1441,12 +1553,14 @@ async function scenarioAttribution(
             CHARGE_FAILED_ABI as unknown as ethers.InterfaceAbi,
             ctx.deployerSigner,
           )
-          const chargeTx = await settleOwner.chargeFailedSettlement(
-            { order: orderDataToContractOrder(makerData), signature: makerSig },
-            FAIL_ORDER_EXPIRED,
-            failGasUsed,
-          )
-          const crc = await chargeTx.wait()
+          const crc = await traceCall('tx.chargeFailedSettlement', ctx.chainId, async () => {
+            const chargeTx = await settleOwner.chargeFailedSettlement(
+              { order: orderDataToContractOrder(makerData), signature: makerSig },
+              FAIL_ORDER_EXPIRED,
+              failGasUsed,
+            )
+            return chargeTx.wait()
+          })
           steps.charge = `tx=${crc?.hash} status=${crc?.status}`
         } catch (e) {
           steps.charge = `error: ${e instanceof Error ? e.message.slice(0, 160) : String(e)}`
@@ -1570,6 +1684,7 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
     windowStart,
     windowStart + cfg.maxHours * 3600_000,
   )
+  setTraceSink((l) => ledger.line(l))
   ledger.line({
     kind: 'window-start',
     ts: windowStart,
