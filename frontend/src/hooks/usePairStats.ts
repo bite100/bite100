@@ -1,13 +1,16 @@
 /**
- * 交易对顶部信息条统计：全部由节点 /api/trades 现有成交数据推导，不引入外部行情源。
+ * 交易对顶部信息条统计：全部由成交数据推导，不引入外部行情源。
+ * 数据源第 51 轮（阶段 5 节点退役）由节点 /api/trades 改为链上索引
+ * （loadIndexerTrades，Envio Trade 事件，价格/数量已是人类单位）——
+ * 聚合口径不变（无节点设计 §5：前端聚合保留，只换数据入口）。
  * - 最新价：最近一笔成交价
  * - 24h 涨跌：最新价 vs 24h 窗口起点参考价（窗口前最后一笔成交价；无则取窗口内最早一笔）
  * - 24h 最高/最低/成交量：窗口内成交的价格极值与数量合计（基础币 TKA / 计价币 TKB）
  * 无成交数据时各字段为 null，由 UI 显示占位符。
  */
 import { useEffect, useState } from 'react'
-import { nodeGet } from '../nodeClient'
-import { fromScaled } from '../components/dashboard/tradeFormat'
+import { CHAIN_ID } from '../config'
+import { loadIndexerTrades } from '../services/tradesDual'
 
 const DEFAULT_PAIR = 'TKA/TKB'
 const TRADES_LIMIT = 500
@@ -94,28 +97,19 @@ export function usePairStats(pair: string = DEFAULT_PAIR): PairStats {
   useEffect(() => {
     let cancelled = false
     const fetchStats = async () => {
-      try {
-        const { data } = await nodeGet<unknown>('/api/trades', {
-          pair,
-          limit: String(TRADES_LIMIT),
-        })
-        if (cancelled) return
-        const list = Array.isArray(data) ? data : []
-        const normalized: NormTrade[] = list.map((t: unknown) => {
-          const o: Record<string, unknown> =
-            t && typeof t === 'object' ? (t as Record<string, unknown>) : {}
-          return {
-            // 第 28 轮：节点定点/wei → 人类单位（统计口径不变，仅展示单位换算；
-            // 此前未换算时最新价会显示为 7.57e+22 量级）
-            price: fromScaled(o.price),
-            amount: fromScaled(o.amount),
-            timestamp: Number(o.timestamp ?? 0),
-          }
-        })
-        setStats(computeStats(normalized))
-      } catch {
-        if (!cancelled) setStats(EMPTY)
+      const outcome = await loadIndexerTrades(CHAIN_ID, pair, TRADES_LIMIT)
+      if (cancelled) return
+      if (outcome.failed) {
+        setStats(EMPTY)
+        return
       }
+      // 索引展示行价格/数量已是人类单位，直接进既有聚合口径
+      const normalized: NormTrade[] = outcome.trades.map((t) => ({
+        price: t.price,
+        amount: t.amount,
+        timestamp: t.timestamp,
+      }))
+      setStats(computeStats(normalized))
     }
     fetchStats()
     const timer = setInterval(fetchStats, POLL_MS)

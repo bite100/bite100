@@ -1,33 +1,34 @@
 /**
- * 下单路径双通道广播集成测试（第三十轮双发 → 阶段 4 双通道语义）：
- * 节点与中继并行投递，任一通道接单即下单成功，双通道都失败才失败；
- * 副发开关关 → 不发副发请求，此时成功只由节点通道决定。
- * nodeClient / orderSigning / config 以 mock 代替，relayDualSend 用真实实现。
+ * 下单路径集成测试：第 30 轮–阶段 4 为双通道广播（节点+中继任一接单
+ * 即成功、副发开关等用例已随节点退役删除，登记见第 51 轮文档）；
+ * 第 51 轮起 submitOrder 只经中继单通道（broadcastOrder 真实实现）：
+ * - 中继接单 → 返回 orderId，请求体含 orderId 与 chainId；
+ * - 中继明确拒单 → 抛中继原因；
+ * - 传输层失败（结果未定）→ 抛待确认文案（不得断言未接单）；
+ * - 中继未配置 → 抛未配置错误，且不发请求。
+ * config / orderSigning 以 mock 代替，fetch 以 mock 代替。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ethers } from 'ethers'
 
-const relayCfg = vi.hoisted(() => ({ url: 'http://relay.test', enabled: true }))
-const nodePostMock = vi.hoisted(() => vi.fn())
+const relayCfg = vi.hoisted(() => ({ url: 'http://relay.test' }))
 
 vi.mock('../config/relay', () => ({
   get RELAY_URL() {
     return relayCfg.url
   },
-  get RELAY_DUAL_SEND_ENABLED() {
-    return relayCfg.enabled
+  get RELAY_CONFIGURED() {
+    return relayCfg.url !== ''
   },
 }))
 vi.mock('../config', () => ({ CHAIN_ID: 11155111 }))
-vi.mock('../nodeClient', () => ({ nodePost: nodePostMock }))
 vi.mock('./orderSigning', () => ({
   signOrder: vi.fn(async () => '0x' + 'ab'.repeat(65)),
-  signCancelOrder: vi.fn(async () => '0x' + 'cd'.repeat(65)),
   generateOrderId: () => 'ord-test-1',
   fetchOrderNonce: vi.fn(async () => 0),
 }))
 
-import { submitOrder } from './orderService'
+import { submitOrder, BROADCAST_UNKNOWN_MESSAGE } from './orderService'
 
 const signer = {
   getAddress: async () => '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
@@ -44,56 +45,39 @@ const PARAMS = {
   pair: 'BTC/USDT',
 }
 
-describe('submitOrder 双通道广播', () => {
+describe('submitOrder 中继单通道广播', () => {
   beforeEach(() => {
     relayCfg.url = 'http://relay.test'
-    relayCfg.enabled = true
-    nodePostMock.mockReset()
-    nodePostMock.mockResolvedValue({ data: { ok: true }, baseUrl: 'http://node1' })
     globalThis.fetch = vi.fn()
-    vi.spyOn(console, 'debug').mockImplementation(() => {})
   })
 
-  it('节点活 + 中继网络失败 → 下单仍成功', async () => {
-    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('relay down'))
+  it('中继接单 → 下单成功，请求体含同一 orderId 与 chainId', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, status: 200 })
     await expect(submitOrder(PARAMS, signer)).resolves.toBe('ord-test-1')
-    expect(nodePostMock).toHaveBeenCalledTimes(1)
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1) // 副发确实尝试过
-  })
-
-  it('双通道都活 → 下单成功，副发体含同一 orderId 与 chainId', async () => {
-    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true })
-    await expect(submitOrder(PARAMS, signer)).resolves.toBe('ord-test-1')
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
     const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(url).toBe('http://relay.test/orders')
     expect(JSON.parse(init.body)).toMatchObject({ orderId: 'ord-test-1', chainId: 11155111 })
   })
 
-  it('副发开关关 → 不副发，下单仍成功', async () => {
-    relayCfg.enabled = false
-    await expect(submitOrder(PARAMS, signer)).resolves.toBe('ord-test-1')
-    expect(globalThis.fetch).not.toHaveBeenCalled()
+  it('中继明确拒单 → 抛中继拒单原因', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'insufficient available balance' }),
+    })
+    await expect(submitOrder(PARAMS, signer)).rejects.toThrow('中继拒单（HTTP 400）')
+    await expect(submitOrder(PARAMS, signer)).rejects.toThrow('insufficient available balance')
   })
 
-  it('节点挂 + 中继接单 → 下单成功（节点失败不再整单失败，副发照常尝试）', async () => {
-    nodePostMock.mockRejectedValue(new Error('node down'))
-    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true })
-    await expect(submitOrder(PARAMS, signer)).resolves.toBe('ord-test-1')
-    expect(nodePostMock).toHaveBeenCalledTimes(1)
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
-  })
-
-  it('双通道都挂 → 下单失败，抛节点侧原始错误', async () => {
-    nodePostMock.mockRejectedValue(new Error('node down'))
+  it('中继网络失败（结果未定）→ 抛待确认文案，不说未接单', async () => {
     ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('relay down'))
-    await expect(submitOrder(PARAMS, signer)).rejects.toThrow('node down')
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1) // 中继通道确实尝试过
+    await expect(submitOrder(PARAMS, signer)).rejects.toThrow(BROADCAST_UNKNOWN_MESSAGE)
   })
 
-  it('节点挂 + 副发开关关 → 下单失败（只剩节点单通道）', async () => {
-    relayCfg.enabled = false
-    nodePostMock.mockRejectedValue(new Error('node down'))
-    await expect(submitOrder(PARAMS, signer)).rejects.toThrow('node down')
+  it('中继未配置 → 抛未配置错误且不发请求', async () => {
+    relayCfg.url = ''
+    await expect(submitOrder(PARAMS, signer)).rejects.toThrow('未配置')
     expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 })

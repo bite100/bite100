@@ -1,16 +1,14 @@
 /**
- * 第 46 轮：链上撤单入口（阶段 5 前置）——与签名撤单并列的第二个动作。
- * 第 47 轮：文案对齐永久撤单语义（撤单墓碑）与无锁多态呈现。
- *
- * 为什么是并列而非一个按钮自动降级：签名撤单免费、链上撤单要用户
- * 自付 gas；自动降级会在用户没预期时弹出付费交易确认。两个动作
- * 并列、各自标清成本，用户自己选（与本站知情选择口径一致）。
+ * 第 46 轮：链上撤单入口（阶段 5 前置）。第 47 轮：文案对齐永久撤单
+ * 语义（撤单墓碑）与无锁多态呈现。第 51 轮（阶段 5 节点退役）：签名
+ * 撤单随节点下线删除（它只投递节点订单簿；中继簿无撤单接口），本
+ * 组件成为唯一的撤单动作——原先成功后 best-effort 走签名撤单移除
+ * 节点簿面的步骤一并删除，中继簿记录统一等到期自动清理。
  *
  * 流程：确认弹窗（写明立即解锁、永久作废、gas 自付、不可撤销）→
- * services/hardCancel 发交易并回读确认 → 成功后 best-effort 走既有
- * 签名撤单移除节点簿面（cancelOrder，失败不回滚链上结果）→ 结果
- * 区分「链上已释放」与「簿面移除待生效」。中继簿没有撤单接口，
- * 簿面记录只能等到期清理（结果文案按此收窄，不宣称全簿清除）。
+ * services/hardCancel 发交易并回读确认 → 按链上结果多态呈现。
+ * 从未落锁的订单链上无锁可放、也无法置墓碑作废，只能等到期失效——
+ * 这是产品既有缺口（中继无撤单路由），结果文案如实呈现，不假装已撤。
  * 链上语义（第 47 轮合约）：releaseOrderLock 置撤单墓碑，该单永久
  * 作废、不可再落锁、不可再成交，见 services/hardCancel.ts 文件头。
  *
@@ -22,7 +20,6 @@ import { Button, Group, Modal, Stack, Text } from '@mantine/core'
 import type { Signer } from 'ethers'
 import type { Order } from '../OrderBookSection'
 import { hardCancelOrderOnChain, type HardCancelResult } from '../services/hardCancel'
-import { cancelOrder } from '../services/orderService'
 import { CHAIN_ID } from '../config'
 import { formatError } from '../utils'
 
@@ -39,11 +36,7 @@ export interface HardCancelActionProps {
 type Phase =
   | { kind: 'idle' }
   | { kind: 'busy' }
-  | {
-      kind: 'done'
-      result: HardCancelResult
-      bookRemoval: 'done' | 'pending'
-    }
+  | { kind: 'done'; result: HardCancelResult }
   | { kind: 'error'; message: string }
 
 export function HardCancelAction({ order, account, getSigner, summary, onSettled }: HardCancelActionProps) {
@@ -66,16 +59,7 @@ export function HardCancelAction({ order, account, getSigner, summary, onSettled
         chainId: CHAIN_ID,
         signer,
       })
-      // 簿面移除 best-effort：节点可达就走既有签名撤单把节点簿记录
-      // 一并移除；失败（节点停机等）不回滚链上结果，如实标待生效。
-      let bookRemoval: 'done' | 'pending' = 'pending'
-      try {
-        await cancelOrder(order.orderId, signer)
-        bookRemoval = 'done'
-      } catch {
-        bookRemoval = 'pending'
-      }
-      setPhase({ kind: 'done', result, bookRemoval })
+      setPhase({ kind: 'done', result })
       onSettled?.()
     } catch (e) {
       setPhase({ kind: 'error', message: formatError(e) })
@@ -103,7 +87,7 @@ export function HardCancelAction({ order, account, getSigner, summary, onSettled
                 gas，交易一旦发出不可撤销。
               </Text>
               <Text size="sm" c="dimmed">
-                订单簿里的这条记录可能暂时还在（中继簿没有撤单接口，只能等到期自动清理；节点簿会尽力同步移除），但订单已在链上作废、无法成交，不影响你的余额。
+                订单簿里的这条记录可能暂时还在（中继簿没有撤单接口，只能等到期自动清理），但订单已在链上作废、无法成交，不影响你的余额。
               </Text>
             </>
           )}
@@ -124,54 +108,37 @@ export function HardCancelAction({ order, account, getSigner, summary, onSettled
           )}
           {phase.kind === 'done' && phase.result.status === 'released' && (
             <Text size="sm">
-              链上锁定已释放，这张订单已永久作废、无法再成交。
-              {phase.bookRemoval === 'done'
-                ? '节点簿记录已移除；中继簿记录仍待过期清理。'
-                : '订单簿记录移除未完成，会随到期自动清理，不影响你的余额。'}
+              链上锁定已释放，这张订单已永久作废、无法再成交。订单簿里的记录会随到期自动清理，不影响你的余额。
             </Text>
           )}
           {phase.kind === 'done' && phase.result.status === 'never-locked' && (
             <Text size="sm">
               这张订单从未在链上落锁，没有需要释放的锁定。
               <Text span c="red">
-                注意：订单本身没有作废，在过期前仍可能被落锁并成交；
+                注意：订单本身没有作废，在过期前仍可能被落锁并成交。
               </Text>
-              如不想继续挂这张单，请用「撤单」把它从订单簿移除（已为你同步尝试，见下）。
-              {phase.bookRemoval === 'done'
-                ? '节点簿记录已移除；中继簿记录仍待过期清理。'
-                : '订单簿记录移除未完成，会随到期自动清理。'}
+              目前没有办法提前撤下从未落锁的挂单（中继簿不提供撤单接口），它会在到期后自动失效；中继簿里的记录也会随到期清理。
             </Text>
           )}
           {phase.kind === 'done' && phase.result.status === 'already-cancelled' && (
             <Text size="sm">
-              这张订单此前已经完成链上撤单：锁定已释放、订单已永久作废，无法再成交，无需重复操作。
-              {phase.bookRemoval === 'done'
-                ? '节点簿记录已移除；中继簿记录仍待过期清理。'
-                : '订单簿记录会随到期自动清理。'}
+              这张订单此前已经完成链上撤单：锁定已释放、订单已永久作废，无法再成交，无需重复操作。订单簿记录会随到期自动清理。
             </Text>
           )}
           {phase.kind === 'done' && phase.result.status === 'filled' && (
             <Text size="sm">
-              这张订单已经全部成交，锁定已随成交消耗完毕，没有可释放的余额，也无需撤单。
-              {phase.bookRemoval === 'done'
-                ? '节点簿记录已移除；中继簿记录仍待过期清理。'
-                : '订单簿记录会随到期自动清理。'}
+              这张订单已经全部成交，锁定已随成交消耗完毕，没有可释放的余额，也无需撤单。订单簿记录会随到期自动清理。
             </Text>
           )}
           {phase.kind === 'done' && phase.result.status === 'expired-released' && (
             <Text size="sm">
               这张订单已过期，锁定已随过期释放完毕，没有可释放的余额；订单已过有效期，无法再成交。
-              {phase.bookRemoval === 'done'
-                ? '节点簿记录已移除；中继簿记录仍待过期清理。'
-                : '订单簿记录会随到期自动清理。'}
             </Text>
           )}
           {phase.kind === 'done' && phase.result.status === 'unknown' && (
             <Text size="sm" c="orange.8" role="alert">
               状态待确认：{phase.result.reason}
-              {phase.bookRemoval === 'done'
-                ? '节点簿记录已移除；中继簿记录仍待过期清理。'
-                : '订单簿记录会随到期自动清理。'}
+              订单簿记录会随到期自动清理。
             </Text>
           )}
           <Group grow>

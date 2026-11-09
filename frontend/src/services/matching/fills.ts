@@ -54,7 +54,8 @@ export interface FillBuildContext {
 export function buildLegFill(leg: MatchLeg, ctx: FillBuildContext): ContractFill | null {
   const makerEv = ctx.makersByOrderId.get(leg.makerOrderId)
   if (!makerEv) return null
-  const rawCopy = makerEv.raw.node ?? makerEv.raw.relay
+  // 第 51 轮：单源后 maker 原料只有中继一份副本（双读时代此处节点优先）
+  const rawCopy = makerEv.raw.relay
   if (!rawCopy) return null
   const makerData = buildSignedOrderData(rawCopy, ctx.chainId)
   if (!makerData) return null

@@ -1,23 +1,32 @@
 /**
- * 第 34 轮双读 — 两源订单簿适配器。
+ * 第 34 轮双读建立的订单簿适配器层；第 51 轮（阶段 5 节点退役）改为
+ * 中继单源：节点适配器随节点下线删除，本文件只剩公告栏中继适配器。
  *
- * - 节点适配器复用现行客户端 services/nodeClient.ts（nodeGet / tryNodes），
- *   合同 GET /api/orderbook?pair= → { pair, bids, asks }（全量开簿，无分页）。
- * - 公告栏适配器按 relay/ 的现行 API 合同实现：
+ * - 中继适配器按 relay/ 的现行 API 合同实现：
  *   GET /orderbook?pair=<PAIR>&chain=<chainId> → { pair, generatedAt, bids, asks }
  *   （relay SQL 先取 400 行、仅 open/partial，两侧各截 100 行返回——单侧
  *   返回满 100 行即视为可能截断，分页完整度记 false）。
  *
- * 两源统一按 (链， 交易对， 方向） 组织，排序为稳定键
- * （买盘价降/卖盘价升，同价 createdAt 升序，digest 前的 orderId 兜底），
- * 并记录分页完整度；未拉完的数据不进完整性指标（见 metrics.ts）。
+ * - 块 3 根因修复（第 45 轮挂账）：缺省 fetch 必须带显式超时。第 45 轮
+ *   查明「阶段 4 运行器挂死」的根因嫌疑为本适配器缺省 fetch 无超时——
+ *   fetch 本身没有默认超时，对端永不响应时 fetchBook 永远不 settle。
+ *   当时只在运行器侧注入了带超时的 fetch 绕行，产品缺省路径仍无界；
+ *   本轮给缺省 fetch 补 AbortController + RELAY_BOOK_TIMEOUT_MS，并有
+ *   「对端永不响应时在截止期内失败」的单测钉住（dualread.test.ts）。
+ *   注入 fetchFn 的调用方自带超时纪律（如 TradeTabsPanel 的 10s
+ *   timedFetch、阶段 4 运行器的 30s 包装），不受影响。
+ *
+ * 排序为稳定键（买盘价降/卖盘价升，同价 createdAt 升序，orderId 兜底），
+ * 并记录分页完整度；未拉完的数据不进可成交集（评估层 SOURCE_INCOMPLETE 口径）。
  */
-import { nodeGet } from '../../nodeClient'
 import { RELAY_URL } from '../../config/relay'
 import type { RawOrder, SourceBook } from './types'
 
 /** relay /orderbook 单侧返回上限（relay/src/index.ts 现行合同） */
 export const RELAY_BOOK_SIDE_CAP = 100
+
+/** 中继订单簿读取的缺省超时（ms）：对端在此时间内无响应即失败（第 51 轮，块 3） */
+export const RELAY_BOOK_TIMEOUT_MS = 10_000
 
 /** 负零规范化（第 40 轮复审跟进）：数字 -0 经 toString 得 "0"，字符串
  * "-0" 若原样保留则两路不一致；整数形态与定点形态的整数部分统一把
@@ -30,7 +39,7 @@ function asIntString(v: unknown): string | null {
   if (typeof v === 'string') {
     const s = v.trim()
     if (/^-?\d+$/.test(s)) return canonIntString(s)
-    // 定点小数字符串：第 38 轮——节点撮合引擎以 big.Float.Text('f', 18)
+    // 定点小数字符串：第 38 轮——撮合引擎以 big.Float.Text('f', 18)
     // 回写 amount/filled（如 "1000000000000000.000000000000000000"），
     // 小数部分全为零时归一化为整数串；含任何非零数字则判无效返回
     // null（走既有丢弃路径），绝不静默截断小数。
@@ -82,9 +91,8 @@ export function toRawOrder(x: unknown): RawOrder | null {
 }
 
 /**
- * 一批原始行 → 规范化订单 + 丢弃计数（第 38 轮）：三个取数点（前端节点
- * 适配器、前端中继适配器、soak 服务端节点适配器）共用，保证「整源被
- * 字段形态吞掉」时计数可见，不再静默归零。
+ * 一批原始行 → 规范化订单 + 丢弃计数（第 38 轮）：中继适配器与产品各
+ * 取数点共用，保证「整源被字段形态吞掉」时计数可见，不再静默归零。
  *
  * droppedRows 的口径是「规范化阶段丢弃数」（第 40 轮，第 38 轮复审 F4
  * 写明）：只数 toRawOrder 返回 null 的行；后续 digest 重构失败、验签
@@ -122,20 +130,11 @@ export interface BookAdapter {
   fetchBook(chainId: number, pair: string): Promise<SourceBook>
 }
 
-type NodeGetFn = (
-  path: string,
-  params?: Record<string, string>,
-) => Promise<{ data: { pair: string; bids: unknown[]; asks: unknown[] }; baseUrl: string }>
-
-const defaultNodeGet: NodeGetFn = (path, params) =>
-  nodeGet<{ pair: string; bids: unknown[]; asks: unknown[] }>(path, params)
-
 /**
- * 节点订单簿响应的形态校验（第 40 轮，第 38 轮复审 F3）：响应必须是
- * 对象；bids/asks 缺失（undefined）按空数组处理（正常空盘口），存在
- * 但不是数组则抛错——按源错误走既有降级，绝不静默当空簿，也不让非
- * 数组流进 normalizeBookRows。前端节点适配器与 soak runner 的服务端
- * 节点适配器共用本函数，保证两侧同构。
+ * 订单簿响应的形态校验（第 40 轮，第 38 轮复审 F3）：响应必须是对象；
+ * bids/asks 缺失（undefined）按空数组处理（正常空盘口），存在但不是
+ * 数组则抛错——按源错误走既有降级，绝不静默当空簿，也不让非数组流进
+ * normalizeBookRows。
  */
 export function requireBookSides(
   data: unknown,
@@ -159,44 +158,33 @@ export function requireBookSides(
   return { bids: bids ?? [], asks: asks ?? [] }
 }
 
-/** 节点适配器（注入点便于单测；缺省走现行 nodeGet 多节点轮询） */
-export function createNodeBookAdapter(get: NodeGetFn = defaultNodeGet): BookAdapter {
-  return {
-    async fetchBook(chainId: number, pair: string): Promise<SourceBook> {
-      const { data } = await get('/api/orderbook', { pair })
-      const { bids: rawBids, asks: rawAsks } = requireBookSides(data, 'node')
-      const nb = normalizeBookRows(rawBids)
-      const na = normalizeBookRows(rawAsks)
-      const bids = sortBookSide(nb.orders, 'buy')
-      const asks = sortBookSide(na.orders, 'sell')
-      return {
-        source: 'node',
-        chainId,
-        pair,
-        bids,
-        asks,
-        // 节点 orderbook 接口一次性返回全量开簿，无分页概念
-        complete: true,
-        fetchedAt: Date.now(),
-        rawRows: rawBids.length + rawAsks.length,
-        droppedRows: nb.droppedRows + na.droppedRows,
-      }
-    },
-  }
-}
-
 export type FetchFn = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>
 
-/** 公告栏适配器（注入 fetch 便于单测；缺省用全局 fetch 读 RELAY_URL） */
+export interface RelayBookAdapterOptions {
+  /** 缺省 fetch 的超时（ms）；仅在未注入 fetchFn 时生效 */
+  timeoutMs?: number
+}
+
+/** 公告栏适配器（注入 fetch 便于单测；缺省用全局 fetch 读 RELAY_URL，自带显式超时） */
 export function createRelayBookAdapter(
   baseUrl: string = RELAY_URL,
   fetchFn?: FetchFn,
+  options?: RelayBookAdapterOptions,
 ): BookAdapter {
+  const timeoutMs = options?.timeoutMs ?? RELAY_BOOK_TIMEOUT_MS
   const doFetch: FetchFn =
     fetchFn ??
     (async (url: string) => {
-      const res = await fetch(url)
-      return { ok: res.ok, status: res.status, json: () => res.json() }
+      // 块 3 根因修复：fetch 无默认超时——AbortController 在截止期到时
+      // abort，对端永不响应也会在 timeoutMs 内失败，不再无界等待。
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      try {
+        const res = await fetch(url, { signal: controller.signal })
+        return { ok: res.ok, status: res.status, json: () => res.json() }
+      } finally {
+        clearTimeout(timer)
+      }
     })
   return {
     async fetchBook(chainId: number, pair: string): Promise<SourceBook> {
@@ -205,9 +193,9 @@ export function createRelayBookAdapter(
       const res = await doFetch(url)
       if (!res.ok) throw new Error(`relay orderbook http ${res.status}`)
       const data = await res.json()
-      // 与节点适配器同一口径（第 40 轮 F3 的 requireBookSides）：顶层非
-      // 对象/数组、或 bids/asks 存在但非数组 → 抛错按源错误处理，
-      // 不静默当空簿；字段缺失才按空盘口。
+      // requireBookSides 口径（第 40 轮 F3）：顶层非对象/数组、或
+      // bids/asks 存在但非数组 → 抛错按源错误处理，不静默当空簿；
+      // 字段缺失才按空盘口。
       const { bids: rawBids, asks: rawAsks } = requireBookSides(data, 'relay book')
       const nb = normalizeBookRows(rawBids)
       const na = normalizeBookRows(rawAsks)

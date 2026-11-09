@@ -1,19 +1,25 @@
 /**
- * Phase 3.5：订单簿展示、限价单下单/撤单、成交与结算状态
- * 支持多节点 P2P、WebSocket 增量更新、虚拟滚动
+ * 完整订单簿：盘口展示、限价单下单、链上撤单、成交与结算状态。
+ * 第 51 轮（无节点阶段 5 节点退役）：数据单源化——盘口与我的订单读
+ * 订单中继簿、成交读链上索引、下单只走中继广播；原节点 API
+ * （/api/orderbook、/api/trades、/api/orders、/api/node）与签名撤单
+ * 一并退役。WebSocket/P2P 实时增量（浏览器 P2P 通道）保留。
  */
 import { useState, useEffect, useCallback } from 'react'
 import { ethers, Contract } from 'ethers'
-import { NODE_API_URL, NODE_API_URLS, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from './config'
+import { VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from './config'
 import { TRADE_PAIRS, getPairTokens } from './config/pairs'
 import { useCurrentPair } from './hooks/useCurrentPair'
 import { formatError, formatTokenAmount, getProvider } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
-import { nodeGet, nodePost } from './nodeClient'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
-import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
+import { signOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
 import { sideToSignedValue } from './services/orderSigningTypes'
-import { broadcastOrderDualChannel, BROADCAST_NODE_UNKNOWN_MESSAGE } from './services/orderService'
+import { broadcastOrder, BROADCAST_UNKNOWN_MESSAGE } from './services/orderService'
+import { RELAY_CONFIGURED } from './config/relay'
+import { createRelayBookAdapter } from './services/dualread/adapters'
+import type { RawOrder } from './services/dualread/types'
+import { loadIndexerTrades } from './services/tradesDual'
 import { verifyOrderSignatureSignedData } from './services/orderVerification'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { HardCancelAction } from './components/HardCancelAction'
@@ -80,7 +86,25 @@ const ORDERBOOK_DISPLAY_DEPTH = 100
 const ORDERBOOK_ROW_HEIGHT = 28
 const ORDERBOOK_PANEL_HEIGHT = 220
 const TRADES_DISPLAY_LIMIT = 15
-const hasNodeApi = () => !!(NODE_API_URL || NODE_API_URLS.length > 0)
+const hasRelayApi = () => RELAY_CONFIGURED
+
+/** 中继簿行 → 本页 Order 视图（字段口径一致，逐字段搬运） */
+function rawToOrder(r: RawOrder): Order {
+  return {
+    orderId: r.orderId,
+    trader: r.trader,
+    pair: r.pair,
+    side: r.side,
+    price: r.price,
+    amount: r.amount,
+    filled: r.filled,
+    status: r.status,
+    nonce: r.nonce,
+    createdAt: r.createdAt,
+    expiresAt: r.expiresAt,
+    signature: r.signature,
+  }
+}
 
 function normalizeOrder(o: Record<string, unknown>): Order {
   return {
@@ -120,10 +144,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   const [price, setPrice] = useState('')
   const [amount, setAmount] = useState('')
   const [placeLoading, setPlaceLoading] = useState(false)
-  const [cancelLoading, setCancelLoading] = useState<string | null>(null)
   const [refreshAt, setRefreshAt] = useState(0)
-  const [nodeType, setNodeType] = useState<string | null>(null)
-  const [connectedNode, setConnectedNode] = useState<string | null>(null)
   const [fromCache, setFromCache] = useState<{ orderbook?: boolean; trades?: boolean; myOrders?: boolean }>({})
   const [tradesFilterMine, setTradesFilterMine] = useState(false) // 连接钱包后可过滤「我的交易」
   const [priceAnimations, setPriceAnimations] = useState<Map<string, 'up' | 'down'>>(new Map())
@@ -133,7 +154,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   const { basePrice, quotePrice, loading: marketPriceLoading, error: marketPriceError } = usePairMarketPrice(pair)
 
   const fetchOrderbook = useCallback(async () => {
-    if (!hasNodeApi()) return
+    if (!hasRelayApi()) return
     setError(null)
     const cacheKey = CACHE_KEYS_ORDERBOOK.orderbook(pair)
     const cached = getCached<OrderbookResponse>(cacheKey)
@@ -147,7 +168,12 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       return
     }
     try {
-      const { data, baseUrl } = await nodeGet<OrderbookResponse>('/api/orderbook', { pair })
+      const book = await createRelayBookAdapter().fetchBook(CHAIN_ID, pair)
+      const data: OrderbookResponse = {
+        pair,
+        bids: book.bids.map(rawToOrder),
+        asks: book.asks.map(rawToOrder),
+      }
       // 检测价格变化并设置动画
       if (orderbook && data) {
         const animMap = new Map<string, 'up' | 'down'>()
@@ -178,7 +204,6 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       setPrevOrderbook(orderbook)
       setOrderbook(data)
       setCached(cacheKey, data)
-      setConnectedNode(baseUrl)
       setFromCache((f) => ({ ...f, orderbook: false }))
     } catch (e) {
       if (!cached) setOrderbook(null)
@@ -187,7 +212,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   }, [pair, isOnline, orderbook])
 
   const fetchTrades = useCallback(async () => {
-    if (!hasNodeApi()) return
+    if (!hasRelayApi()) return
     const cacheKey = CACHE_KEYS_ORDERBOOK.trades(pair)
     const cached = getCached<Trade[]>(cacheKey)
     if (cached) {
@@ -198,8 +223,19 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       return
     }
     try {
-      const { data } = await nodeGet<Trade[]>('/api/trades', { pair, limit: '30' })
-      const list = Array.isArray(data) ? data : []
+      // 成交单源 = 链上索引（展示值已是人类单位，字符串化进既有渲染）
+      const outcome = await loadIndexerTrades(CHAIN_ID, pair, 30)
+      if (outcome.failed) throw new Error('indexer unavailable')
+      const list: Trade[] = outcome.trades.map((d) => ({
+        tradeId: d.key,
+        pair,
+        maker: d.maker,
+        taker: d.taker,
+        price: String(d.price),
+        amount: String(d.amount),
+        timestamp: d.timestamp,
+        txHash: d.txHash,
+      }))
       setTrades(list)
       setCached(cacheKey, list)
       setFromCache((f) => ({ ...f, trades: false }))
@@ -209,7 +245,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   }, [pair, isOnline])
 
   const fetchMyOrders = useCallback(async () => {
-    if (!hasNodeApi() || !account) return
+    if (!hasRelayApi() || !account) return
     const cacheKey = CACHE_KEYS_ORDERBOOK.myOrders(account, pair)
     const cached = getCached<Order[]>(cacheKey)
     if (cached) {
@@ -220,8 +256,10 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       return
     }
     try {
-      const { data } = await nodeGet<Order[]>('/api/orders', { trader: account, pair, limit: '50' })
-      const list = Array.isArray(data) ? data : []
+      const book = await createRelayBookAdapter().fetchBook(CHAIN_ID, pair)
+      const list = [...book.bids, ...book.asks]
+        .filter((r) => r.trader.toLowerCase() === account.toLowerCase())
+        .map(rawToOrder)
       setMyOrders(list)
       setCached(cacheKey, list)
       setFromCache((f) => ({ ...f, myOrders: false }))
@@ -231,17 +269,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   }, [account, pair, isOnline])
 
   useEffect(() => {
-    if (!hasNodeApi()) return
-    nodeGet<{ nodeType: string }>('/api/node')
-      .then(({ data, baseUrl }) => {
-        setNodeType(data?.nodeType ?? null)
-        setConnectedNode(baseUrl)
-      })
-      .catch(() => setNodeType(null))
-  }, [])
-
-  useEffect(() => {
-    if (!hasNodeApi()) return
+    if (!hasRelayApi()) return
     setLoading(true)
     Promise.all([fetchOrderbook(), fetchTrades(), account ? fetchMyOrders() : Promise.resolve()]).finally(() =>
       setLoading(false)
@@ -281,7 +309,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
 
   // P2P 订单广播：启动 libp2p（Bootstrap + DHT），收到订单时刷新订单簿
   useEffect(() => {
-    if (!hasNodeApi()) return
+    if (!hasRelayApi()) return
     let unsub: (() => void) | undefined
     p2pOrderBroadcast.start().then(() => {
       unsub = p2pOrderBroadcast.addOrderListener(() => {
@@ -293,7 +321,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
 
   // WebSocket 增量更新订单簿（pair 变化时订阅当前交易对）
   useEffect(() => {
-    if (!hasNodeApi() || !p2pWS) return
+    if (!hasRelayApi() || !p2pWS) return
     p2pWS.connect()
     const unsub = p2pWS.subscribe('orderbook_update', (msg) => {
       if (msg.pair !== pair || !msg.data) return
@@ -397,16 +425,15 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         expiresAt,
         signature,
       }
-      // 阶段 4 双通道广播：同一订单原文并行投递节点与中继，任一接单即
-      // 下单成功（节点停机时订单照样进中继簿）；双通道都失败才报错。
-      const broadcast = await broadcastOrderDualChannel({ ...order }, CHAIN_ID)
-      if (!broadcast.viaNode && !broadcast.viaRelay) {
-        // UNKNOWN 优先于失败断言（第 46 轮 P2-3）：节点超时未定按
-        // 待确认呈现，提示勿重复下单。
-        if (broadcast.nodeUnknown) throw new Error(BROADCAST_NODE_UNKNOWN_MESSAGE)
-        throw broadcast.nodeError instanceof Error
-          ? broadcast.nodeError
-          : new Error('订单广播失败：节点与中继通道均未接单，请稍后重试')
+      // 第 51 轮（阶段 5 节点退役）：下单只走中继单通道，中继接单即
+      // 下单成功；明确拒单报错带原因，传输层失败（结果未定）按待
+      // 确认呈现（第 46 轮 P2-3 口径沿用），提示勿重复下单。
+      const broadcast = await broadcastOrder({ ...order }, CHAIN_ID)
+      if (!broadcast.viaRelay) {
+        if (broadcast.relayUnknown) throw new Error(BROADCAST_UNKNOWN_MESSAGE)
+        throw broadcast.relayError instanceof Error
+          ? broadcast.relayError
+          : new Error('订单广播失败：中继未接单，请稍后重试')
       }
       await p2pOrderBroadcast.publishOrder({ ...order, signature: order.signature ?? '' })
       setPrice('')
@@ -419,30 +446,12 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
     }
   }
 
-  const handleCancel = async (orderId: string) => {
-    if (!account) return
-    setCancelLoading(orderId)
-    setError(null)
-    try {
-      const signer = await getSigner()
-      if (!signer) throw new Error('请先连接钱包')
-      const timestamp = Math.floor(Date.now() / 1000)
-      const signature = await signCancelOrder(orderId, account, timestamp, signer, CHAIN_ID)
-      await nodePost('/api/order/cancel', { orderId, signature, timestamp })
-      setRefreshAt((x) => x + 1)
-    } catch (e) {
-      setError(formatError(e))
-    } finally {
-      setCancelLoading(null)
-    }
-  }
-
-  if (!hasNodeApi()) {
+  if (!hasRelayApi()) {
     return (
       <div className="card vault-section">
         <h2>完整订单簿</h2>
         <p className="hint">
-          节点服务暂时不可用，订单簿无法加载。行情、订单簿与下单都由节点提供，节点恢复后刷新页面即可继续交易；你的链上资产与跨链桥不受影响。
+          订单中继未配置，订单簿无法加载。订单簿、下单与撤单都经订单中继与链上完成（节点已退役）；你的链上资产与跨链桥不受影响。
         </p>
       </div>
     )
@@ -459,16 +468,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         )}
       </div>
       <p className="hint">
-        完整的盘口深度、全部挂单与成交记录，数据来自节点 API。在此下单与撤单只需钱包签名、订单不上链；订单被接受时即锁定对应 Vault 余额（成交消耗、撤单或到期释放），可用余额不足的订单不会被接受。下单前请先在「资产」中存入足额余额；撤单在下方「我的订单」中操作：签名撤单由节点代为释放锁定，节点不可用时也可用「链上撤单」——钱包直接上链释放这张单锁住的余额并在链上永久作废该单（自付少量 gas）。
-        {nodeType && (
-          <span className="node-type"> · 节点类型：{nodeType === 'match' ? '撮合' : nodeType === 'storage' ? '存储' : '中继'}</span>
-        )}
-        {NODE_API_URLS.length > 1 && (
-          <span className="node-type"> · P2P 多节点（{NODE_API_URLS.length} 个）</span>
-        )}
-        {connectedNode && (
-          <span className="node-type"> · 当前节点：{connectedNode.replace(/^https?:\/\//, '').slice(0, 32)}{(connectedNode.length > 32 ? '…' : '')}</span>
-        )}
+        完整的盘口深度、全部挂单与成交记录：盘口与挂单来自订单中继簿，成交来自链上索引。在此下单只需钱包签名、订单不上链；订单被中继接受时即锁定对应 Vault 余额（成交消耗、撤单或到期释放），可用余额不足的订单不会被接受。下单前请先在「资产」中存入足额余额；撤单在下方「我的订单」中用「链上撤单」——钱包直接上链释放这张单锁住的余额并在链上永久作废该单（自付少量 gas），中继簿里的记录会随订单到期自动清理。
         {(fromCache.orderbook || fromCache.trades || fromCache.myOrders) && (
           <span className="cache-hint"> · 部分数据来自本地缓存（5 分钟内）</span>
         )}
@@ -682,14 +682,6 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
                     <td>
                       {(o.status === 'open' || o.status === 'partial') && (
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                          <button
-                            type="button"
-                            className="btn secondary"
-                            onClick={() => handleCancel(o.orderId)}
-                            disabled={cancelLoading === o.orderId}
-                          >
-                            {cancelLoading === o.orderId ? '…' : '撤单'}
-                          </button>
                           <HardCancelAction
                             order={o}
                             account={account}

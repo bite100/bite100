@@ -1,15 +1,17 @@
 /**
- * 中继状态区（第 31 轮 §12.6，第 34 轮更新）：三项健康只报实情——
+ * 中继状态区（第 31 轮 §12.6，第 34 轮更新，第 51 轮单源化）：健康只报实情——
  * 主中继（Workers + D1）：未配置 VITE_RELAY_URL 时如实显示「未部署」，不假绿；
- * 配置后探活 /health。Nostr 镜像前端尚未接入读取，如实显示「未知」。
- * Envio 索引（第 34 轮）：未配置 VITE_INDEXER_URL 显示「未部署」；配置后以
- * 最小 GraphQL 查询探活。双读影子对比区见文件后半（RELAY_MODE 非 disabled 时）。
+ * 配置后探活 /health。第 51 轮（无节点阶段 5）起主中继是唯一的订单通道
+ * （下单、订单簿都走它），文案按单源事实呈现。
+ * Nostr 镜像前端尚未接入读取，如实显示「未知」。
+ * Envio 索引：未配置 VITE_INDEXER_URL 显示「未部署」；配置后以最小
+ * GraphQL 查询探活，成交记录的唯一展示源。
+ * 原「双读影子对比」区（第 34 轮）随节点退役删除：双读的前提（节点源）
+ * 已不存在，影子指标与三态模式说明一并退役。
  */
 import { useEffect, useState } from 'react'
-import { RELAY_URL, RELAY_MODE, RELAY_MODE_REQUESTED, type RelayMode } from '../config/relay'
+import { RELAY_URL } from '../config/relay'
 import { INDEXER_URL, INDEXER_ENABLED } from '../config/indexer'
-import { useShadowMetrics } from '../hooks/useShadowMetrics'
-import type { Ratio } from '../services/dualread'
 import './RelayStatus.css'
 
 type HealthState = 'ok' | 'bad' | 'unknown' | 'undeployed'
@@ -98,11 +100,11 @@ export function RelayStatus() {
       state: mainState,
       detail:
         mainState === 'undeployed'
-          ? '订单中继的代码已就绪但尚未部署到 Cloudflare，当前下单仍走节点通道。部署完成后这里会显示可达性与最近订单同步时间。'
+          ? '订单中继的代码已就绪但尚未部署到 Cloudflare。下单与订单簿都经主中继，部署并配置 VITE_RELAY_URL 后这里会显示可达性。'
           : mainState === 'ok'
-            ? '主中继可达，/health 探活正常。'
+            ? '主中继可达，/health 探活正常。下单、订单簿与「我的订单」都经主中继（节点已退役，没有备用通道）。'
             : mainState === 'bad'
-              ? '主中继探活失败；下单仍可走节点通道，中继恢复后会自动双路同步。'
+              ? '主中继探活失败：下单与订单簿暂时不可用（链上资产、余额与跨链不受影响）；撤单仍可走钱包直连链上的「链上撤单」。'
               : '正在探活主中继…',
       time: mainState === 'undeployed' ? '—' : mainTime,
     },
@@ -110,7 +112,7 @@ export function RelayStatus() {
       name: 'Nostr 镜像',
       state: 'unknown',
       detail:
-        '订单会镜像广播到 Nostr 公共中继（自定义事件类型），但前端尚未接入镜像状态读取，暂时无法在此确认已连接中继数与最近镜像时间。',
+        '订单会镜像广播到 Nostr 公共中继（自定义事件类型），但前端尚未接入镜像状态读取，暂时无法在此确认已连接中继数与最近镜像时间。镜像只是备份广播，订单以主中继（D1）为准。',
       time: '—',
     },
     {
@@ -118,11 +120,11 @@ export function RelayStatus() {
       state: indexerState,
       detail:
         indexerState === 'undeployed'
-          ? '索引器代码已就绪（仓库 indexer/ 目录，双链 Settlement 成交 + gas 分摊），但尚未部署到 Envio Cloud、前端也未配置端点；当前成交记录只读节点 API。部署并配置 VITE_INDEXER_URL 后，成交以链上索引为权威来源。'
+          ? '索引器代码已就绪（仓库 indexer/ 目录，双链 Settlement 成交 + gas 分摊），但尚未部署到 Envio Cloud、前端也未配置端点；成交记录暂不可用。部署并配置 VITE_INDEXER_URL 后，成交记录以链上索引为展示来源。'
           : indexerState === 'ok'
-            ? '链上索引端点可达，成交记录以索引为权威来源展示，节点独有成交会标「待索引」。'
+            ? '链上索引端点可达，成交记录以索引为展示来源。索引只是链上事件的展示缓存，成交对错以链上为准。'
             : indexerState === 'bad'
-              ? '链上索引端点探活失败；成交记录暂回退节点数据并标注「待索引」，索引恢复后自动切回。'
+              ? '链上索引端点探活失败；成交记录暂不可用（不影响下单与订单簿），索引恢复后自动恢复展示。'
               : '正在探活链上索引端点…',
       time: indexerState === 'undeployed' ? '—' : indexerTime,
     },
@@ -140,215 +142,14 @@ export function RelayStatus() {
           <p className="relay-time">最近状态时间：{it.time}</p>
         </div>
       ))}
-      {RELAY_MODE !== 'disabled' && <ShadowSection />}
-    </div>
-  )
-}
-
-function fmtRatio(r: Ratio): string {
-  if (r.rate === null) return '—（暂无样本）'
-  return `${(r.rate * 100).toFixed(2)}%（${r.num}/${r.den}）`
-}
-
-function fmtLatency(median: number | null, samples: number): string {
-  if (median === null) return '—（暂无样本）'
-  return `${(median / 1000).toFixed(1)} 秒（样本 ${samples}）`
-}
-
-/**
- * 双读影子对比区（第 34 轮，无节点阶段 2）：仅在 VITE_RELAY_MODE 为
- * shadow/active 时出现。口径说明（用户常设规则：功能变更必须带说明）：
- * 本区逐单比对节点订单簿与公告栏订单簿，并以链上状态复核；shadow 模式
- * 下只观察、不影响交易页订单簿（仍为节点单读）。阶段 3 的准入线写在区尾，
- * 合成测试与真实观察分开统计——本区数字只来自真实双读轮询。
- */
-/**
- * 双读模式徽标（第 35 轮 D8 抽成纯展示组件以便渲染测试）：
- * 请求了 active 但有效模式仍是 shadow（未接线）时，必须明示
- * 「正式模式尚未接线 · 当前按影子模式运行」，不许宣称合并视图展示中；
- * 「合并视图展示中」只留给真正接线后的 active。
- */
-export function ShadowModePill({
-  requested,
-  mode,
-}: {
-  requested: RelayMode
-  mode: RelayMode
-}) {
-  if (requested === 'active' && mode !== 'active') {
-    return <span className="relay-pill">正式模式尚未接线 · 当前按影子模式运行</span>
-  }
-  return (
-    <span className={`relay-pill ${mode === 'active' ? 'relay-ok' : ''}`}>
-      {mode === 'active' ? '合并视图展示中' : '影子模式 · 只观察'}
-    </span>
-  )
-}
-
-/**
- * 方向可信过渡说明（第 36 轮：功能/口径变更同轮带页内说明）。
- * 当前协议下订单的买卖方向不在签名范围内、无法证明，双读只观察、
- * 不认证任何订单可成交——必须在指标旁边明示，不能让准入线看起来
- * 像是已经挣来的。
- */
-export function DirectionTrustNotice() {
-  return (
-    <p className="relay-detail">
-      方向可信说明（第 36 轮，过渡期）：订单的买卖方向目前不在 EIP-712
-      签名范围内，金库落锁的方向又由落锁人自己选择——所以任何订单的
-      方向都无法被证明，两个来源写得一致、或锁仓方向对得上，都证明不了
-      挂单人的真实方向。因此双读现在只做观察（分类、发现、一致性照常
-      统计），但不认证任何订单为「可成交」，可成交集暂时为空。要等协议
-      升级把方向纳入签名、并由金库与结算合约在链上强制执行之后（阶段 3
-      合约轮），才会恢复可成交认证。
-    </p>
-  )
-}
-
-/** 三态模式说明（第 35 轮 D8：模式标注变更同轮带页内说明） */
-export function RelayModesExplanation() {
-  return (
-    <p className="relay-detail">
-      三种模式说明：关闭（disabled）只读节点订单簿，不做双读计算；影子（shadow）同时读节点与公告栏、逐单比对并以链上状态复核，但只观察、不影响交易页；正式（active）会把合并视图送进交易页订单簿——该模式尚未接线（无节点阶段
-      3 才实施），当前即使配置为 active，也只按影子模式运行，交易页订单簿仍为节点单读。
-    </p>
-  )
-}
-
-/** 阶段 3 准入说明（第 36 轮拆 3A/3B + 过渡期口径，抽为纯组件以便渲染测试） */
-export function Stage3AdmissionExplanation() {
-  return (
-    <p className="relay-detail">
-      阶段 3 准入线（第 36 轮起拆为 3A/3B）：3A 是测试网技术准入——
-      本系统尚无真实客户订单流，证据由服务端合成压测产生：自有测试
-      钱包在双链全部交易对持续签发订单（含对抗场景），影子层连续运行
-      7 天、双链各自累计 ≥500 张有效订单（一链的样本不能替另一链
-      补数），期内共同单冲突率 0、订单发现成功率 ≥99%、共同单状态
-      一致率 ≥99.9%，并报告与生成器真值的分类准确性；观测记录在服务
-      端逐轮落盘。注意过渡期的口径：方向不可证期间可成交集按构造为
-      空，「无无效/未知单混入可成交集」这条零容忍线是自动满足的，
-      不算挣来的安全证据，真正看的是发现率、双链计数、一致率与分类
-      准确性。3B 是主网影子观察——主网启用正式模式之前，先以影子
-      模式对真实订单连续观察 ≥7 天（期间交易仍走节点单读），通过 3A
-      不能替代 3B。本区数字来自本页的实时双读轮询，仅供观察，不作
-      准入证据。
-    </p>
-  )
-}
-
-function ShadowSection() {
-  const { mode, round, running } = useShadowMetrics()
-  const m = round?.metrics ?? null
-  const worstDiffs = (m?.bookDiffByPairSide ?? [])
-    .filter((d) => d.union > 0)
-    .sort((a, b) => (b.diffRate.rate ?? 0) - (a.diffRate.rate ?? 0))
-    .slice(0, 3)
-
-  return (
-    <div className="relay-item relay-shadow">
-      <div className="relay-item-head">
-        <b>双读影子对比（无节点阶段 2）</b>
-        <ShadowModePill requested={RELAY_MODE_REQUESTED} mode={mode} />
-      </div>
-      <RelayModesExplanation />
-      <DirectionTrustNotice />
-      <p className="relay-detail">
-        本区把节点订单簿与订单公告栏逐单比对：订单身份按 EIP-712
-        摘要在本地重算核对（不信来源自报的摘要），状态用链上金库锁定与
-        Settlement 累计成交复核。影子模式下本区只做观察计算，交易页订单簿仍只显示节点数据，不影响下单与撮合；每
-        30 秒刷新一轮。「发现延迟」指本页打开后首次在某来源见到该订单的时刻减去下单时刻。
-      </p>
-      {!m && <p className="relay-detail">{running ? '正在计算第一轮双读…' : '暂无双读数据。'}</p>}
-      {round && (round.errors.node || round.errors.relay || round.errors.rpc) && (
-        <p className="relay-detail">
-          本轮部分来源异常：
-          {round.errors.node ? `节点（${round.errors.node}）；` : ''}
-          {round.errors.relay ? `公告栏（${round.errors.relay}）；` : ''}
-          {round.errors.rpc ? `链上读取（${round.errors.rpc}）；` : ''}
-          异常来源的订单一律按「未知」处理，不会混入可成交集。
-        </p>
-      )}
-      {m && (
-        <div className="relay-metrics">
-          <div className="relay-metric">
-            <span>订单总数（共同 / 仅节点 / 仅公告栏）</span>
-            <b>
-              {m.totals.orders}（{m.totals.common} / {m.totals.nodeOnly} / {m.totals.relayOnly}）
-            </b>
-          </div>
-          <div className="relay-metric">
-            <span>共同单核心字段冲突率</span>
-            <b>{fmtRatio(m.conflictRateAmongCommon)}</b>
-          </div>
-          <div className="relay-metric">
-            <span>同单状态一致率</span>
-            <b>{fmtRatio(m.stateConsistencyRate)}</b>
-          </div>
-          <div className="relay-metric">
-            <span>簿差异率（全部交易对）</span>
-            <b>{fmtRatio(m.bookDiffOverall)}</b>
-          </div>
-          <div className="relay-metric">
-            <span>链上无效单比例</span>
-            <b>{fmtRatio(m.chainInvalidRatio)}</b>
-          </div>
-          <div className="relay-metric">
-            <span>链上状态未知率</span>
-            <b>{fmtRatio(m.unknownRatio)}</b>
-          </div>
-          <div className="relay-metric">
-            <span>可成交误判率（旧口径会展示但链上无效）</span>
-            <b>{fmtRatio(m.falseTradeableRate)}</b>
-          </div>
-          <div className="relay-metric">
-            <span>单源独有单比例</span>
-            <b>{fmtRatio(m.singleSourceRatio)}</b>
-          </div>
-          <div className="relay-metric">
-            <span>发现延迟中位（节点 / 公告栏）</span>
-            <b>
-              {fmtLatency(m.discoveryLatencyMs.node.median, m.discoveryLatencyMs.node.samples)} /{' '}
-              {fmtLatency(m.discoveryLatencyMs.relay.median, m.discoveryLatencyMs.relay.samples)}
-            </b>
-          </div>
-          <div className="relay-metric">
-            <span>三源可用率（节点 / 公告栏 / 链上）</span>
-            <b>
-              {fmtRatio(m.availability.node)} / {fmtRatio(m.availability.relay)} /{' '}
-              {fmtRatio(m.availability.rpc)}
-            </b>
-          </div>
-          <div className="relay-metric">
-            <span>分页完整度（节点 / 公告栏）</span>
-            <b>
-              {m.paginationComplete.node === undefined
-                ? '—'
-                : m.paginationComplete.node
-                  ? '完整'
-                  : '可能截断'}
-              {' / '}
-              {m.paginationComplete.relay === undefined
-                ? '—'
-                : m.paginationComplete.relay
-                  ? '完整'
-                  : '可能截断'}
-            </b>
-          </div>
-          {worstDiffs.map((d) => (
-            <div className="relay-metric" key={`${d.pair}-${d.side}`}>
-              <span>
-                簿差异 · {d.pair} {d.side === 'buy' ? '买盘' : '卖盘'}
-              </span>
-              <b>
-                仅节点 {d.onlyNode} · 仅公告栏 {d.onlyRelay} · 字段冲突 {d.conflict} · 数量不同{' '}
-                {d.qtyDiff}
-                {d.trustworthy ? '' : '（分页未拉完，仅供参考）'}
-              </b>
-            </div>
-          ))}
+      <div className="relay-item">
+        <div className="relay-item-head">
+          <b>节点退役（无节点阶段 5）</b>
         </div>
-      )}
-      <Stage3AdmissionExplanation />
+        <p className="relay-detail">
+          原 P2P 节点已下线退役：下单只经主中继、订单簿只读中继簿、成交记录只读链上索引，订单的可成交校验仍由前端逐单重算签名摘要并以链上状态复核（校验口径未变）。撤单统一走「链上撤单」（钱包直接上链释放锁定并永久作废订单）；中继簿不提供撤单接口，簿面记录会随订单到期自动清理。
+        </p>
+      </div>
     </div>
   )
 }

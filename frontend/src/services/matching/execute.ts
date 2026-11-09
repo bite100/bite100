@@ -9,9 +9,9 @@
  *     （settleTradesBatch，开放提交 B 模型，整批原子）
  *
  * 失败口径（给用户的 message 均为完整句子，不抛裸异常）：
- * - 无对手可成交 / 撮合无腿 → no-match：订单已广播留簿，走节点路径。
+ * - 无对手可成交 / 撮合无腿 → no-match：订单已广播留簿。
  * - 全部腿预检不过或整批模拟仍失败 → aborted：整单不提交（原子性
- *   底线），订单留簿走节点路径，失败原因附在 message 里。
+ *   底线），订单留簿，失败原因附在 message 里。
  * - 部分腿被剔 → submitted 并注明剔除腿数（陈旧腿=已被其他通道成交/
  *   过期/锁释放，剔除后成交的部分是真实最新状态）。
  *
@@ -21,7 +21,7 @@
 import { ethers } from 'ethers'
 import { getPairTokens } from '../../config/pairs'
 import { getChainConfig } from '../../config/chains'
-import { runDualReadRound, type DualReadDeps } from '../dualread'
+import { runBookRound, type DualReadDeps } from '../dualread'
 import { computeOrderDigest } from '../dualread/digest'
 import type { EvaluatedOrder } from '../dualread/types'
 import type { OrderData } from '../orderSigningTypes'
@@ -54,7 +54,7 @@ export interface FrontendMatchOutcome {
   remainderToken0: string
 }
 
-const NO_MATCH_MSG = '当前对手盘暂无可成交订单，订单已留簿，等待节点撮合。'
+const NO_MATCH_MSG = '当前对手盘暂无可成交订单，订单已留簿。'
 
 function vaultContract(chainId: number, runner: ethers.ContractRunner) {
   const cfg = getChainConfig(chainId)
@@ -92,19 +92,22 @@ async function ensureLock(
 
 export async function executeFrontendMatch(
   req: FrontendMatchRequest,
+  // 第二参沿用 DualReadDeps 兼容形状：第 51 轮起内部走中继单源
+  // runBookRound，deps 里的 nodeAdapter/mode 等旧字段被忽略（阶段 4
+  // 验收运行器 scripts/stage4 仍按旧形状传参）。
   dualReadDeps?: Partial<DualReadDeps>,
 ): Promise<FrontendMatchOutcome> {
   const { chainId, pair, takerData, takerSignature, signer } = req
   const zero = { legsKept: 0, legsPruned: 0, legsOverflow: 0, filledToken0: '0', remainderToken0: takerData.amountIn }
   const tokens = getPairTokens(chainId, pair)
   if (!tokens) {
-    return { status: 'aborted', message: `交易对 ${pair} 未登记代币地址，无法前端撮合；订单已留簿走节点路径。`, ...zero }
+    return { status: 'aborted', message: `交易对 ${pair} 未登记代币地址，无法前端撮合；订单已留簿。`, ...zero }
   }
 
-  // 1) 新鲜双读一轮 → 可成交集（认证只认双读逐单证明，见 fromEvaluated）
+  // 1) 新鲜中继簿一轮 → 可成交集（认证只认逐单签名证明 + 链上状态，见 fromEvaluated）
   let tradeable: EvaluatedOrder[] = []
   try {
-    const round = await runDualReadRound({ mode: 'shadow', ...dualReadDeps }, chainId, [pair])
+    const round = await runBookRound({ ...dualReadDeps }, chainId, [pair])
     const view = round.views.find((v) => v.pair === pair)
     tradeable = view?.tradeable ?? []
   } catch {
@@ -144,7 +147,7 @@ export async function executeFrontendMatch(
   if (fills.length === 0) {
     return {
       status: 'aborted',
-      message: '对手订单数据无法组装结算（可能已变更），整单未提交；订单已留簿走节点路径。',
+      message: '对手订单数据无法组装结算（可能已变更），整单未提交；订单已留簿。',
       ...zero,
       legsPruned: unbuildableLegs,
       legsOverflow: overflow,
@@ -182,7 +185,7 @@ export async function executeFrontendMatch(
   } catch (e) {
     return {
       status: 'aborted',
-      message: `落锁补齐失败（${errText(e).slice(0, 120)}），整单未提交；订单已留簿走节点路径。`,
+      message: `落锁补齐失败（${errText(e).slice(0, 120)}），整单未提交；订单已留簿。`,
       ...zero,
       legsOverflow: overflow,
       remainderToken0: matched.remainderToken0.toString(),
@@ -208,7 +211,7 @@ export async function executeFrontendMatch(
     return {
       status: 'aborted',
       message:
-        '预检模拟未通过（对手订单可能刚被成交或已过期），为保证整批原子性本单未提交；订单已留簿走节点路径。',
+        '预检模拟未通过（对手订单可能刚被成交或已过期），为保证整批原子性本单未提交；订单已留簿。',
       ...zero,
       legsPruned: outcome.pruned.length + unbuildableLegs,
       legsOverflow: overflow,
@@ -246,7 +249,7 @@ export async function executeFrontendMatch(
   } catch (e) {
     return {
       status: 'aborted',
-      message: `批结算提交失败（${errText(e).slice(0, 120)}）；订单已留簿走节点路径。`,
+      message: `批结算提交失败（${errText(e).slice(0, 120)}）；订单已留簿。`,
       ...zero,
       legsPruned: outcome.pruned.length + unbuildableLegs,
       legsOverflow: overflow,
