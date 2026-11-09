@@ -1,0 +1,7 @@
+node_modules/
+dist/
+audit/
+agents.json
+kill-switch
+.env
+*.env
