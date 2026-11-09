@@ -1,0 +1,13 @@
+# 第 60 轮 E2E 专用迷你工程：只编译 MockERC20Dec，OZ 依赖骑仓库 contracts/lib
+# （与主合约工程同一份依赖，不重复下载、不改主工程配置）。
+[profile.default]
+src = "src"
+out = "out"
+libs = ["../../../../contracts/lib"]
+solc = "0.8.24"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+remappings = [
+    "@openzeppelin/contracts/=../../../../contracts/lib/openzeppelin-contracts/contracts/",
+]

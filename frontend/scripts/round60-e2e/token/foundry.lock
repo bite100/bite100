@@ -1,0 +1,5 @@
+{
+  "../../../contracts/lib/openzeppelin-contracts": {
+    "rev": "5fd1781b1454fd1ef8e722282f86f9293cacf256"
+  }
+}

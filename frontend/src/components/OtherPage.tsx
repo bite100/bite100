@@ -12,6 +12,8 @@ interface OtherPageProps {
   onOpenBridge: () => void
   onOpenGovern: () => void
   onOpenAi: () => void
+  /** 第六十轮：自助上架新币页入口 */
+  onOpenList: () => void
   onOpenData: (anchor: string) => void
   /** 第四十一轮：跨链交付设置入口行要读当前用户的设置摘要 */
   account?: string | null
@@ -33,7 +35,7 @@ function Icon({ d }: { d: string }) {
   )
 }
 
-export function OtherPage({ onOpenBridge, onOpenGovern, onOpenAi, onOpenData, account }: OtherPageProps) {
+export function OtherPage({ onOpenBridge, onOpenGovern, onOpenAi, onOpenList, onOpenData, account }: OtherPageProps) {
   const [aboutOpen, setAboutOpen] = useState(false)
   // 第四十一轮：跨链交付设置入口行（设计 §2.2）——摘要读本机保存的设置，未连接/未设置时给通用文案
   const deliverySummary = (() => {
@@ -48,7 +50,7 @@ export function OtherPage({ onOpenBridge, onOpenGovern, onOpenAi, onOpenData, ac
   return (
     <div className="other-page">
       <p className="other-intro">
-        跨链桥、治理与贡献、AI 接入，以及原「数据」页的公开数据都收在这里，从下面进入。
+        跨链桥、治理与贡献、AI 接入、上架新币，以及原「数据」页的公开数据都收在这里，从下面进入。
       </p>
 
       <h3 className="menu-group-title">功能</h3>
@@ -90,6 +92,16 @@ export function OtherPage({ onOpenBridge, onOpenGovern, onOpenAi, onOpenData, ac
           <span className="menu-txt">
             <b>AI 接入</b>
             <span>把你自己的 AI 接到交易所：读盘口、下单、交易（测试网申请制）</span>
+          </span>
+          <span className="menu-arrow">›</span>
+        </button>
+        <button type="button" className="menu-row" onClick={onOpenList}>
+          <span className="menu-ico">
+            <Icon d="M12 5v14M5 12h14" />
+          </span>
+          <span className="menu-txt">
+            <b>上架新币</b>
+            <span>粘贴代币合约地址就能开一个新交易对，谁的币都能上（未经审核，先看风险提示）</span>
           </span>
           <span className="menu-arrow">›</span>
         </button>

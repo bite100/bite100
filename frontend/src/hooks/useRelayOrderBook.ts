@@ -8,7 +8,8 @@
 import { useEffect, useState } from 'react'
 import { CHAIN_ID } from '../config'
 import { createRelayBookAdapter } from '../services/dualread/adapters'
-import { fromScaled, toPlain } from '../components/dashboard/tradeFormat'
+import { getPairDecimals } from '../config/pairs'
+import { fromScaledDecimals, toPlain } from '../components/dashboard/tradeFormat'
 import type { OrderBookRow } from '../components/dashboard/OrderBookWidget'
 
 export interface RelayOrderBookState {
@@ -29,9 +30,14 @@ export function useRelayOrderBook(pair: string): RelayOrderBookState {
       try {
         const book = await adapter.fetchBook(CHAIN_ID, pair)
         if (cancelled) return
+        // 第六十轮：按交易对实际小数位换算（价格缩放 18+quote−base、数量缩放
+        // base）；种子对 18/18 与旧口径一致。每次轮询现读，注册表缓存变热后自动跟上。
+        const dec = getPairDecimals(CHAIN_ID, pair)
+        const priceDec = dec ? 18 + dec.quote - dec.base : 18
+        const amountDec = dec?.base ?? 18
         const toRow = (o: { price: string; amount: string }, side: 'buy' | 'sell'): OrderBookRow => ({
-          price: toPlain(fromScaled(o.price)),
-          amount: toPlain(fromScaled(o.amount)),
+          price: toPlain(fromScaledDecimals(o.price, priceDec)),
+          amount: toPlain(fromScaledDecimals(o.amount, amountDec)),
           side,
         })
         setState({

@@ -133,3 +133,42 @@ describe('getPairTokens', () => {
     expect(getPairTokens(999, 'BTC/USDT')).toBeNull()
   })
 })
+
+describe('第六十轮：自助上架对（注册表口径）', () => {
+  it('pairFromSearchAny：种子键与当前链地址型键可解析，别链键回默认', async () => {
+    const { pairFromSearchAny, isSelectablePair } = await import('./pairs')
+    const KEY =
+      '11155111:0x1111111111111111111111111111111111111111/0x2222222222222222222222222222222222222222'
+    expect(pairFromSearchAny('?pair=ETH/USDT', SEPOLIA)).toBe('ETH/USDT')
+    expect(pairFromSearchAny(`?pair=${encodeURIComponent(KEY)}`, SEPOLIA)).toBe(KEY)
+    expect(pairFromSearchAny(`?pair=${encodeURIComponent(KEY)}`, BASE_SEPOLIA)).toBe('BTC/USDT')
+    expect(pairFromSearchAny('?pair=ETH/USD', SEPOLIA)).toBe('BTC/USDT')
+    expect(isSelectablePair(KEY, SEPOLIA)).toBe(true)
+    expect(isSelectablePair(KEY, BASE_SEPOLIA)).toBe(false)
+    expect(isSelectablePair('TKA/TKB', BASE_SEPOLIA)).toBe(true)
+  })
+
+  it('getPairDecimals：种子对 18/18，未登记返回 null', async () => {
+    const { getPairDecimals } = await import('./pairs')
+    expect(getPairDecimals(SEPOLIA, 'BTC/USDT')).toEqual({ base: 18, quote: 18 })
+    expect(getPairDecimals(SEPOLIA, 'ETH/USD')).toBeNull()
+  })
+
+  it('getPairTokens：注册表缓存命中后地址型键可取地址（prime 后）', async () => {
+    const { primeListedPair, buildPairKey } = await import('../services/pairRegistry')
+    const base = '0x3333333333333333333333333333333333333333'
+    const quote = '0x4444444444444444444444444444444444444444'
+    const key = buildPairKey(SEPOLIA, base, quote)
+    primeListedPair({
+      chainId: SEPOLIA,
+      pairKey: key,
+      base: { address: base, symbol: 'P60', name: 'Pair Sixty', decimals: 6 },
+      quote: { address: quote, symbol: 'USDT', name: 'Tether', decimals: 18 },
+      creator: null,
+      createdAt: 1700000000,
+    })
+    expect(getPairTokens(SEPOLIA, key)).toEqual({ base, quote })
+    const { getPairDecimals } = await import('./pairs')
+    expect(getPairDecimals(SEPOLIA, key)).toEqual({ base: 6, quote: 18 })
+  })
+})

@@ -8,8 +8,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ethers, Contract } from 'ethers'
 import { VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from './config'
-import { TRADE_PAIRS, getPairTokens } from './config/pairs'
+import { TRADE_PAIRS, getPairDecimals, getPairTokens } from './config/pairs'
 import { useCurrentPair } from './hooks/useCurrentPair'
+import { useListedPairs } from './hooks/useListedPairs'
+import { useResolvedPair } from './hooks/useResolvedPair'
+import { isListedPairKey } from './services/pairRegistry'
 import { formatError, formatTokenAmount, getProvider, withTimeout, BALANCE_READ_TIMEOUT_MS } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
@@ -134,6 +137,18 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   // 第二十五轮：当前交易对与交易台共用 URL ?pair=（默认 BTC/USDT）
   const { pair, setPair } = useCurrentPair()
   const pairTokens = getPairTokens(CHAIN_ID, pair)
+  // 第六十轮：自助上架对支持——符号/小数位走解析层，选对器合并注册表对，
+  // 下单缩放按实际小数位（口径同下单表单，docs/round60 §2）；种子对 18/18 不变。
+  const resolvedPair = useResolvedPair(CHAIN_ID, pair)
+  const { pairs: listedPairs } = useListedPairs(CHAIN_ID)
+  const pairDecimals = getPairDecimals(CHAIN_ID, pair)
+  const baseDecimals = pairDecimals?.base ?? 18
+  const quoteDecimals = pairDecimals?.quote ?? 18
+  const priceDecimals = 18 + quoteDecimals - baseDecimals
+  const baseSymbol = resolvedPair?.base.symbol ?? (isListedPairKey(pair) ? '基础币' : pair.split('/')[0])
+  const quoteSymbol = resolvedPair?.quote.symbol ?? (isListedPairKey(pair) ? '计价币' : pair.split('/')[1])
+  const displayPair = resolvedPair?.displayPair ?? (isListedPairKey(pair) ? '自助上架交易对' : pair)
+  const listedPair = resolvedPair?.source === 'listed'
   const [orderbook, setOrderbook] = useState<OrderbookResponse | null>(null)
   // 第 54 轮：上一份簿改放 ref——此前它既是 state 又进了 fetchOrderbook 的
   // 依赖数组，每次拉到新簿就换 fetchOrderbook 身份、数据 effect 跟着重跑、
@@ -323,7 +338,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         BALANCE_READ_TIMEOUT_MS,
         'vault availableBalance',
       )
-      setBalance(formatTokenAmount(bal))
+      setBalance(formatTokenAmount(bal, side === 'sell' ? baseDecimals : quoteDecimals))
     } catch (e) {
       console.error('获取余额失败:', e)
       setBalance('')
@@ -413,11 +428,11 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
     try {
       const signer = await getSigner()
       if (!signer) throw new Error('请先连接钱包')
-      if (!pairTokens) throw new Error(`交易对 ${pair} 未登记代币地址，无法下单`)
+      if (!pairTokens) throw new Error(`交易对 ${displayPair} 未登记代币地址，无法下单`)
       const timestamp = Math.floor(Date.now() / 1000)
       const expiresAt = timestamp + 86400
-      const amountInWei = ethers.parseUnits(amount, 18)
-      const priceWei = ethers.parseUnits(price, 18)
+      const amountInWei = ethers.parseUnits(amount, baseDecimals)
+      const priceWei = ethers.parseUnits(price, priceDecimals)
       const amountOutWei = (BigInt(amountInWei.toString()) * BigInt(priceWei.toString())) / BigInt(1e18)
       const orderId = generateOrderId()
       // 统一规范：签名必须带链上结算 nonce（结算时被合约消耗）；广播/入库的 nonce 字段同此值，不再用时间戳冒充
@@ -511,14 +526,30 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
 
       <div className="row">
         <span className="label">交易对</span>
-        <select className="input" value={pair} onChange={(e) => setPair(e.target.value as (typeof TRADE_PAIRS)[number])} style={{ width: 'auto' }}>
+        <select className="input" value={pair} onChange={(e) => setPair(e.target.value)} style={{ width: 'auto' }}>
           {TRADE_PAIRS.map((p) => (
             <option key={p} value={p}>
               {p}
             </option>
           ))}
+          {listedPairs.map((p) => (
+            <option key={p.pairKey} value={p.pairKey}>
+              {p.base.symbol}/{p.quote.symbol}（自助上架）
+            </option>
+          ))}
+          {listedPair && resolvedPair && !listedPairs.some((p) => p.pairKey === pair) && (
+            <option value={pair}>{resolvedPair.displayPair}（自助上架）</option>
+          )}
         </select>
       </div>
+
+      {listedPair && resolvedPair && (
+        <p className="hint" style={{ border: '1px solid #ffa94d', background: '#fff4e6', borderRadius: 12, padding: '10px 12px' }}>
+          ⚠ 自助上架交易对（未经审核）：这个交易对由用户自行上架，平台没有审核过这两个代币，
+          冒牌币、诈骗币的风险真实存在。下单前请自己核对合约地址：{resolvedPair.base.symbol}{' '}
+          {resolvedPair.base.address}；{resolvedPair.quote.symbol} {resolvedPair.quote.address}。
+        </p>
+      )}
 
       {marketPriceLoading && <p className="market-ref-hint">市场参考价加载中…</p>}
       {!marketPriceLoading && !marketPriceError && (basePrice || quotePrice) && (
@@ -666,7 +697,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
                 <span>余额加载中…</span>
               ) : balance ? (
                 <span>
-                  可用余额：{balance} {side === 'sell' ? pair.split('/')[0] : pair.split('/')[1]}
+                  可用余额：{balance} {side === 'sell' ? baseSymbol : quoteSymbol}
                 </span>
               ) : null}
             </div>
@@ -715,7 +746,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
                             order={o}
                             account={account}
                             getSigner={getSigner}
-                            summary={`${o.side === 'buy' ? '买入' : '卖出'} ${o.amount} @ ${o.price}（${pair}）`}
+                            summary={`${o.side === 'buy' ? '买入' : '卖出'} ${o.amount} @ ${o.price}（${displayPair}）`}
                             onSettled={() => setRefreshAt((x) => x + 1)}
                           />
                         </div>
@@ -793,7 +824,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
             showGasEstimate={true}
             tradeAmount={
               price && amount && !Number.isNaN(Number(price)) && !Number.isNaN(Number(amount))
-                ? ethers.parseUnits(amount, 18)
+                ? ethers.parseUnits(amount, baseDecimals)
                 : undefined
             }
           />

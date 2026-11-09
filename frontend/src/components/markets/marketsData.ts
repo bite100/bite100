@@ -19,6 +19,8 @@ export interface MarketRowData {
   refUsd: number | null
   /** Vault 任一侧代币有余额 */
   held: boolean
+  /** 自助上架对（第六十轮）：pair 为地址型键，base/quote 为注册表元数据符号 */
+  listed?: boolean
 }
 
 export type MarketTabFilter = 'all' | 'fav' | 'held'

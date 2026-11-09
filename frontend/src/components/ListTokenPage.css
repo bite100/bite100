@@ -1,0 +1,184 @@
+/* 「上架新币」页（第 60 轮）：移动端优先——单列、触控目标 ≥44px、
+   长地址在块内换行/截断，不撑破页面；皮肤沿用全站白卡 + 粉色主按钮（.btn）。 */
+.list-token {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lt-h {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 8px;
+  color: var(--b100-text);
+}
+
+.lt-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--b100-surface-2);
+  border: 1px solid var(--b100-hairline);
+  color: var(--b100-text);
+  font-weight: 600;
+}
+
+.lt-list,
+.lt-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: var(--b100-text-2);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.lt-list b,
+.lt-steps b {
+  color: var(--b100-text);
+}
+
+.lt-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--b100-text);
+}
+
+.lt-input {
+  width: 100%;
+  min-height: 48px;
+  font-family: var(--b100-mono, monospace);
+  font-size: 0.8125rem;
+  word-break: break-all;
+}
+
+.lt-error {
+  margin: 10px 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--mantine-color-red-6, #e03131);
+}
+
+.lt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.lt-btn {
+  min-height: 44px;
+  padding: 0 18px;
+}
+
+.lt-btn:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.lt-preview {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lt-tokenrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--b100-hairline);
+  border-radius: 12px;
+  background: var(--b100-surface-2);
+}
+
+.lt-token-sym {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--b100-text);
+  white-space: nowrap;
+}
+
+.lt-token-meta {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8125rem;
+  color: var(--b100-text-2);
+  min-width: 0;
+}
+
+.lt-token-meta small {
+  font-family: var(--b100-mono, monospace);
+  font-size: 0.6875rem;
+  word-break: break-all;
+}
+
+.lt-ack {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid #ffa94d;
+  background: #fff4e6;
+  border-radius: 12px;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--b100-text);
+  cursor: pointer;
+}
+
+.lt-ack input {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  margin-top: 2px;
+  accent-color: var(--b100-accent, #ff007a);
+}
+
+.lt-done-title {
+  font-weight: 700;
+  color: var(--b100-text);
+  margin: 0 0 6px;
+}
+
+.lt-listed {
+  display: flex;
+  flex-direction: column;
+}
+
+.lt-listed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--b100-hairline);
+}
+
+.lt-listed-row:first-child {
+  border-top: none;
+}
+
+.lt-listed-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 0.875rem;
+  color: var(--b100-text);
+}
+
+.lt-listed-main small {
+  font-family: var(--b100-mono, monospace);
+  font-size: 0.6875rem;
+  color: var(--b100-text-2);
+}
+
+.lt-go {
+  flex: none;
+}

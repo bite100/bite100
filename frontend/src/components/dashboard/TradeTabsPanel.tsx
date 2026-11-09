@@ -4,9 +4,11 @@ import { Contract } from 'ethers'
 import { formatTokenAmount, getProvider, withTimeout, BALANCE_READ_TIMEOUT_MS } from '../../utils'
 import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
 import { INDEXER_ENABLED } from '../../config/indexer'
-import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
+import { DEFAULT_PAIR, getPairDecimals, getPairTokens } from '../../config/pairs'
 import { loadIndexerTrades, type DisplayTrade } from '../../services/tradesDual'
-import { fromScaled, fmtPrice, fmtAmount, fmtDateTime } from './tradeFormat'
+import { isListedPairKey } from '../../services/pairRegistry'
+import { useResolvedPair } from '../../hooks/useResolvedPair'
+import { fromScaledDecimals, fmtPrice, fmtAmount, fmtDateTime } from './tradeFormat'
 import { DeliveryRecords } from '../bridge/DeliveryRecords'
 import { HardCancelAction } from '../HardCancelAction'
 import { createRelayBookAdapter } from '../../services/dualread/adapters'
@@ -41,16 +43,18 @@ export interface TradeTabsPanelProps {
 }
 
 /**
- * 中继订单的价格为 1e18 定点、数量为 wei，展示前统一换算并走
- * tradeFormat（千分位 + 量级小数位）；无法换算时原样显示。
+ * 中继订单的价格/数量为缩放整数，展示前按交易对实际小数位换算并走
+ * tradeFormat（千分位 + 量级小数位）；无法换算时原样显示。种子对价格
+ * 缩放 18、数量缩放 18，与旧口径一致；自助上架对按第六十轮口径
+ * （价格 18+quote−base、数量 base）。
  */
-function fmtPriceCell(v: string): string {
-  const n = fromScaled(v)
+function fmtPriceCell(v: string, priceDecimals = 18): string {
+  const n = fromScaledDecimals(v, priceDecimals)
   return Number.isFinite(n) ? fmtPrice(n) : v
 }
 
-function fmtAmountCell(v: string): string {
-  const n = fromScaled(v)
+function fmtAmountCell(v: string, amountDecimals = 18): string {
+  const n = fromScaledDecimals(v, amountDecimals)
   return Number.isFinite(n) ? fmtAmount(n) : v
 }
 
@@ -81,7 +85,14 @@ interface BalanceRow {
  */
 export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refreshSignal = 0, variant = 'full' }: TradeTabsPanelProps) {
   const mobile = variant === 'mobile'
-  const [baseSymbol, quoteSymbol] = pair.split('/')
+  // 第六十轮：符号与小数位走解析层（自助对的 pair 是地址型键，不能拆键取符号）
+  const resolvedPair = useResolvedPair(CHAIN_ID, pair)
+  const [seedBaseSymbol, seedQuoteSymbol] = pair.split('/')
+  const baseSymbol = resolvedPair?.base.symbol ?? (isListedPairKey(pair) ? '基础币' : seedBaseSymbol)
+  const quoteSymbol = resolvedPair?.quote.symbol ?? (isListedPairKey(pair) ? '计价币' : seedQuoteSymbol)
+  const pairDecimals = getPairDecimals(CHAIN_ID, pair)
+  const priceDecimals = pairDecimals ? 18 + pairDecimals.quote - pairDecimals.base : 18
+  const amountDecimals = pairDecimals?.base ?? 18
   const pairTokens = getPairTokens(CHAIN_ID, pair)
   const [tab, setTab] = useState<string | null>('open')
   const [myOrders, setMyOrders] = useState<Order[]>([])
@@ -129,9 +140,9 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
       if (!provider) return
       const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
       const rows: BalanceRow[] = []
-      for (const [symbol, addr] of [
-        [baseSymbol, pairTokens.base],
-        [quoteSymbol, pairTokens.quote],
+      for (const [symbol, addr, tokenDecimals] of [
+        [baseSymbol, pairTokens.base, resolvedPair?.base.decimals ?? 18],
+        [quoteSymbol, pairTokens.quote, resolvedPair?.quote.decimals ?? 18],
       ] as const) {
         const token = new Contract(addr, ERC20_ABI, provider)
         // 第 54 轮：与完整订单簿页同修——整组余额读取套应用层超时；
@@ -149,10 +160,10 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
         )
         rows.push({
           symbol,
-          wallet: formatTokenAmount(w),
-          vault: formatTokenAmount(v as bigint),
-          vaultAvailable: formatTokenAmount(va as bigint),
-          vaultLocked: formatTokenAmount(vl as bigint),
+          wallet: formatTokenAmount(w, tokenDecimals),
+          vault: formatTokenAmount(v as bigint, tokenDecimals),
+          vaultAvailable: formatTokenAmount(va as bigint, tokenDecimals),
+          vaultLocked: formatTokenAmount(vl as bigint, tokenDecimals),
         })
       }
       setBalances(rows)
@@ -213,9 +224,9 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
                 <td className="side" style={{ color: o.side === 'buy' ? 'var(--b100-up)' : 'var(--b100-down)' }}>
                   {o.side === 'buy' ? '买入' : '卖出'}
                 </td>
-                <td className="num">{fmtPriceCell(o.price)}</td>
-                <td className="num">{fmtAmountCell(o.amount)}</td>
-                <td className="num">{fmtAmountCell(o.filled)}</td>
+                <td className="num">{fmtPriceCell(o.price, priceDecimals)}</td>
+                <td className="num">{fmtAmountCell(o.amount, amountDecimals)}</td>
+                <td className="num">{fmtAmountCell(o.filled, amountDecimals)}</td>
                 <td>
                   <span className={`status-chip status-${o.status}`}>
                     {STATUS_LABEL[o.status] ?? o.status}
@@ -227,7 +238,7 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
                       order={o}
                       account={account}
                       getSigner={getSigner}
-                      summary={`${o.side === 'buy' ? '买入' : '卖出'} ${fmtAmountCell(o.amount)} ${baseSymbol} @ ${fmtPriceCell(o.price)} ${quoteSymbol}`}
+                      summary={`${o.side === 'buy' ? '买入' : '卖出'} ${fmtAmountCell(o.amount, amountDecimals)} ${baseSymbol} @ ${fmtPriceCell(o.price, priceDecimals)} ${quoteSymbol}`}
                       onSettled={() => {
                         void fetchMyOrders()
                         void fetchBalances()

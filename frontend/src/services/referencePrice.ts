@@ -14,6 +14,7 @@
  */
 import { Contract, JsonRpcProvider } from 'ethers'
 import { getChainConfig } from '../config/chains'
+import { fetchDexPairUsdPrices } from './dexReferencePrice'
 import type { MarketBookLevel } from '../components/dashboard/marketOrder'
 
 export const AGGREGATOR_V3_ABI = [
@@ -35,7 +36,14 @@ export const MIN_STALE_AFTER_SEC = 3600
 /** 填写价格偏离参考价超过该百分比时给出醒目警告（只警告，不拦截下单） */
 export const DEVIATION_WARN_PCT = 10
 
-export type ReferencePriceSource = 'chainlink' | 'lastTrade' | 'bookMid'
+/** 美元稳定币符号（判断参考价/计价是否可按美元口径展示用） */
+export const USD_STABLE_SYMBOLS = ['USDT', 'USDC', 'DAI', 'TUSD'] as const
+
+export function isUsdStableSymbol(symbol: string): boolean {
+  return (USD_STABLE_SYMBOLS as readonly string[]).includes(symbol.toUpperCase())
+}
+
+export type ReferencePriceSource = 'chainlink' | 'dexscreener' | 'lastTrade' | 'bookMid'
 
 export interface ReferencePrice {
   /** 参考价（quote/base，人类单位） */
@@ -43,6 +51,12 @@ export interface ReferencePrice {
   source: ReferencePriceSource
   /** 数据产生时间（unix 秒）：预言机=updatedAt、最近成交=成交时间、盘口中间价=取盘口时刻 */
   updatedAtSec: number
+  /**
+   * 参考价是否以美元计价（第六十轮加，仅在为 true 时出现）：Chainlink 喂价
+   * 均为美元计价、DexScreener 推导价天然美元计价 → true；本所最近成交 /
+   * 盘口中间价以计价币计价 → 不设（undefined）。行情页据此判断参考价能否按美元口径展示。
+   */
+  usdDenominated?: boolean
 }
 
 export type ReferencePriceResult =
@@ -56,6 +70,7 @@ export type ReferencePriceResult =
 
 export const REFERENCE_SOURCE_LABELS: Record<ReferencePriceSource, string> = {
   chainlink: 'Chainlink 预言机',
+  dexscreener: 'DexScreener 聚合报价',
   lastTrade: '本所最近成交',
   bookMid: '盘口中间价',
 }
@@ -185,6 +200,22 @@ export interface ReferencePriceDeps {
   /** 读一笔喂价（默认实现走链配置的公开 RPC 直读）；注入点便于测试 */
   readFeed: (chainId: number, address: string) => Promise<FeedReading>
   nowSec: () => number
+  /**
+   * 自助上架对的聚合报价（第六十轮，可选注入点）：按代币地址取两腿 USD 价，
+   * 默认实现骑 services/dexReferencePrice.ts（DexScreener 免费 API）。
+   */
+  dexUsdPrices?: (
+    chainId: number,
+    baseAddress: string,
+    quoteAddress: string,
+  ) => Promise<{ baseUsd: number | null; quoteUsd: number | null }>
+}
+
+/** 自助上架对信息（有此参数时，无喂价路径先试聚合报价再走自家兜底） */
+export interface ListedRefInput {
+  baseAddress: string
+  quoteAddress: string
+  quoteSymbol: string
 }
 
 /** 默认喂价读取：ethers JsonRpcProvider 直连该链公开 RPC 读 AggregatorV3 代理 */
@@ -204,6 +235,8 @@ export async function readChainlinkFeed(chainId: number, address: string): Promi
 export const defaultReferencePriceDeps: ReferencePriceDeps = {
   readFeed: readChainlinkFeed,
   nowSec: () => Math.floor(Date.now() / 1000),
+  dexUsdPrices: (chainId, baseAddress, quoteAddress) =>
+    fetchDexPairUsdPrices(chainId, baseAddress, quoteAddress),
 }
 
 /**
@@ -215,10 +248,48 @@ export async function resolveReferencePrice(
   chainId: number,
   pair: string,
   fallback: MarketFallback,
-  deps: ReferencePriceDeps = defaultReferencePriceDeps
+  deps: ReferencePriceDeps = defaultReferencePriceDeps,
+  opts?: { listed?: ListedRefInput }
 ): Promise<ReferencePriceResult> {
   const feed = getFeedConfig(chainId, pair)
-  if (!feed) return resolveMarketReference(fallback, deps.nowSec())
+  if (!feed) {
+    // 自助上架对（第六十轮）：先试聚合报价（DexScreener，两腿 USD 价推导，
+    // 或 base 腿 USD 价 + 计价币为美元稳定币时按 $1 计），查不到再走自家兜底；
+    // 绝不因聚合源失败而报错冒充——降级顺序与无源时老实显示「暂无参考价」一致。
+    if (opts?.listed && deps.dexUsdPrices) {
+      try {
+        const { baseUsd, quoteUsd } = await deps.dexUsdPrices(
+          chainId,
+          opts.listed.baseAddress,
+          opts.listed.quoteAddress,
+        )
+        let price: number | null = null
+        if (baseUsd !== null && baseUsd > 0 && quoteUsd !== null && quoteUsd > 0) {
+          price = baseUsd / quoteUsd
+        } else if (
+          baseUsd !== null &&
+          baseUsd > 0 &&
+          ['USDT', 'USDC', 'DAI', 'TUSD'].includes(opts.listed.quoteSymbol.toUpperCase())
+        ) {
+          price = baseUsd
+        }
+        if (price !== null && Number.isFinite(price) && price > 0) {
+          return {
+            status: 'ok',
+            ref: {
+              price,
+              source: 'dexscreener',
+              updatedAtSec: deps.nowSec(),
+              usdDenominated: true,
+            },
+          }
+        }
+      } catch {
+        // 聚合报价失败 → 继续走自家兜底
+      }
+    }
+    return resolveMarketReference(fallback, deps.nowSec())
+  }
   let reading: FeedReading
   try {
     reading = await deps.readFeed(chainId, feed.address)
@@ -229,7 +300,12 @@ export async function resolveReferencePrice(
   if (ev.kind === 'ok') {
     return {
       status: 'ok',
-      ref: { price: ev.price, source: 'chainlink', updatedAtSec: reading.updatedAtSec },
+      ref: {
+        price: ev.price,
+        source: 'chainlink',
+        updatedAtSec: reading.updatedAtSec,
+        usdDenominated: true,
+      },
     }
   }
   if (ev.kind === 'stale') return { status: 'stale', updatedAtSec: ev.updatedAtSec }

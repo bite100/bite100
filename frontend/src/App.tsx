@@ -12,6 +12,8 @@ import { Navigation, type Tab } from './components/Navigation'
 import { TopBar } from './components/TopBar'
 import { OtherPage } from './components/OtherPage'
 import { AiAccessPage } from './components/AiAccessPage'
+import { ListTokenPage } from './components/ListTokenPage'
+import { isListedPairKey } from './services/pairRegistry'
 import { DataPage } from './components/DataPage'
 import { MarketsList } from './components/markets/MarketsList'
 import { AssetsPage } from './components/AssetsPage'
@@ -88,7 +90,7 @@ function App() {
       data: 'other',
     }
     if (t && legacy[t]) return legacy[t]
-    const valid: Tab[] = ['trade', 'markets', 'assets', 'other', 'bridge', 'govern', 'data', 'ai']
+    const valid: Tab[] = ['trade', 'markets', 'assets', 'other', 'bridge', 'govern', 'data', 'ai', 'list']
     return valid.includes(t as Tab) ? (t as Tab) : 'trade'
   })
   const [governSub, setGovernSub] = useState<'governance' | 'contribution'>(() => {
@@ -100,9 +102,9 @@ function App() {
   /** 数据内容页的目标锚点（从「其他」页数据组进入时定位到对应区块） */
   const [dataAnchor, setDataAnchor] = useState<string | null>(null)
 
-  /** 从行情页/选对页跳交易页：与 useCurrentPair 同一口径，先改写 ?pair= 再切页 */
+  /** 从行情页/选对页跳交易页：与 useCurrentPair 同一口径，先改写 ?pair= 再切页（第六十轮含自助上架地址型键） */
   const goTradeWithPair = useCallback((pair: string) => {
-    if (isTradePair(pair)) {
+    if (isTradePair(pair) || isListedPairKey(pair)) {
       const url = new URL(window.location.href)
       url.searchParams.set('pair', pair)
       window.history.replaceState(null, '', url.toString())
@@ -171,7 +173,9 @@ function App() {
                       ? '治理与贡献'
                       : activeTab === 'ai'
                         ? 'AI 接入'
-                        : '数据'
+                        : activeTab === 'list'
+                          ? '上架新币'
+                          : '数据'
         }
         chainId={currentChainId}
         onChainChange={switchChain}
@@ -213,6 +217,7 @@ function App() {
               onOpenBridge={() => setActiveTab('bridge')}
               onOpenGovern={() => setActiveTab('govern')}
               onOpenAi={() => setActiveTab('ai')}
+              onOpenList={() => setActiveTab('list')}
               onOpenData={openData}
               account={account}
             />
@@ -297,6 +302,18 @@ function App() {
               <SubBar title="AI 接入" onBack={() => setActiveTab('other')} />
               <PageHead title="AI 接入" desc="把你自己的 AI 通过 MCP 协议接到交易所，让它读盘口、下单、交易。当前为测试网阶段，向项目方申请令牌后接入。" />
               <AiAccessPage />
+            </>
+          )}
+
+          {activeTab === 'list' && (
+            <>
+              <SubBar title="上架新币" onBack={() => setActiveTab('other')} />
+              <PageHead title="上架新币" desc="粘贴两个代币的合约地址，就能开一个新交易对挂单买卖。谁的币都能上，平台不审核、不背书——先看风险提示，只认合约地址。" />
+              <ListTokenPage
+                chainId={currentChainId ?? CHAIN_ID}
+                account={account}
+                onGoTrade={goTradeWithPair}
+              />
             </>
           )}
 

@@ -83,6 +83,13 @@ export interface OrderParams {
   side: 'buy' | 'sell'
   type: 'limit' | 'market'
   pair: string
+  /**
+   * 代币小数位（第六十轮，自助上架对用）：amountIn 按 base 小数位缩放，
+   * price 按 18+quote−base 缩放；amountOut 由 amountIn×price/1e18 推导，
+   * 不再单独按 18 位缩放 params.amountOut（保证与中继重建口径逐位一致，
+   * 见 docs/round60 §2）。缺省 = 种子对 18/18，行为与旧版一致。
+   */
+  decimals?: { base: number; quote: number }
 }
 
 export async function submitOrder(
@@ -98,15 +105,23 @@ export async function submitOrder(
   // 统一规范：签名必须带链上结算 nonce（结算时被合约消耗）
   const nonce = await fetchOrderNonce(address, signer, CHAIN_ID)
 
-  // 构造订单数据
+  // 构造订单数据（缩放口径见 OrderParams.decimals；缺省 18/18 与旧版一致，
+  // 此时 amountOut 推导值与 parseUnits(params.amountOut, 18) 在调用方按
+  // amountIn×price 取整时相等——既有调用方均按此口径传参）
+  const baseDec = params.decimals?.base ?? 18
+  const quoteDec = params.decimals?.quote ?? 18
+  const priceDec = 18 + quoteDec - baseDec
+  const amountInRaw = ethers.parseUnits(params.amountIn, baseDec)
+  const priceRaw = ethers.parseUnits(params.price, priceDec)
+  const amountOutRaw = (amountInRaw * priceRaw) / 10n ** 18n
   const orderData: OrderData = {
     orderId,
     userAddress: address,
     tokenIn: params.tokenIn,
     tokenOut: params.tokenOut,
-    amountIn: ethers.parseUnits(params.amountIn, 18).toString(),
-    amountOut: ethers.parseUnits(params.amountOut, 18).toString(),
-    price: ethers.parseUnits(params.price, 18).toString(),
+    amountIn: amountInRaw.toString(),
+    amountOut: amountOutRaw.toString(),
+    price: priceRaw.toString(),
     timestamp,
     expiresAt,
     nonce,

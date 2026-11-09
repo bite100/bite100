@@ -16,7 +16,7 @@
  * / IndexerTrade 被 scripts/stage4 等已关闭的验收工具引用，不得改签名。
  */
 import { INDEXER_URL } from '../config/indexer'
-import { getPairTokens } from '../config/pairs'
+import { getPairDecimals, getPairTokens } from '../config/pairs'
 
 /** Envio Trade 实体归一化行 */
 export interface IndexerTrade {
@@ -51,36 +51,50 @@ export interface DisplayTrade {
 
 const lc = (s: string) => (s ?? '').toLowerCase()
 
-function scaledToNumber(v: string): number {
+function scaledToNumber(v: string, decimals = 18): number {
+  const scale = 10 ** decimals
   try {
     const bi = BigInt(v)
-    return Number(bi) / 1e18
+    return Number(bi) / scale
   } catch {
     const n = Number(v)
-    return Number.isFinite(n) ? n / 1e18 : 0
+    return Number.isFinite(n) ? n / scale : 0
   }
 }
 
-/** 价格/数量展示换算（price 为计价/基础，amount 为基础币数量） */
+/**
+ * 价格/数量展示换算（price 为计价/基础，amount 为基础币数量）。
+ * 第六十轮：按交易对的实际小数位换算（base 按 baseDecimals、quote 按
+ * quoteDecimals 分别缩放后再作比）；缺省 18/18 与旧口径逐位一致——旧实现
+ * 两腿同除 1e18 作比，对 18/18 的种子对结果相同，对非 18 位自助对则必须
+ * 分腿缩放才得到人类价格。
+ */
 function displayValues(
   tokenIn: string,
   amountIn: string,
   amountOut: string,
   baseToken: string,
+  decimals: { base: number; quote: number } = { base: 18, quote: 18 },
 ): { price: number; amount: number } {
-  const inN = scaledToNumber(amountIn)
-  const outN = scaledToNumber(amountOut)
   if (lc(tokenIn) === lc(baseToken)) {
-    // 卖出基础币：数量 = amountIn，价格 = amountOut / amountIn
+    // 卖出基础币：数量 = amountIn（base 缩放），价格 = quote 人类量 / base 人类量
+    const inN = scaledToNumber(amountIn, decimals.base)
+    const outN = scaledToNumber(amountOut, decimals.quote)
     return { price: inN > 0 ? outN / inN : 0, amount: inN }
   }
-  // 买入基础币：数量 = amountOut，价格 = amountIn / amountOut
+  // 买入基础币：数量 = amountOut（base 缩放），价格 = quote 人类量 / base 人类量
+  const inN = scaledToNumber(amountIn, decimals.quote)
+  const outN = scaledToNumber(amountOut, decimals.base)
   return { price: outN > 0 ? inN / outN : 0, amount: outN }
 }
 
-/** 索引行 → 展示行（baseToken 为交易对的基础代币地址） */
-export function indexerTradeToDisplay(t: IndexerTrade, baseToken: string): DisplayTrade {
-  const { price, amount } = displayValues(t.tokenIn, t.amountIn, t.amountOut, baseToken)
+/** 索引行 → 展示行（baseToken 为交易对的基础代币地址；decimals 缺省 18/18） */
+export function indexerTradeToDisplay(
+  t: IndexerTrade,
+  baseToken: string,
+  decimals?: { base: number; quote: number },
+): DisplayTrade {
+  const { price, amount } = displayValues(t.tokenIn, t.amountIn, t.amountOut, baseToken, decimals)
   return {
     key: t.id,
     price,
@@ -311,8 +325,9 @@ export async function loadIndexerTrades(
     const stale =
       progress !== null &&
       (progress.isReady === false || progress.lagBlocks > INDEXER_STALE_LAG_BLOCKS)
+    const decimals = getPairDecimals(chainId, pair) ?? undefined
     return {
-      trades: rows.map((t) => indexerTradeToDisplay(t, tokens.base)),
+      trades: rows.map((t) => indexerTradeToDisplay(t, tokens.base, decimals)),
       failed: false,
       stale,
     }

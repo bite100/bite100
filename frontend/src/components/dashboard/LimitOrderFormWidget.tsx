@@ -27,6 +27,8 @@ import {
   type VaultTopUpStep,
 } from './vaultTopUp'
 import { useReferencePrice } from '../../hooks/useReferencePrice'
+import { useResolvedPair } from '../../hooks/useResolvedPair'
+import { isListedPairKey } from '../../services/pairRegistry'
 import { buildOrderDeliveryEstimate } from '../../services/defaultBridge/estimate'
 import { getDisclosure } from '../../services/defaultBridge/disclosures'
 import { loadSettings, pushTempOverride } from '../../services/defaultBridge/settings'
@@ -89,8 +91,23 @@ function fmtDataTime(sec: number): string {
 export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, recommendedPrice, externalPrice, book, lastTradePrice, lastTradeAtSec, onSuccess, layout = 'full' }: LimitOrderFormWidgetProps) {
   const ticket = layout === 'ticket'
   // 第二十五轮：基础/计价代币随交易对取（chains.ts tokens 登记）；未登记的交易对不下单。
-  const [baseSymbol, quoteSymbol] = pair.split('/')
-  const pairTokens = getPairTokens(CHAIN_ID, pair)
+  // 第六十轮：交易对先经解析层（pairRegistry）解析——种子对符号/地址同旧，
+  // 自助上架对的符号与小数位取注册表元数据；解析不到（未登记/注册表未拉到）
+  // 时回退 getPairTokens（其内部同样查注册表缓存），仍为空则禁用下单。
+  // 金额/价格缩放按实际小数位：数量缩放 = base 位数、价格缩放 =
+  // 18 + quote 位数 − base 位数（docs/round60 §2）；种子对全 18 位，与旧版逐位一致。
+  const resolvedPair = useResolvedPair(CHAIN_ID, pair)
+  const [seedBaseSymbol, seedQuoteSymbol] = pair.split('/')
+  const baseSymbol = resolvedPair?.base.symbol ?? (isListedPairKey(pair) ? '基础币' : seedBaseSymbol)
+  const quoteSymbol = resolvedPair?.quote.symbol ?? (isListedPairKey(pair) ? '计价币' : seedQuoteSymbol)
+  const displayPair = resolvedPair?.displayPair ?? (isListedPairKey(pair) ? '自助上架交易对' : pair)
+  const pairTokens = resolvedPair
+    ? { base: resolvedPair.base.address, quote: resolvedPair.quote.address }
+    : getPairTokens(CHAIN_ID, pair)
+  const baseDecimals = resolvedPair?.base.decimals ?? 18
+  const quoteDecimals = resolvedPair?.quote.decimals ?? 18
+  const priceDecimals = 18 + quoteDecimals - baseDecimals
+  const listedPair = resolvedPair?.source === 'listed'
   const baseToken = pairTokens?.base ?? ''
   const quoteToken = pairTokens?.quote ?? ''
   const [side, setSide] = useState<'buy' | 'sell'>('buy')
@@ -146,9 +163,10 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
           'vault balance',
         )
         if (!cancelled) {
-          setBalance(formatTokenAmount(avail))
+          const spendDecimals = side === 'sell' ? baseDecimals : quoteDecimals
+          setBalance(formatTokenAmount(avail, spendDecimals))
           setAvailableWei(avail)
-          setLockedBalance(formatTokenAmount(locked))
+          setLockedBalance(formatTokenAmount(locked, spendDecimals))
         }
       } catch {
         if (!cancelled) {
@@ -212,7 +230,11 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
     const p = parseFloat(effectivePrice)
     if (Number.isNaN(a) || a <= 0 || Number.isNaN(p) || p <= 0) return null
     try {
-      const required = orderObligationWei(side, ethers.parseUnits(amount, 18), ethers.parseUnits(effectivePrice, 18))
+      const required = orderObligationWei(
+        side,
+        ethers.parseUnits(amount, baseDecimals),
+        ethers.parseUnits(effectivePrice, priceDecimals),
+      )
       const sf = shortfallWei(required, availableWei)
       return sf > 0n ? { required, shortfall: sf } : null
     } catch {
@@ -240,7 +262,7 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
       return
     }
     if (!pairTokens) {
-      setError(`交易对 ${pair} 未登记代币地址，无法下单`)
+      setError(`交易对 ${displayPair} 未登记代币地址，无法下单`)
       return
     }
     const a = parseFloat(amount)
@@ -265,8 +287,8 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
       if (!signer) throw new Error('请先连接钱包')
       const timestamp = Math.floor(Date.now() / 1000)
       const expiresAt = timestamp + 86400
-      const amountInWei = ethers.parseUnits(amount, 18)
-      const priceWei = ethers.parseUnits(effectivePrice, 18)
+      const amountInWei = ethers.parseUnits(amount, baseDecimals)
+      const priceWei = ethers.parseUnits(effectivePrice, priceDecimals)
       const amountOutWei = (BigInt(amountInWei.toString()) * BigInt(priceWei.toString())) / BigInt(1e18)
 
       // ---- Part D：一键补存差额（签名前；不足则先补、确认到账再继续） ----
@@ -403,6 +425,7 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
       : !Number.isNaN(priceNum) && !Number.isNaN(amountNum) && priceNum > 0 && amountNum > 0
         ? priceNum * amountNum
         : null
+  const spendDecimals = side === 'sell' ? baseDecimals : quoteDecimals
   const spendSymbol = side === 'sell' ? baseSymbol : quoteSymbol
   // 下单票（ticket）键值行派生值：可买（买入按可用计价余额 ÷ 有效价）/ 预计可得（卖出）/ 预估手续费
   const balNum = parseFloat(balance)
@@ -428,10 +451,31 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
     <Paper p={ticket ? 0 : 'md'} style={{ background: 'transparent' }} className={ticket ? 'ticket-form' : undefined}>
       {!ticket && (
         <Text size="sm" fw={600} mb="xs">
-          下单 · {pair}
+          下单 · {displayPair}
         </Text>
       )}
       <Stack gap="sm">
+        {listedPair && resolvedPair && (
+          <div
+            role="note"
+            style={{
+              border: '1px solid var(--mantine-color-orange-4, #ffa94d)',
+              background: 'var(--mantine-color-orange-0, #fff4e6)',
+              borderRadius: 12,
+              padding: '10px 12px',
+            }}
+          >
+            <Text size="xs" fw={700} c="orange.8">
+              ⚠ 自助上架交易对（未经审核）
+            </Text>
+            <Text size="xs" mt={4}>
+              这个交易对由用户自行上架，平台没有审核过这两个代币，任何人都可以把任意合约地址挂上来，
+              冒牌币、诈骗币的风险真实存在。下单前请自己核对合约地址：{resolvedPair.base.symbol}{' '}
+              {resolvedPair.base.address}；{resolvedPair.quote.symbol} {resolvedPair.quote.address}
+              。地址对不上就不要交易。
+            </Text>
+          </div>
+        )}
         {ticket ? (
           <SegmentedControl
             value={side}
@@ -705,8 +749,8 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         )}
         {displayShortfall && (
           <Text size="xs" c="orange">
-            Vault 可用余额不足：本单需要 {formatTokenAmount(displayShortfall.required)} {spendSymbol}，还差{' '}
-            {formatTokenAmount(displayShortfall.shortfall)} {spendSymbol}。不用去资产页——点下方按钮会先在本面板内把差额从你的钱包存入
+            Vault 可用余额不足：本单需要 {formatTokenAmount(displayShortfall.required, spendDecimals)} {spendSymbol}，还差{' '}
+            {formatTokenAmount(displayShortfall.shortfall, spendDecimals)} {spendSymbol}。不用去资产页——点下方按钮会先在本面板内把差额从你的钱包存入
             Vault（可能需要两次钱包确认：授权 + 存入），确认到账后自动继续下单；差额不足时不会签名提交。
           </Text>
         )}

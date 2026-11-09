@@ -16,6 +16,8 @@ import {
   type FeedReading,
   type ReferencePriceResult,
 } from '../services/referencePrice'
+import { fetchDexPairUsdPrices } from '../services/dexReferencePrice'
+import { useResolvedPair } from './useResolvedPair'
 import type { MarketBookLevel } from '../components/dashboard/marketOrder'
 
 const FEED_CACHE_MS = 30_000
@@ -40,6 +42,13 @@ export function useReferencePrice(
   const bids = book?.bids
   const asks = book?.asks
 
+  // 第六十轮：自助上架对走聚合报价路径（DexScreener）——解析出代币地址后
+  // 透传给 resolveReferencePrice 的 listed 入参；种子对为 undefined，行为不变。
+  const resolved = useResolvedPair(CHAIN_ID, pair)
+  const listedBase = resolved?.source === 'listed' ? resolved.base.address : null
+  const listedQuote = resolved?.source === 'listed' ? resolved.quote.address : null
+  const listedQuoteSymbol = resolved?.source === 'listed' ? resolved.quote.symbol : null
+
   useEffect(() => {
     let cancelled = false
     const run = async () => {
@@ -59,7 +68,18 @@ export function useReferencePrice(
             cacheRef.current = { key, atMs: Date.now(), reading }
             return reading
           },
-        }
+          dexUsdPrices: (chainId, baseAddress, quoteAddress) =>
+            fetchDexPairUsdPrices(chainId, baseAddress, quoteAddress),
+        },
+        listedBase && listedQuote && listedQuoteSymbol
+          ? {
+              listed: {
+                baseAddress: listedBase,
+                quoteAddress: listedQuote,
+                quoteSymbol: listedQuoteSymbol,
+              },
+            }
+          : undefined
       )
       if (!cancelled) setResult(res)
     }
@@ -69,7 +89,7 @@ export function useReferencePrice(
       cancelled = true
       clearInterval(timer)
     }
-  }, [pair, lastTradePrice, lastTradeAtSec, bids, asks])
+  }, [pair, lastTradePrice, lastTradeAtSec, bids, asks, listedBase, listedQuote, listedQuoteSymbol])
 
   return result
 }

@@ -17,6 +17,10 @@ import { getChainConfig } from '../../config/chains'
 import { VAULT_ABI } from '../../config'
 import { usePairStats } from '../../hooks/usePairStats'
 import { useReferencePrice } from '../../hooks/useReferencePrice'
+import { useListedPairs } from '../../hooks/useListedPairs'
+import { useResolvedPair } from '../../hooks/useResolvedPair'
+import { isUsdStableSymbol } from '../../services/referencePrice'
+import { CHAIN_ID } from '../../config'
 import {
   filterMarketRows,
   fmtCompactAmount,
@@ -52,11 +56,15 @@ export function MarketsList({ chainId, account, mode, onSelectPair, onBack }: Ma
   const [sortKey, setSortKey] = useState<MarketSortKey>('volume')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [vaultBalances, setVaultBalances] = useState<Record<string, bigint> | null>(null)
+  // 第六十轮：自助上架对（注册表）；「持有」对自助对按代币地址判定（符号可重名，不按符号）
+  const { pairs: listedPairs } = useListedPairs(chainId)
+  const [heldListedPairs, setHeldListedPairs] = useState<ReadonlySet<string>>(new Set())
 
   // 「持有」口径：当前链 Vault 中任一侧代币余额 > 0。未连接钱包时该页签为空并给说明。
   useEffect(() => {
     if (!account) {
       setVaultBalances(null)
+      setHeldListedPairs(new Set())
       return
     }
     const cfg = getChainConfig(chainId)
@@ -76,6 +84,31 @@ export function MarketsList({ chainId, account, mode, onSelectPair, onBack }: Ma
           }),
         )
         if (!cancelled) setVaultBalances(Object.fromEntries(entries))
+        // 自助对持有判定：按注册表里的代币地址逐个查 Vault 余额
+        const listedAddrs = [...new Set(listedPairs.flatMap((p) => [p.base.address, p.quote.address]))]
+        const listedBals = new Map<string, bigint>()
+        await Promise.all(
+          listedAddrs.map(async (addr) => {
+            try {
+              listedBals.set(addr, (await vault.balanceOf(addr, account)) as bigint)
+            } catch {
+              listedBals.set(addr, 0n)
+            }
+          }),
+        )
+        if (!cancelled) {
+          setHeldListedPairs(
+            new Set(
+              listedPairs
+                .filter(
+                  (p) =>
+                    (listedBals.get(p.base.address) ?? 0n) > 0n ||
+                    (listedBals.get(p.quote.address) ?? 0n) > 0n,
+                )
+                .map((p) => p.pairKey),
+            ),
+          )
+        }
       } catch {
         if (!cancelled) setVaultBalances(null)
       }
@@ -83,7 +116,7 @@ export function MarketsList({ chainId, account, mode, onSelectPair, onBack }: Ma
     return () => {
       cancelled = true
     }
-  }, [account, chainId])
+  }, [account, chainId, listedPairs])
 
   const heldPairs = useMemo(() => {
     if (!vaultBalances) return new Set<string>()
@@ -173,6 +206,8 @@ export function MarketsList({ chainId, account, mode, onSelectPair, onBack }: Ma
         tab={tab}
         favorites={favSet}
         heldPairs={heldPairs}
+        listedPairs={listedPairs}
+        heldListedPairs={heldListedPairs}
         account={account}
         sortKey={sortKey}
         sortDir={sortDir}
@@ -186,9 +221,10 @@ export function MarketsList({ chainId, account, mode, onSelectPair, onBack }: Ma
         <p className="markets-note">还没有自选，点任意一行右侧的 ☆ 即可收藏。</p>
       )}
       <p className="markets-note">
-        最新价与 24 小时涨跌只按本站成交计算；没有成交过的交易对，价格位会显示 Chainlink
-        参考价并标注「参考价」，参考价也取不到时才显示「暂无成交」。有成交时价格下方 $ 数字同样是 Chainlink
-        参考价（美元），仅供参考，不是本站成交价。
+        最新价与 24 小时涨跌只按本站成交计算；没有成交过的交易对，价格位会显示参考价
+        并标注「参考价」，参考价也取不到时才显示「暂无成交」。有成交时价格下方 $ 数字同样是
+        参考价（美元），仅供参考，不是本站成交价。带「自助上架」标记的交易对由用户自行
+        上架、未经平台审核，其参考价来自公开聚合报价（DexScreener），主流对用 Chainlink 预言机。
       </p>
     </div>
   )
@@ -242,6 +278,8 @@ function MarketRows(props: {
   tab: MarketTabFilter
   favorites: ReadonlySet<string>
   heldPairs: ReadonlySet<string>
+  listedPairs: import('../../services/pairRegistry').ListedPair[]
+  heldListedPairs: ReadonlySet<string>
   account: string | null
   sortKey: MarketSortKey
   sortDir: SortDir
@@ -251,7 +289,7 @@ function MarketRows(props: {
   const [collected, setCollected] = useState<Record<string, MarketRowData>>({})
 
   const rows = useMemo(() => {
-    const all = TRADE_PAIRS.map((pair) => {
+    const seedRows = TRADE_PAIRS.map((pair) => {
       const c = collected[pair]
       const parts = pair.split('/')
       return {
@@ -265,12 +303,33 @@ function MarketRows(props: {
         held: props.heldPairs.has(pair),
       } satisfies MarketRowData
     })
+    // 第六十轮：自助上架对（pair=地址型键，符号取注册表元数据，带自助上架标记）
+    const listedRows = props.listedPairs.map((lp) => {
+      const c = collected[lp.pairKey]
+      return {
+        pair: lp.pairKey,
+        base: lp.base.symbol,
+        quote: lp.quote.symbol,
+        lastPrice: c ? c.lastPrice : null,
+        changePct: c ? c.changePct : null,
+        volumeQuote: c ? c.volumeQuote : null,
+        refUsd: c ? c.refUsd : null,
+        held: props.heldListedPairs.has(lp.pairKey),
+        listed: true,
+      } satisfies MarketRowData
+    })
+    const all = [...seedRows, ...listedRows]
     return sortMarketRows(filterMarketRows(all, props.query, props.tab, props.favorites), props.sortKey, props.sortDir)
-  }, [collected, props.query, props.tab, props.favorites, props.sortKey, props.sortDir, props.heldPairs])
+  }, [collected, props.query, props.tab, props.favorites, props.sortKey, props.sortDir, props.heldPairs, props.listedPairs, props.heldListedPairs])
+
+  const allPairKeys = [
+    ...TRADE_PAIRS.map((p) => p as string),
+    ...props.listedPairs.map((p) => p.pairKey),
+  ]
 
   return (
     <div className="markets-list">
-      {TRADE_PAIRS.map((pair) => (
+      {allPairKeys.map((pair) => (
         <RowCollector
           key={`${props.chainId}-${pair}`}
           pair={pair}
@@ -290,13 +349,14 @@ function MarketRows(props: {
             </span>
             <span className="markets-main">
               <span className="markets-pairline">
-                <b>{r.pair}</b>
+                <b>{r.base}/{r.quote}</b>
                 <span className="pill pill-spot">现货</span>
-                {pairSameChainOnly(r.pair) && <span className="pill">仅同链交易</span>}
+                {r.listed && <span className="pill">自助上架</span>}
+                {!r.listed && pairSameChainOnly(r.pair) && <span className="pill">仅同链交易</span>}
                 <button
                   type="button"
                   className={isFav ? 'markets-star on' : 'markets-star'}
-                  aria-label={isFav ? `取消收藏 ${r.pair}` : `收藏 ${r.pair}`}
+                  aria-label={isFav ? `取消收藏 ${r.base}/${r.quote}` : `收藏 ${r.base}/${r.quote}`}
                   onClick={(e) => {
                     e.stopPropagation()
                     props.onToggleFav(r.pair)
@@ -307,6 +367,7 @@ function MarketRows(props: {
               </span>
               <span className="markets-sub">
                 {meta.name} · 成交额 {r.volumeQuote !== null ? fmtCompactAmount(r.volumeQuote) : '—'}
+                {r.listed && ' · 未经审核'}
               </span>
             </span>
             <MarketPriceCell lastPrice={r.lastPrice} refUsd={r.refUsd} />
@@ -347,9 +408,18 @@ function RowCollector({
     lastTradePrice: stats.lastPrice,
     lastTradeAtSec: stats.lastTradeAt,
   })
-  const [base, quote] = pair.split('/')
+  // 第六十轮：符号走解析层（自助对为地址型键）；$ 参考价仅在美元计价外部源
+  // 且计价币为美元稳定币时成立（否则参考价是计价币口径，不能冠 $ 展示）
+  const resolved = useResolvedPair(CHAIN_ID, pair)
+  const [seedBase, seedQuote] = pair.split('/')
+  const base = resolved?.base.symbol ?? seedBase
+  const quote = resolved?.quote.symbol ?? seedQuote
   const refUsd =
-    reference.status === 'ok' && reference.ref.source === 'chainlink' ? reference.ref.price : null
+    reference.status === 'ok' &&
+    (reference.ref.source === 'chainlink' ||
+      (reference.ref.source === 'dexscreener' && isUsdStableSymbol(quote)))
+      ? reference.ref.price
+      : null
 
   useEffect(() => {
     onData({
