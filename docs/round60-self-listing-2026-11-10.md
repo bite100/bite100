@@ -190,9 +190,55 @@ creator（自报地址，仅信息）、created_at。索引 `(chain_id, created_
   错地址被拒 / 重复注册幂等：见 §7 回填。
 - Sepolia E2E（18 位 + 6 位小数新代币各一对）：见 §7 回填（tx 哈希）。
 
-## 7. 验证结果（回填）
+## 7. 验证结果（2026-11-10 实测回填）
 
-（待回填）
+**前端门禁**（分支 round60-self-listing，提交 63ef32c）：vitest **470/470**
+（40 文件；基线 428，本轮 +42：pairRegistry 15、DexScreener 参考价降级、
+$1 校验三锚、参考价 listed 路径、useCurrentPair 地址键、config/pairs
+注册表回退）；`tsc --noEmit` 干净；`npm run build` ✓（仅既有 chunk 体积
+警告）。
+
+**中继门禁**（提交 dd31674）：`tsc` 干净；单元测试 **36/36**（nostr 6 +
+orders 19 + pairs 新增 11：键构造/解析、符号拒绝、链上复读元数据注册、
+重复幂等、无代码/元数据不可读 fail-closed 400、创建者日限 429、
+resolveOrderTokens 种子/已上架/未注册/错链）；workers 集成 **19/19**
+（既有 12 + pairs 新增 7：GET /pairs 形状、RPC 前置校验 400、直写 D1 的
+已上架对可签名下单且簿可见、伪造 quote 400、未注册反向对 400、种子
+ETH/USDT 回归 200）。
+
+**Sepolia E2E**（`frontend/scripts/round60-e2e/`，本地 wrangler dev 中继 +
+本地 D1，生产中继未碰；20 项检查全 PASS）：
+
+- 新代币部署：TKX18 `0x4Ed5487d0b9eC84d3422eF457B2556d85f6Ec56A`
+  （tx `0xf70812a4616c3f796b8b320f82a23b8bc28f9543aa71541b6f81266fbfa85997`）、
+  TKX6 `0xE619046bc755CF901C10fC425465D129c01C8135`
+  （tx `0x5dd312276efb36bf8275ccf40a8acd871145be375c0065cdefbc4db822d573e3`）；
+  链上回读 decimals 6/18 无误。
+- 未注册对下单先被中继拒（400 unknown pair）；注册两对 201、重复注册
+  200 幂等；中继链上复读元数据与部署一致（TKX6 base 6 位，价格缩放
+  priceDecimals=30）。
+- 存入第 47 轮 Vault（tx `0xc09b5a87…1709c` / `0xb2875f31…4a8c` /
+  `0x6e33ec08…5c7f0d`）后挂单→簿可见→撮合结算：
+  - **TKX6/USDT（主验，6 位）**：卖单 100 TKX6 @ 2，簿上原始值
+    price=`2000000000000000000000000000000`（2×10³⁰，缩放 30）、
+    amount=`100000000`（缩放 6）逐字对；结算 tx
+    `0x7e02127935b80d3c260a230c60a3095f42c6527cd43461ee53092fe8f630eefc`
+    status=1、TradeSettled 1 件；taker 实收 39,996,000 TKX6 原始单位
+    （40 TKX6 扣 0.01% 手续费）、maker 实收 79.992 USDT。
+  - **TKX18/USDT（18/18 对照）**：卖单 10 @ 3，price=`3×10¹⁸`、
+    amount=`10×10¹⁸`；结算 tx
+    `0xfb25929efd943200577cdae7618ef796e51c02a312c2a6305b4202b501a68ce6`
+    status=1、TradeSettled 1 件；taker 实收 9.999 TKX18、maker 实收
+    29.997 USDT。
+- 结论：§2 的 decimals 口径（价格缩放 `18 + quoteDecimals −
+  baseDecimals`、数量缩放 baseDecimals，前端签名值 ≡ 中继重建值）在
+  6 位小数对上链上真实结算成立，**合约零改动**得到验证。
+
+**本地 E2E 管道注记**：本 VM 出口中间层干扰 workerd 出站 TLS（直连
+publicnode/Tenderly 握手损坏，Node/curl 正常），本地中继经
+`SEPOLIA_RPC_URL` 指向本地 Node 转发器（127.0.0.1:8545 → publicnode）
+完成验证；生产中继在 Cloudflare 网络内直读 RPC 不受影响。细节见
+`frontend/scripts/round60-e2e/README.md`。
 
 ## 8. 部署计划（留给主聊天复验后执行，本轮不做）
 
@@ -203,6 +249,14 @@ creator（自报地址，仅信息）、created_at。索引 `(chain_id, created_
 
 ## 9. 遗留项
 
-- mcp 与阶段 4 运行器接入注册表（后续轮次）。
+- mcp 与阶段 4 运行器接入注册表（后续轮次；本轮按范围保持种子 8 对）。
 - 资产页展示自助对代币余额行（后续）。
 - GeckoTerminal 备源未接（DexScreener 覆盖不足时再议）。
+- OrderBookSection（旧交易页组件）的订单簿/我的订单表直接渲染中继原始
+  缩放字符串——种子对时代的既有行为，主交易界面（盘口组件）已按
+  decimals 正确换算；本轮未动该页以免扰动第 54 轮已验表面，后续清理。
+- DexScreener 对同一代币多池取最大流动池价；极端情况下小池操纵报价的
+  影响仅限预填/偏离警告与 $1 校验锚（成交价以订单簿为准），主网前可
+  再议是否加多源交叉。
+- 本地 wrangler dev 在本 VM 出口下需本地 RPC 转发器（见 §7 注记与 E2E
+  README）；仅本地开发管道事项，生产无此问题。
