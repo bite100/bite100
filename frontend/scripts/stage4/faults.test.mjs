@@ -22,11 +22,13 @@
 //           按账本损坏失败关闭；双链合法条目放行
 //   F8      第 52 轮 B2：fsync 序落盘后新实例读回完整、无 .tmp
 //           残留（fsync 本身进程内不可观测，钉布局与内容）
-//   F9      第 53 轮：fsync 错误分类——注入 EIO 等真实 I/O 错误
-//           必须上抛（文件同步失败则不 rename、目标不出现；目录
-//           同步失败在 rename 后上抛）；EINVAL 等平台不支持类
-//           错误码降级跳过、写入照常完成（经 writeFileAtomicDurable
-//           的 sync 注入缝驱动，不碰真盘 fsync 行为）
+//   F9      第 53 轮建、第 54 轮扩：fsync 错误分类——注入 EIO 等
+//           真实 I/O 错误必须上抛（文件同步失败则不 rename、目标
+//           不出现；目录同步失败在 rename 后上抛）；第 54 轮按场
+//           景拆分后，EBADF 任何场景一律上抛、EINVAL 只在目录步
+//           降级、文件步注入 EINVAL/EBADF 都必须抛错（经
+//           writeFileAtomicDurable 的 sync 注入缝驱动，不碰真盘
+//           fsync 行为）
 //   F4-slow 场景③变体：回执始终取不到（null）——与 F4 走同一
 //           `!receipt || status !== 1` 分支，但须等满生产宽限
 //           120s 才返回，默认跳过；S4_FAULTS_INCLUDE_SLOW=1 时跑。
@@ -64,7 +66,8 @@ const {
   recoverPendingSettlements,
   reconcileAfterTimeout,
   writeFileAtomicDurable,
-  isFsyncDowngradeError,
+  isFileFsyncDowngradeError,
+  isDirFsyncDowngradeError,
   SETTLEMENT_ABI,
 } = await import(bundlePath)
 
@@ -423,21 +426,26 @@ await check('F8 第52轮B2：persistPending 经 fsync 序落盘 → 新实例读
   assert.equal(rows[0].takerAmountIn, entry.takerAmountIn)
 })
 
-// ------------------------------------------------------------  F9 第 53 轮 fsync 错误分类
+// ------------------------------------------------------------  F9 fsync 错误分类（第 53 轮建、第 54 轮按场景拆分）
 
-await check('F9 第53轮：fsync 真实 I/O 错误（EIO）上抛、不支持类错误码（EINVAL）降级', async () => {
+await check('F9 第54轮：fsync 分类按场景拆分——EBADF 一律上抛、EINVAL 仅目录步降级、文件步仅 ENOTSUP 系降级', async () => {
   const dir = mkdtempSync(join(tmpdir(), 's4-f9-'))
   const target = join(dir, 'ledger.json')
   const errWith = (code) => Object.assign(new Error(`injected ${code}`), { code })
 
-  // 分类器本身：白名单内外分明，无 code 的普通错误不降级
-  assert.equal(isFsyncDowngradeError(errWith('EINVAL')), true)
-  assert.equal(isFsyncDowngradeError(errWith('ENOTSUP')), true)
-  assert.equal(isFsyncDowngradeError(errWith('EOPNOTSUPP')), true)
-  assert.equal(isFsyncDowngradeError(errWith('EBADF')), true)
-  assert.equal(isFsyncDowngradeError(errWith('EIO')), false)
-  assert.equal(isFsyncDowngradeError(errWith('ENOSPC')), false)
-  assert.equal(isFsyncDowngradeError(new Error('plain')), false)
+  // 分类器本身：两套白名单分明，EBADF 两边都不降级，无 code 的普通错误不降级
+  assert.equal(isFileFsyncDowngradeError(errWith('ENOTSUP')), true)
+  assert.equal(isFileFsyncDowngradeError(errWith('EOPNOTSUPP')), true)
+  assert.equal(isFileFsyncDowngradeError(errWith('EINVAL')), false, 'EINVAL 不是文件场景的平台不支持信号')
+  assert.equal(isFileFsyncDowngradeError(errWith('EBADF')), false, 'EBADF 是调用方错误，文件场景不降级')
+  assert.equal(isFileFsyncDowngradeError(errWith('EIO')), false)
+  assert.equal(isFileFsyncDowngradeError(new Error('plain')), false)
+  assert.equal(isDirFsyncDowngradeError(errWith('EINVAL')), true, '目录句柄 EINVAL 是部分平台的正常回应')
+  assert.equal(isDirFsyncDowngradeError(errWith('ENOTSUP')), true)
+  assert.equal(isDirFsyncDowngradeError(errWith('EOPNOTSUPP')), true)
+  assert.equal(isDirFsyncDowngradeError(errWith('EBADF')), false, 'EBADF 目录场景同样不降级')
+  assert.equal(isDirFsyncDowngradeError(errWith('EIO')), false)
+  assert.equal(isDirFsyncDowngradeError(errWith('ENOSPC')), false)
 
   // 文件 fsync 抛 EIO → 整体上抛，rename 未发生、目标文件不出现
   assert.throws(
@@ -446,8 +454,27 @@ await check('F9 第53轮：fsync 真实 I/O 错误（EIO）上抛、不支持类
   )
   assert.equal(existsSync(target), false, '文件同步失败时目标不应被 rename 出来')
 
-  // 两步 fsync 都抛 EINVAL（平台不支持）→ 降级跳过，写入照常完成、无 .tmp 残留
-  writeFileAtomicDurable(target, '{"v":2}', () => { throw errWith('EINVAL') })
+  // 第 54 轮核心反例：文件 fsync 抛 EBADF → 必须抛错（第 53 轮统一白名单会误降级）
+  assert.throws(
+    () => writeFileAtomicDurable(target, '{"v":1b}', () => { throw errWith('EBADF') }),
+    /injected EBADF/,
+  )
+  assert.equal(existsSync(target), false, 'EBADF 上抛后目标不应被 rename 出来')
+
+  // 文件 fsync 抛 EINVAL → 同样必须抛错（EINVAL 只属于目录场景）
+  assert.throws(
+    () => writeFileAtomicDurable(target, '{"v":1c}', () => { throw errWith('EINVAL') }),
+    /injected EINVAL/,
+  )
+  assert.equal(existsSync(target), false)
+
+  // 文件 fsync 抛 ENOTSUP（文件场景仅剩的降级码）+ 目录 fsync 抛 EINVAL（目录场景降级）
+  // → 两步都跳过，写入照常完成、无 .tmp 残留
+  let step = 0
+  writeFileAtomicDurable(target, '{"v":2}', () => {
+    step += 1
+    throw errWith(step === 1 ? 'ENOTSUP' : 'EINVAL')
+  })
   assert.equal(readFileSync(target, 'utf8'), '{"v":2}')
   assert.equal(existsSync(`${target}.tmp`), false)
 
@@ -462,6 +489,17 @@ await check('F9 第53轮：fsync 真实 I/O 错误（EIO）上抛、不支持类
     /injected EIO/,
   )
   assert.equal(readFileSync(target, 'utf8'), '{"v":3}', 'rename 已生效，但耐久性未确认——靠上抛让调用方失败关闭')
+
+  // 目录 fsync 抛 EBADF → 同样上抛（EBADF 不因换到目录场景就变可降级）
+  let calls2 = 0
+  assert.throws(
+    () =>
+      writeFileAtomicDurable(target, '{"v":4}', () => {
+        calls2 += 1
+        if (calls2 === 2) throw errWith('EBADF')
+      }),
+    /injected EBADF/,
+  )
 })
 
 if (process.env.S4_FAULTS_INCLUDE_SLOW === '1') {

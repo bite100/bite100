@@ -197,6 +197,25 @@ query Bit100IndexerMeta {
   }
 }`
 
+/**
+ * 块高字段形态校验（第 54 轮）：只接受有限数字或非空十进制数字字符串，
+ * 其余（null / '' / 非数字）→ null。此前直接 Number(...)：Number(null)
+ * 与 Number('') 都是 0（有限值），能溜过 isFinite 检查——sourceBlock
+ * 为 null 时块差被压成 0（漏报滞后），progressBlock 为 null 时块差被
+ * 放大到整条链高（误报滞后）。与 isReady 三态同一口径：形态不合即
+ * 「无证据」，整个进度按判不出处理。
+ */
+function parseBlockHeight(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string') {
+    const t = v.trim()
+    if (!/^[0-9]+$/.test(t)) return null
+    const n = Number(t)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
 export interface IndexerChainProgress {
   /** 落后链头的块数（sourceBlock − progressBlock，下限 0） */
   lagBlocks: number
@@ -215,6 +234,8 @@ export interface IndexerChainProgress {
  * 缺失/找不到该链的行 → 返回 null（滞后判不出），由调用方按
  * 「不标 stale」处理——标注只凭实证，不凭猜测。第 53 轮起
  * isReady 单独三态：缺失只让 isReady=null，不拖垮块差证据。
+ * 第 54 轮起块高先经 parseBlockHeight 验形态：null/''/非数字不
+ * 再被 Number() 压成 0 溜过检查，形态不合整个进度返回 null。
  */
 export async function fetchIndexerChainProgress(
   chainId: number,
@@ -241,9 +262,9 @@ export async function fetchIndexerChainProgress(
         Number((r as Record<string, unknown>).chainId) === chainId,
     ) as Record<string, unknown> | undefined
     if (!row) return null
-    const progressBlock = Number(row.progressBlock)
-    const sourceBlock = Number(row.sourceBlock)
-    if (!Number.isFinite(progressBlock) || !Number.isFinite(sourceBlock)) return null
+    const progressBlock = parseBlockHeight(row.progressBlock)
+    const sourceBlock = parseBlockHeight(row.sourceBlock)
+    if (progressBlock === null || sourceBlock === null) return null
     return {
       lagBlocks: Math.max(0, sourceBlock - progressBlock),
       isReady: typeof row.isReady === 'boolean' ? row.isReady : null,
