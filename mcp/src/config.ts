@@ -69,7 +69,6 @@ export function chainSummary(chainId: number) {
     rpcUrl: cfg.rpcUrl,
     settlement: cfg.contracts.settlement,
     vault: cfg.contracts.vault,
-    makerVault: cfg.contracts.makerVault ?? null,
     pairs: ALLOWED_PAIRS,
     tokens: cfg.tokens ?? {},
   }
