@@ -1,0 +1,83 @@
+/* 「AI 接入」说明页（第 56 轮）：纯静态说明，移动端优先——
+   单列、窄屏不横滚；代码块只在块内横向滚动，不撑破页面。 */
+.ai-access {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ai-h {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--b100-text);
+}
+.ai-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--b100-surface-2);
+  border: 1px solid var(--b100-hairline);
+  color: var(--b100-text);
+  font-weight: 600;
+}
+.ai-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: var(--b100-text-2);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+.ai-list b {
+  color: var(--b100-text);
+}
+.ai-steps {
+  margin: 0;
+  padding-left: 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  color: var(--b100-text-2);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+.ai-steps b {
+  color: var(--b100-text);
+}
+.ai-code {
+  margin: 0.5rem 0 0;
+  padding: 12px;
+  background: var(--b100-surface-2);
+  border: 1px solid var(--b100-hairline);
+  border-radius: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--b100-text);
+  overflow-x: auto;
+  white-space: pre;
+}
+.ai-tools {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+.ai-tools td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--b100-hairline);
+  vertical-align: top;
+  color: var(--b100-text-2);
+}
+.ai-tools tr:last-child td {
+  border-bottom: none;
+}
+.ai-tool-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--b100-text);
+  overflow-wrap: anywhere;
+  width: 38%;
+}
