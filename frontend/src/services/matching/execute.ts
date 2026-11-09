@@ -56,6 +56,14 @@ export interface FrontendMatchOutcome {
 
 const NO_MATCH_MSG = '当前对手盘暂无可成交订单，订单已留簿。'
 
+/**
+ * 数据源故障口径（第 52 轮 A5）：中继簿拉取失败或链上快照缺失/过旧
+ * 时，本次根本没拿到可信的对手盘——与「簿是干净的、只是没对手」
+ * 是两回事，必须分开报（status 沿用 aborted＝整单未提交、订单留簿）。
+ */
+const SOURCE_UNAVAILABLE_MSG =
+  '订单簿或链上状态暂不可用，本次未撮合；订单已留簿，请稍后重试。'
+
 function vaultContract(chainId: number, runner: ethers.ContractRunner) {
   const cfg = getChainConfig(chainId)
   if (!cfg) throw new Error(`chain ${chainId} not configured`)
@@ -105,14 +113,23 @@ export async function executeFrontendMatch(
   }
 
   // 1) 新鲜中继簿一轮 → 可成交集（认证只认逐单签名证明 + 链上状态，见 fromEvaluated）
-  let tradeable: EvaluatedOrder[] = []
+  // 第 52 轮 A5：runBookRound 的降级口径是「该面为空 + errors 记录」
+  // 不抛错——旧实现只看 views 的可成交集，中继/RPC 故障与链上快照
+  // 过旧都会落成空集、被误报成「暂无可成交订单」。现先查错误面：
+  // 任一源故障（errors.relay / errors.rpc）或链上口径不可信
+  // （!chainOk，含快照缺失与过旧）→ 按数据源不可用如实返回；只有
+  // 簿与链都干净时，空集才真是「没有对手盘」。
+  let round: Awaited<ReturnType<typeof runBookRound>>
   try {
-    const round = await runBookRound({ ...dualReadDeps }, chainId, [pair])
-    const view = round.views.find((v) => v.pair === pair)
-    tradeable = view?.tradeable ?? []
+    round = await runBookRound({ ...dualReadDeps }, chainId, [pair])
   } catch {
-    return { status: 'no-match', message: NO_MATCH_MSG, ...zero }
+    return { status: 'aborted', message: SOURCE_UNAVAILABLE_MSG, ...zero }
   }
+  if (round.errors.relay || round.errors.rpc || !round.chainOk) {
+    return { status: 'aborted', message: SOURCE_UNAVAILABLE_MSG, ...zero }
+  }
+  const view = round.views.find((v) => v.pair === pair)
+  const tradeable: EvaluatedOrder[] = view?.tradeable ?? []
   const makers = toMatcherOrders(tradeable)
   if (makers.length === 0) return { status: 'no-match', message: NO_MATCH_MSG, ...zero }
 

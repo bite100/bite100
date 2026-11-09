@@ -89,6 +89,7 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
   const [balances, setBalances] = useState<BalanceRow[]>([])
   const [ordersError, setOrdersError] = useState(false)
   const [tradesError, setTradesError] = useState(false)
+  const [tradesStale, setTradesStale] = useState(false)
 
   const fetchMyOrders = useCallback(async () => {
     if (!account) {
@@ -111,6 +112,7 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
     const outcome = await loadIndexerTrades(CHAIN_ID, pair, 50)
     setTrades(outcome.trades.filter((t) => t.price > 0).slice(0, 30))
     setTradesError(outcome.failed)
+    setTradesStale(outcome.stale)
   }, [pair])
 
   const fetchBalances = useCallback(async () => {
@@ -279,13 +281,17 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
               ? '链上索引未配置，成交记录暂不可用'
               : tradesError
                 ? '链上索引暂不可达，成交数据暂不可用'
-                : '来源：链上索引（Envio），成交以链上事件为准'}
+                : tradesStale
+                  ? '来源：链上索引（Envio）；索引同步中，最新成交可能尚未显示'
+                  : '来源：链上索引（Envio），成交以链上事件为准'}
           </Text>
           {tradeRows.length === 0 ? (
             <Text size="sm" c="dimmed" py="sm">
               {tradesError || !INDEXER_ENABLED
                 ? '链上索引暂不可用，成交记录无法加载（资产与跨链不受影响）'
-                : '暂无成交'}
+                : tradesStale
+                  ? '暂无成交（索引同步中，显示可能不完整）'
+                  : '暂无成交'}
             </Text>
           ) : (
             <div className="trade-table-wrap">

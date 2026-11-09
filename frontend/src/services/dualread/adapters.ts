@@ -11,10 +11,19 @@
  *   查明「阶段 4 运行器挂死」的根因嫌疑为本适配器缺省 fetch 无超时——
  *   fetch 本身没有默认超时，对端永不响应时 fetchBook 永远不 settle。
  *   当时只在运行器侧注入了带超时的 fetch 绕行，产品缺省路径仍无界；
- *   本轮给缺省 fetch 补 AbortController + RELAY_BOOK_TIMEOUT_MS，并有
- *   「对端永不响应时在截止期内失败」的单测钉住（dualread.test.ts）。
+ *   第 51 轮给缺省 fetch 补 AbortController + RELAY_BOOK_TIMEOUT_MS，
+ *   并有「对端永不响应时在截止期内失败」的单测钉住（dualread.test.ts）。
+ *   第 52 轮 A2 补完：计时须覆盖到响应体读完——第 51 轮实现在响应头
+ *   到达后即清计时，fetchBook 随后 res.json() 已在计时之外，响应体
+ *   卡死仍无限等待（根因变体）；现行 timer 只在 json() 落定后清理。
  *   注入 fetchFn 的调用方自带超时纪律（如 TradeTabsPanel 的 10s
  *   timedFetch、阶段 4 运行器的 30s 包装），不受影响。
+ *
+ * - 第 52 轮 A1（交易对隔离）：中继返回行逐行校验 pair 必须等于请求
+ *   交易对——中继按 query 参数过滤只是它的说法，本层不轻信：跨对行
+ *   若混入，其验签代币对又是从行自称 pair 推导的，会自洽验真后混进
+ *   请求对的可成交集。不符行丢弃并单独计入 SourceBook.pairMismatchRows
+ *   （与规范化丢弃 droppedRows 分开计数，语义不混）。
  *
  * 排序为稳定键（买盘价降/卖盘价升，同价 createdAt 升序，orderId 兜底），
  * 并记录分页完整度；未拉完的数据不进可成交集（评估层 SOURCE_INCOMPLETE 口径）。
@@ -175,15 +184,31 @@ export function createRelayBookAdapter(
   const doFetch: FetchFn =
     fetchFn ??
     (async (url: string) => {
-      // 块 3 根因修复：fetch 无默认超时——AbortController 在截止期到时
-      // abort，对端永不响应也会在 timeoutMs 内失败，不再无界等待。
+      // 块 3 根因修复 + 第 52 轮 A2：fetch 无默认超时——AbortController
+      // 在截止期到时 abort；且计时必须覆盖到响应体读完：第 51 轮实现
+      // 在响应头到达后即 clearTimeout，fetchBook 随后 res.json() 已在
+      // 计时之外，「头到、体永不到」仍会无限等待。现行：timer 只在
+      // json() 落定（完成或失败）后清理；头阶段失败由 catch 清理。
+      // json() 从未被调用的路径（调用方见 !ok 先抛错）下 timer 会在
+      // timeoutMs 到点自熄——对已完成的响应 abort 无副作用，上界仍在。
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), timeoutMs)
       try {
         const res = await fetch(url, { signal: controller.signal })
-        return { ok: res.ok, status: res.status, json: () => res.json() }
-      } finally {
+        return {
+          ok: res.ok,
+          status: res.status,
+          json: async () => {
+            try {
+              return await res.json()
+            } finally {
+              clearTimeout(timer)
+            }
+          },
+        }
+      } catch (e) {
         clearTimeout(timer)
+        throw e
       }
     })
   return {
@@ -199,8 +224,15 @@ export function createRelayBookAdapter(
       const { bids: rawBids, asks: rawAsks } = requireBookSides(data, 'relay book')
       const nb = normalizeBookRows(rawBids)
       const na = normalizeBookRows(rawAsks)
-      const bids = sortBookSide(nb.orders, 'buy')
-      const asks = sortBookSide(na.orders, 'sell')
+      // 第 52 轮 A1：逐行 pair 隔离——只收行自称 pair 与请求 pair 一致
+      // 的行；跨对行丢弃并单独计数（pairMismatchRows），不与规范化
+      // 阶段的 droppedRows 混计（两者成因与处置口径不同）。
+      const bidsInPair = nb.orders.filter((o) => o.pair === pair)
+      const asksInPair = na.orders.filter((o) => o.pair === pair)
+      const pairMismatchRows =
+        nb.orders.length - bidsInPair.length + (na.orders.length - asksInPair.length)
+      const bids = sortBookSide(bidsInPair, 'buy')
+      const asks = sortBookSide(asksInPair, 'sell')
       return {
         source: 'relay',
         chainId,
@@ -212,6 +244,7 @@ export function createRelayBookAdapter(
         fetchedAt: Date.now(),
         rawRows: rawBids.length + rawAsks.length,
         droppedRows: nb.droppedRows + na.droppedRows,
+        pairMismatchRows,
       }
     },
   }

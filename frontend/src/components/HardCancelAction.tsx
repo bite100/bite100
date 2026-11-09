@@ -89,6 +89,9 @@ export function HardCancelAction({ order, account, getSigner, summary, onSettled
               <Text size="sm" c="dimmed">
                 订单簿里的这条记录可能暂时还在（中继簿没有撤单接口，只能等到期自动清理），但订单已在链上作废、无法成交，不影响你的余额。
               </Text>
+              <Text size="sm" c="dimmed">
+                例外：如果这张订单还没有在链上落锁（从未被撮合锁定过），那么没有可释放的余额、也无法提前作废——本次操作只会确认它未落锁，它仍会留在订单簿里，在过期前仍可能被落锁成交，只能等到期自动失效。
+              </Text>
             </>
           )}
           {!account && (

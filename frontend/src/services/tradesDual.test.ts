@@ -236,3 +236,94 @@ describe('第 39 轮：GraphQL errors 与超时真取消（fetchIndexerTrades �
     expect(TRADES_QUERY).toContain('order_by: [{ blockTimestamp: desc }, { logIndex: desc }]')
   })
 })
+
+describe('第 52 轮 A3：索引响应诚实性（缺失 data + 滞后标注）', () => {
+  it('响应无 data 且无 errors → 抛错（不再以空数组冒充「查到 0 笔」）', async () => {
+    const fetchFn = async () => ({ ok: true, status: 200, json: async () => ({}) })
+    await expect(
+      fetchIndexerTrades(11155111, 'BTC/USDT', 50, fetchFn, 'https://idx.example/graphql'),
+    ).rejects.toThrow('missing data.Trade')
+  })
+
+  it('data 在但 Trade 字段缺失 → 抛错', async () => {
+    const fetchFn = async () => ({ ok: true, status: 200, json: async () => ({ data: {} }) })
+    await expect(
+      fetchIndexerTrades(11155111, 'BTC/USDT', 50, fetchFn, 'https://idx.example/graphql'),
+    ).rejects.toThrow('missing data.Trade')
+  })
+
+  it('经 loadIndexerTrades：异常响应 → failed=true（界面显示不可用而非暂无成交）', async () => {
+    const outcome = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    })
+    expect(outcome.failed).toBe(true)
+    expect(outcome.trades).toEqual([])
+  })
+
+  /** 按查询内容分发的 fetchFn：含 _meta 的是进度查询，其余是成交查询 */
+  function dispatchFetch(meta: unknown, trades: unknown = { data: { Trade: [] } }) {
+    return async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { query: string }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => (body.query.includes('_meta') ? meta : trades),
+      }
+    }
+  }
+
+  it('索引落后链头 >50 块 → stale=true、failed=false（只标注不阻断）', async () => {
+    const outcome = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn: dispatchFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: 900, sourceBlock: 1000, isReady: true }] },
+      }),
+    })
+    expect(outcome.failed).toBe(false)
+    expect(outcome.stale).toBe(true)
+  })
+
+  it('索引未就绪（isReady=false）→ stale=true（即使块差为 0）', async () => {
+    const outcome = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn: dispatchFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: 1000, sourceBlock: 1000, isReady: false }] },
+      }),
+    })
+    expect(outcome.failed).toBe(false)
+    expect(outcome.stale).toBe(true)
+  })
+
+  it('索引已追平且就绪 → stale=false', async () => {
+    const outcome = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn: dispatchFetch({
+        data: {
+          _meta: [
+            { chainId: 84532, progressBlock: 1, sourceBlock: 9999, isReady: false },
+            { chainId: 11155111, progressBlock: 990, sourceBlock: 1000, isReady: true },
+          ],
+        },
+      }),
+    })
+    expect(outcome.failed).toBe(false)
+    expect(outcome.stale).toBe(false)
+  })
+
+  it('进度查询失败 → stale=false（判不出不乱标），成交照常返回', async () => {
+    const btcRow = { ...idx(), tokenIn: BTC, tokenOut: USDT }
+    const fetchFn = async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { query: string }
+      if (body.query.includes('_meta')) throw new Error('meta down')
+      return { ok: true, status: 200, json: async () => ({ data: { Trade: [btcRow] } }) }
+    }
+    const outcome = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn,
+    })
+    expect(outcome.failed).toBe(false)
+    expect(outcome.stale).toBe(false)
+    expect(outcome.trades.length).toBe(1)
+  })
+})

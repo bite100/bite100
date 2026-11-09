@@ -7,6 +7,11 @@
  * 去重/冲突合并（节点的成交记录随节点下线一并退役）。索引不可达时
  * 界面如实显示「暂不可用」，绝不拿空数据冒充「暂无成交」。
  *
+ * 第 52 轮 A3 补两处诚实性：① GraphQL 响应无 data 且无 errors（或
+ * data.Trade 缺失）按索引源失败抛错，不再以空数组冒充「查到 0 笔」；
+ * ② 索引滞后标注：并行查 _meta 进度，outcome.stale 只作展示标注
+ * （未就绪或落后 >50 块），绝不阻断、不并入 failed。
+ *
  * 文件名 tradesDual 沿用以保持 import 路径稳定；导出 fetchIndexerTrades
  * / IndexerTrade 被 scripts/stage4 等已关闭的验收工具引用，不得改签名。
  */
@@ -167,6 +172,77 @@ export interface IndexerTradesOutcome {
   trades: DisplayTrade[]
   /** 本轮索引取数失败（界面须明示不可用，而非「暂无成交」） */
   failed: boolean
+  /**
+   * 索引滞后标注（第 52 轮 A3）：该链索引未就绪（isReady=false）或
+   * 落后链头超过 INDEXER_STALE_LAG_BLOCKS 块时为 true。口径（Ren
+   * 定版）：索引只是展示缓存——滞后只标注、绝不阻断、不影响
+   * failed；滞后判不出（_meta 查询失败）时为 false，不拿不确定
+   * 当滞后喊。
+   */
+  stale: boolean
+}
+
+/** 索引滞后阈值（块）：落后链头超过此数即标 stale（第 52 轮 A3） */
+export const INDEXER_STALE_LAG_BLOCKS = 50
+
+/** Envio 索引进度查询：_meta 是跨链列表（实测字段），客户端按 chainId 挑行 */
+export const INDEXER_META_QUERY = `
+query Bit100IndexerMeta {
+  _meta {
+    chainId
+    progressBlock
+    sourceBlock
+    isReady
+  }
+}`
+
+export interface IndexerChainProgress {
+  /** 落后链头的块数（sourceBlock − progressBlock，下限 0） */
+  lagBlocks: number
+  isReady: boolean
+}
+
+/**
+ * 查 Envio 某链的索引进度（第 52 轮 A3）：骑与成交查询同一条
+ * fetch 路径，不引入第二套 GraphQL 客户端。任何失败/字段缺失/
+ * 找不到该链的行 → 返回 null（滞后判不出），由调用方按
+ * 「不标 stale」处理——标注只凭实证，不凭猜测。
+ */
+export async function fetchIndexerChainProgress(
+  chainId: number,
+  fetchFn: FetchFn = defaultFetch,
+  endpoint: string = INDEXER_URL,
+  signal?: AbortSignal,
+): Promise<IndexerChainProgress | null> {
+  if (!endpoint) return null
+  try {
+    const res = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: INDEXER_META_QUERY }),
+      signal,
+    })
+    if (!res.ok) return null
+    const json = (await res.json()) as { data?: { _meta?: unknown } } | null
+    const meta = json?.data?._meta
+    const rows: unknown[] = Array.isArray(meta) ? meta : meta ? [meta] : []
+    const row = rows.find(
+      (r) =>
+        r !== null &&
+        typeof r === 'object' &&
+        Number((r as Record<string, unknown>).chainId) === chainId,
+    ) as Record<string, unknown> | undefined
+    if (!row) return null
+    const progressBlock = Number(row.progressBlock)
+    const sourceBlock = Number(row.sourceBlock)
+    if (!Number.isFinite(progressBlock) || !Number.isFinite(sourceBlock)) return null
+    return {
+      lagBlocks: Math.max(0, sourceBlock - progressBlock),
+      isReady: row.isReady === true,
+    }
+  } catch {
+    return null
+  }
 }
 
 export interface LoadIndexerOptions {
@@ -188,17 +264,31 @@ export async function loadIndexerTrades(
 ): Promise<IndexerTradesOutcome> {
   const endpoint = opts.endpoint ?? INDEXER_URL
   const tokens = getPairTokens(chainId, pair)
-  if (!endpoint || !tokens) return { trades: [], failed: true }
+  if (!endpoint || !tokens) return { trades: [], failed: true, stale: false }
   try {
-    const rows = await callWithTimeout(
+    // 成交查询与索引进度查询并行、同受本层超时约束；进度查询失败
+    // 只意味着滞后判不出（stale=false），不拖垮成交数据本身。
+    const { rows, progress } = await callWithTimeout(
       opts.timeoutMs ?? INDEXER_TRADES_TIMEOUT_MS,
       'indexer trades',
-      (signal) =>
-        fetchIndexerTrades(chainId, pair, limit, opts.fetchFn, endpoint, 0, { signal }),
+      async (signal) => {
+        const [tradeRows, chainProgress] = await Promise.all([
+          fetchIndexerTrades(chainId, pair, limit, opts.fetchFn, endpoint, 0, { signal }),
+          fetchIndexerChainProgress(chainId, opts.fetchFn, endpoint, signal),
+        ])
+        return { rows: tradeRows, progress: chainProgress }
+      },
     )
-    return { trades: rows.map((t) => indexerTradeToDisplay(t, tokens.base)), failed: false }
+    const stale =
+      progress !== null &&
+      (!progress.isReady || progress.lagBlocks > INDEXER_STALE_LAG_BLOCKS)
+    return {
+      trades: rows.map((t) => indexerTradeToDisplay(t, tokens.base)),
+      failed: false,
+      stale,
+    }
   } catch {
-    return { trades: [], failed: true }
+    return { trades: [], failed: true, stale: false }
   }
 }
 
@@ -302,7 +392,15 @@ export async function fetchIndexerTrades(
     if (Array.isArray(json?.errors) && json.errors.length > 0) {
       throw new Error('indexer graphql query failed')
     }
-    const rows = Array.isArray(json?.data?.Trade) ? json.data!.Trade : []
+    // 第 52 轮 A3：GraphQL 响应必须至少带 data 或 errors——两者皆无
+    // （或 data 在但 Trade 字段缺失/非数组）是异常响应，旧实现以 []
+    // 兜底会被上层当成「查到 0 笔成交」展示成暂无成交。现按索引源
+    // 失败抛错，走既有 failed 口径。data.Trade 为空数组才是真空。
+    const tradeField = json?.data?.Trade
+    if (!Array.isArray(tradeField)) {
+      throw new Error('indexer graphql response missing data.Trade')
+    }
+    const rows = tradeField
     const pairSet = new Set([lc(tokens.base), lc(tokens.quote)])
     return rows
       .map((r) => {
