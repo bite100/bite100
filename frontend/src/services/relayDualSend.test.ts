@@ -35,6 +35,13 @@ describe('dualSendOrderToRelay', () => {
     expect(JSON.parse(init.body)).toMatchObject({ orderId: 'ord-1', chainId: 11155111 })
   })
 
+  it('请求带显式超时信号（第 45 轮 A1：挂死连接按时 abort）', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true })
+    await expect(dualSendOrderToRelay(ORDER, 11155111)).resolves.toBe(true)
+    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('网络失败只吞错返回 false，永不抛错（下单不受影响）', async () => {
     ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('network down'))
     await expect(dualSendOrderToRelay(ORDER, 11155111)).resolves.toBe(false)

@@ -17,8 +17,15 @@
  * 零容忍线（任一触发立即停跑、保全证据、状态文件标 triggered）：
  * 订单丢失（中继已接单却始终不出现在中继簿）、无效成交上链
  * （回执失败/成交事件与预期腿数不符/已成交量超签名量）、篡改单
- * 被中继接受、索引器成交与链上回执不一致（宽限期后仍缺失或
- * 金额多重集不符）。
+ * 被中继接受。第 45 轮 B4 起同级再加一条：结算状态未知——已提交
+ * 的结算在宽限内查不到回执、或关键链上读数重试后仍失败，按失败
+ * 关闭停机（提交结果不明，绝不带着未知状态继续跑）。
+ *
+ * 索引器不在零容忍线内（Ren 2026-11-09 09:13 口径：平台只是
+ * 中介，交易都在链上，索引器只是展示缓存、不是账本）：索引器
+ * 滞后或字段不符只记观察项（probe-indexer 的 lagging /
+ * mismatch-observed），不停机；正确性一律以链上回执与事件为准。
+ * zero.indexerMismatch 计数仅为状态结构历史兼容保留，不再递增。
  *
  * 密钥纪律：只从 S4_KEYS_DIR（默认 ~/workspace/bite100-deployer）
  * 的 maker.env / taker.env / wallet.env 运行时读取，绝不打印/落盘。
@@ -56,7 +63,7 @@ import {
   createViemChainTransport,
   type ChainStateReader,
 } from '../../src/services/dualread/chainState'
-import type { RawOrder } from '../../src/services/dualread/types'
+import type { RawOrder, SourceBook } from '../../src/services/dualread/types'
 import { runDualReadRound } from '../../src/services/dualread/index'
 import { executeFrontendMatch } from '../../src/services/matching/execute'
 import { orderDataToContractOrder } from '../../src/services/matching/fills'
@@ -106,6 +113,87 @@ export const CHAINS = [11155111, 84532] as const
 const PRICE = '2000' // 合成定价（与 soak 同口径：测状态机保真，不测价格真实性）
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * 超时硬化（2026-11-09 方案 B，Ren 批准）：给一段异步工作套硬超时，
+ * 超时以 CycleTimeoutError 抛出，由主循环按 cycle-error 记账并继续，
+ * 不再让某个无超时的网络等待整夜冻结运行器。被放弃的原 promise 迟到
+ * 拒绝会被吞掉（防 unhandled rejection 崩溃）；其迟到副作用（迟到的
+ * 成交仍受合约签名限价与累计记账约束，合法性不受影响）由账本与
+ * Envio 对账在汇总时兜底。
+ */
+export class CycleTimeoutError extends Error {
+  constructor(label: string, ms: number) {
+    super(`${label} 超时（>${Math.round(ms / 1000)}s，超时硬化）`)
+    this.name = 'CycleTimeoutError'
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new CycleTimeoutError(label, ms)), ms)
+  })
+  p.catch(() => {})
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
+
+const CHAIN_CYCLE_TIMEOUT_MS = 420_000
+const RECHECK_TIMEOUT_MS = 240_000
+
+// ------------------------------------------------------- 调用打点
+/**
+ * 卡点隔离埋点（第 45 轮块 1）：阶段 4 实测中 Sepolia 周期 2 起会
+ * 卡死在一个无超时的网络等待上，但从未隔离到具体调用。本埋点给
+ * 周期路径上的每个网络调用命名并计时：调用前先同步落一行
+ * call-start（ledger.line 走 appendFileSync，同步写盘——进程即使
+ * 随后永久挂死，这行也已在 metrics 里），结束落 call-end（耗时 +
+ * 成败）。下轮运行若再卡死，metrics 中最后一个未配对的 call-start
+ * 的 call 名即卡住的调用，ms 缺失本身就是证据。sink 由 runStage4
+ * 在 ledger 建好后注入；check 模式不注入（只执行、不打点）。
+ */
+let traceSink: ((line: Record<string, unknown>) => void) | null = null
+
+export function setTraceSink(
+  fn: ((line: Record<string, unknown>) => void) | null,
+): void {
+  traceSink = fn
+}
+
+async function traceCall<T>(
+  call: string,
+  chainId: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!traceSink) return fn()
+  const startedAt = Date.now()
+  traceSink({ kind: 'call-start', ts: startedAt, chainId, call })
+  try {
+    const out = await fn()
+    traceSink({
+      kind: 'call-end',
+      ts: Date.now(),
+      chainId,
+      call,
+      ms: Date.now() - startedAt,
+      ok: true,
+    })
+    return out
+  } catch (e) {
+    traceSink({
+      kind: 'call-end',
+      ts: Date.now(),
+      chainId,
+      call,
+      ms: Date.now() - startedAt,
+      ok: false,
+      error: (e instanceof Error ? e.message : String(e)).slice(0, 160),
+    })
+    throw e
+  }
+}
 const lc = (s: string) => (s ?? '').toLowerCase()
 export const log = (msg: string) =>
   console.log(`[stage4 ${new Date().toISOString()}] ${msg}`)
@@ -195,6 +283,8 @@ export interface SettlementRecord {
     indexer: 'pending' | 'ok' | 'mismatch'
     indexerCheckedAt?: number
   }
+  /** 索引器滞后观察项是否已记过（每笔只记一次，probe 本身保持 pending 继续复查） */
+  lagReported?: boolean
 }
 
 export interface FailureItem {
@@ -217,7 +307,21 @@ export interface ChainCounts {
   scenarios: Record<string, number>
 }
 
+/** B5 恢复账本条目：已提交但未探针确认的结算（落盘 stage4-pending-settlements.json） */
+export interface PendingSettlement {
+  txHash: string
+  chainId: number
+  pair: string
+  takerDigest: string
+  legs: number
+  takerAmountIn: string | null
+  notedAt: number
+}
+
 export class ZeroToleranceError extends Error {}
+
+/** 构建备注：第 45 轮（阶段 4 后修复轮）定版，随状态文件与 window-start 行落盘 */
+export const BUILD_NOTE = '第 45 轮阶段 4 后修复：含 B1/B3/B2-lite（索引器分页/探针容错/事件来源核对）+ 方案 B 超时硬化（单链周期 420s、复查 240s、中继发单 30s/节点拉簿 10s）+ 卡点隔离埋点（call-start/call-end 命名计时）与中继拉簿 30s 超时包裹 + B4 失败关闭（回执宽限轮询 120s、关键读数重试，结算状态未知按零容忍同级停机；索引器滞后/不符只记观察项——Ren 2026-11-09 新口径）+ B5 待确认结算恢复账本（启动先复查遗留结算）'
 
 export class Stage4Ledger {
   posted = new Map<string, PostedOrder>()
@@ -234,9 +338,12 @@ export class Stage4Ledger {
   }
   cycles = 0
 
+  private pending = new Map<string, PendingSettlement>()
+
   constructor(
     private readonly metricsPath: string,
     private readonly statePath: string,
+    private readonly pendingPath: string,
     readonly windowStart: number,
     readonly windowEndPlanned: number,
   ) {
@@ -283,12 +390,42 @@ export class Stage4Ledger {
     throw new ZeroToleranceError(`${kind}: ${detail}`)
   }
 
+  /** B5：登记一笔待确认结算并立即落盘（tmp+rename，与 saveState 同法） */
+  notePending(entry: PendingSettlement): void {
+    this.pending.set(entry.txHash.toLowerCase(), entry)
+    this.persistPending()
+  }
+
+  /** B5：结算已按链上口径确认完毕 → 从恢复账本清除 */
+  confirmPending(txHash: string): void {
+    if (this.pending.delete(txHash.toLowerCase())) this.persistPending()
+  }
+
+  /** B5：读盘上遗留的待确认结算（文件缺失/损坏按空账本处理，不阻断启动） */
+  loadPending(): PendingSettlement[] {
+    try {
+      if (!existsSync(this.pendingPath)) return []
+      const rows = JSON.parse(readFileSync(this.pendingPath, 'utf8')) as PendingSettlement[]
+      this.pending = new Map(rows.map((r) => [r.txHash.toLowerCase(), r]))
+      return rows
+    } catch {
+      return []
+    }
+  }
+
+  private persistPending(): void {
+    const tmp = `${this.pendingPath}.tmp`
+    writeFileSync(tmp, JSON.stringify([...this.pending.values()], null, 2))
+    renameSync(tmp, this.pendingPath)
+  }
+
   saveState(status: string): void {
     const state = {
       windowStart: this.windowStart,
       windowEndPlanned: this.windowEndPlanned,
       updatedAt: Date.now(),
       status,
+      note: BUILD_NOTE,
       cycles: this.cycles,
       chains: this.counts,
       zeroTolerance: this.zero,
@@ -350,6 +487,7 @@ function createDirectNodeAdapter(nodeUrl: string): BookAdapter {
     async fetchBook(chainId: number, pair: string) {
       const res = await fetch(
         `${nodeUrl}/api/orderbook?pair=${encodeURIComponent(pair)}`,
+        { signal: AbortSignal.timeout(10_000) },
       )
       if (!res.ok) throw new Error(`node orderbook http ${res.status}`)
       const data: unknown = await res.json()
@@ -368,6 +506,43 @@ function createDirectNodeAdapter(nodeUrl: string): BookAdapter {
         droppedRows: nb.droppedRows + na.droppedRows,
       }
     },
+  }
+}
+
+const RELAY_BOOK_TIMEOUT_MS = 30_000
+
+/** 簿适配器打点包裹（运行器侧胶水，产品适配器不动）：每次拉簿落 call-start/call-end */
+function tracedBookAdapter(inner: BookAdapter, call: string): BookAdapter {
+  return {
+    fetchBook: (chainId: number, pair: string) =>
+      traceCall(call, chainId, () => inner.fetchBook(chainId, pair)),
+  }
+}
+
+/**
+ * 中继簿适配器：打点之外再套 30s 硬超时。产品 createRelayBookAdapter
+ * 的 fetch 无任何超时——经 VM 代理的连接一旦挂死，拉簿永不返回，
+ * 这正是阶段 4 卡死形态的头号候选点；运行器侧包裹后，超时按拉簿
+ * 失败处理（双读记源错误、在场探针记无结论），周期不再被拖死。
+ */
+function tracedRelayBookAdapter(inner: BookAdapter): BookAdapter {
+  return {
+    fetchBook: (chainId: number, pair: string) =>
+      traceCall('book.relay', chainId, () =>
+        withTimeout(
+          inner.fetchBook(chainId, pair),
+          RELAY_BOOK_TIMEOUT_MS,
+          `中继拉簿 chain ${chainId} ${pair}`,
+        ),
+      ),
+  }
+}
+
+/** 链上状态读取器打点包裹：snapshot 内部走 viem multicall（自带 http 超时），此处只命名计时 */
+function tracedChainReader(inner: ChainStateReader): ChainStateReader {
+  return {
+    snapshot: (chainId, requests) =>
+      traceCall('chain.snapshot', chainId, () => inner.snapshot(chainId, requests)),
   }
 }
 
@@ -410,9 +585,9 @@ export function buildChainCtx(
       provider,
     ),
     nonceCursor: new Map(),
-    nodeAdapter: createDirectNodeAdapter(cfg.nodeUrls[chainId]),
-    relayAdapter: createRelayBookAdapter(cfg.relayUrl),
-    chainReader: createChainStateReader(createViemChainTransport()),
+    nodeAdapter: tracedBookAdapter(createDirectNodeAdapter(cfg.nodeUrls[chainId]), 'book.node'),
+    relayAdapter: tracedRelayBookAdapter(createRelayBookAdapter(cfg.relayUrl)),
+    chainReader: tracedChainReader(createChainStateReader(createViemChainTransport())),
   }
 }
 
@@ -436,11 +611,14 @@ export async function postToRelay(
     ...(sideOverride ? { side: sideOverride } : {}),
   }
   try {
-    const res = await fetch(`${relayUrl}/orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    const res = await traceCall('relay.postOrder', gen.chainId, () =>
+      fetch(`${relayUrl}/orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000),
+      }),
+    )
     if (!res.ok) {
       return {
         ok: false,
@@ -462,11 +640,8 @@ async function genAndPost(
   spec: OrderSpec,
   opts: { tamper?: boolean } = {},
 ): Promise<{ gen: GeneratedOrder | null; skipReason?: string }> {
-  const { generated, skipped } = await generateBatch(
-    ctx.chainId,
-    [ctx.maker, ctx.taker],
-    [spec],
-    ctx.nonceCursor,
+  const { generated, skipped } = await traceCall('gen.generateBatch', ctx.chainId, () =>
+    generateBatch(ctx.chainId, [ctx.maker, ctx.taker], [spec], ctx.nonceCursor),
   )
   if (generated.length === 0) {
     return { gen: null, skipReason: skipped[0]?.reason ?? '生成被跳过（无原因）' }
@@ -534,7 +709,26 @@ async function probePresence(
   const deadline = Date.now() + 60_000
   let missing = want
   while (Date.now() < deadline && missing.length > 0) {
-    const book = await ctx.relayAdapter.fetchBook(ctx.chainId, pair)
+    let book: SourceBook
+    try {
+      book = await ctx.relayAdapter.fetchBook(ctx.chainId, pair)
+    } catch (e) {
+      // B3 修复（2026-11-08 复审）：读簿异常原先直接冒泡成普通
+      // cycle-error，探针无结论且不留痕。改为记一行 probe-inconclusive
+      // 后本轮直接返回——不 trip orderLost、也不把这批单记为已验
+      // 在簿；后续周期的在场探针/撮合读簿会自然重新覆盖。
+      const reason = e instanceof Error ? e.message : String(e)
+      ledger.line({
+        kind: 'probe-inconclusive',
+        ts: Date.now(),
+        chainId: ctx.chainId,
+        pair,
+        reason,
+        orders: want.length,
+      })
+      log(`chain ${ctx.chainId} 在场探针读簿异常（无结论）：${reason}`)
+      return
+    }
     const ids = new Set([...book.bids, ...book.asks].map((o) => o.orderId))
     missing = want.filter((g) => !ids.has(String(g.body.orderId)))
     if (missing.length > 0) await sleep(10_000)
@@ -589,19 +783,21 @@ async function attemptMatch(
   let last: MatchAttemptResult | null = null
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await sleep(10_000)
-    const outcome = await executeFrontendMatch(
-      {
-        chainId: ctx.chainId,
-        pair: takerSpec.pair,
-        takerData: data,
-        takerSignature: String(gen.body.signature),
-        signer: ctx.takerSigner,
-      },
-      {
-        nodeAdapter: ctx.nodeAdapter,
-        relayAdapter: ctx.relayAdapter,
-        chainReader: ctx.chainReader,
-      },
+    const outcome = await traceCall('match.execute', ctx.chainId, () =>
+      executeFrontendMatch(
+        {
+          chainId: ctx.chainId,
+          pair: takerSpec.pair,
+          takerData: data,
+          takerSignature: String(gen.body.signature),
+          signer: ctx.takerSigner,
+        },
+        {
+          nodeAdapter: ctx.nodeAdapter,
+          relayAdapter: ctx.relayAdapter,
+          chainReader: ctx.chainReader,
+        },
+      ),
     )
     last = {
       status: outcome.status,
@@ -649,9 +845,16 @@ interface ParsedTradeEvent {
   amountOut: string
 }
 
-function parseTradeEvents(receipt: ethers.TransactionReceipt): ParsedTradeEvent[] {
+function parseTradeEvents(
+  receipt: ethers.TransactionReceipt,
+  settlementAddress: string,
+): ParsedTradeEvent[] {
   const out: ParsedTradeEvent[] = []
   for (const lg of receipt.logs) {
+    // B2-lite 修复（2026-11-08 复审）：解析前先核对日志来源必须是
+    // 本链 Settlement 合约（大小写不敏感），其他合约的同名事件跳过，
+    // 避免混入非本合约日志污染成交事件计数/多重集。
+    if (lc(lg.address) !== lc(settlementAddress)) continue
     try {
       const parsed = settleIface.parseLog({
         topics: [...lg.topics],
@@ -691,6 +894,35 @@ function tradeMultisetKey(t: { maker: string; taker: string; amountIn: string; a
   return `${lc(t.maker)}|${lc(t.taker)}|${norm(t.amountIn)}|${norm(t.amountOut)}`
 }
 
+const RECEIPT_GRACE_MS = 120_000
+const RECEIPT_POLL_MS = 5_000
+
+/**
+ * 回执宽限读取（第 45 轮 B4）：刚提交的结算回执可能短暂查不到，
+ * 在宽限内轮询；RPC 瞬时报错也不下结论、继续轮询到宽限届满。
+ * 返回 null = 宽限内始终没拿到回执——查不到与读不到都归「结算
+ * 状态未知」，由调用方按失败关闭处理（不再像旧口径那样把探针
+ * 异常降级成普通 cycle-error 带着未知状态继续跑）。
+ */
+async function fetchReceiptWithGrace(
+  ctx: ChainCtx,
+  txHash: string,
+): Promise<ethers.TransactionReceipt | null> {
+  const deadline = Date.now() + RECEIPT_GRACE_MS
+  for (;;) {
+    try {
+      const receipt = await traceCall('rpc.getTransactionReceipt', ctx.chainId, () =>
+        ctx.provider.getTransactionReceipt(txHash),
+      )
+      if (receipt) return receipt
+    } catch {
+      // RPC 瞬时错误不下结论，宽限内继续轮询
+    }
+    if (Date.now() >= deadline) return null
+    await sleep(RECEIPT_POLL_MS)
+  }
+}
+
 /** 结算落账后立即跑回执探针 + 登记 settlement（索引器探针异步在后续周期复查） */
 async function probeSettlement(
   ledger: Stage4Ledger,
@@ -701,7 +933,7 @@ async function probeSettlement(
   takerGen: GeneratedOrder,
 ): Promise<void> {
   const txHash = attempt.txHash!
-  const receipt = await ctx.provider.getTransactionReceipt(txHash)
+  const receipt = await fetchReceiptWithGrace(ctx, txHash)
   const rec: SettlementRecord = {
     txHash,
     chainId: ctx.chainId,
@@ -713,9 +945,26 @@ async function probeSettlement(
     probe: { receipt: 'pending', eventsMatch: 'pending', indexer: 'pending' },
   }
   ledger.settlements.push(rec)
+  const takerData = buildSignedOrderData(asRaw(takerGen), ctx.chainId)
+  // B5：拿到 txHash 先落恢复账本再往下核——进程若在确认完成前死掉
+  // （VM 重启/被杀），下次启动先复查这笔（recoverPendingSettlements），
+  // 不让已提交结算从记账里凭空消失。全部核完才在下方 confirmPending 清除。
+  ledger.notePending({
+    txHash,
+    chainId: ctx.chainId,
+    pair,
+    takerDigest: takerGen.digest.toLowerCase(),
+    legs: attempt.legsKept,
+    takerAmountIn: takerData ? takerData.amountIn : null,
+    notedAt: Date.now(),
+  })
   if (!receipt) {
     rec.probe.receipt = 'fail'
-    ledger.trip('invalidSettle', `结算 tx 无回执：${txHash}`, { chainId: ctx.chainId, txHash })
+    ledger.trip(
+      'invalidSettle',
+      `结算状态未知：宽限 ${RECEIPT_GRACE_MS / 1000}s 内未取得回执（B4 失败关闭）tx=${txHash}`,
+      { chainId: ctx.chainId, txHash },
+    )
   }
   if (receipt!.status !== 1) {
     rec.probe.receipt = 'fail'
@@ -725,7 +974,7 @@ async function probeSettlement(
     })
   }
   rec.probe.receipt = 'ok'
-  rec.events = parseTradeEvents(receipt!)
+  rec.events = parseTradeEvents(receipt!, ctx.chainCfg.contracts.settlement)
   if (rec.events.length !== attempt.legsKept) {
     rec.probe.eventsMatch = 'fail'
     ledger.trip(
@@ -736,10 +985,24 @@ async function probeSettlement(
   }
   rec.probe.eventsMatch = 'ok'
   // taker 已成交量不得超签名量（合约累计记账之外的第二道独立核对）
-  const filledIn = (await ctx.settlementRead.orderFilledIn(
-    takerGen.digest,
-  )) as bigint
-  const takerData = buildSignedOrderData(asRaw(takerGen), ctx.chainId)
+  // B4：读数失败先重试，仍失败 = 结算状态未知 → 失败关闭，不降级放行
+  let filledIn: bigint | null = null
+  for (let attemptNo = 0; attemptNo < 3 && filledIn === null; attemptNo++) {
+    try {
+      filledIn = (await traceCall('rpc.orderFilledIn', ctx.chainId, () =>
+        ctx.settlementRead.orderFilledIn(takerGen.digest),
+      )) as bigint
+    } catch {
+      if (attemptNo < 2) await sleep(RECEIPT_POLL_MS)
+    }
+  }
+  if (filledIn === null) {
+    ledger.trip(
+      'invalidSettle',
+      `结算状态未知：taker 已成交量读取重试后仍失败（B4 失败关闭）tx=${txHash}`,
+      { chainId: ctx.chainId, txHash, digest: takerGen.digest },
+    )
+  }
   if (takerData && filledIn > BigInt(takerData.amountIn)) {
     ledger.trip(
       'invalidSettle',
@@ -747,10 +1010,100 @@ async function probeSettlement(
       { chainId: ctx.chainId, txHash, digest: takerGen.digest },
     )
   }
+  ledger.confirmPending(txHash)
   ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
 }
 
-/** 索引器探针复查：pending 的 settlement 在宽限期内反复查，超时仍不符即零容忍 */
+/**
+ * B5 启动恢复：进新周期前先复查上次进程遗留的待确认结算，全部
+ * 确认完才开跑。复查口径与 probeSettlement 完全一致（回执
+ * status=1、成交事件数 == 腿数、taker 已成交量不超签名量，均以
+ * 链上为准）；任一笔状态未知或不符 → 按 B4 失败关闭 trip 停机，
+ * 宁可不开跑也不丢账。确认的结算并入本轮 settlements/计数并从
+ * 恢复账本清除，索引器探针按 pending 在后续周期照常复查。
+ */
+export async function recoverPendingSettlements(
+  ledger: Stage4Ledger,
+  ctxs: Map<number, ChainCtx>,
+): Promise<void> {
+  const pending = ledger.loadPending()
+  if (pending.length === 0) return
+  log(`启动恢复：复查 ${pending.length} 笔遗留待确认结算（B5 恢复账本）`)
+  for (const entry of pending) {
+    const ctx = ctxs.get(entry.chainId)
+    if (!ctx) {
+      ledger.trip('invalidSettle', `恢复账本含未知链结算（B4 失败关闭）tx=${entry.txHash} chainId=${entry.chainId}`, {
+        chainId: entry.chainId,
+        txHash: entry.txHash,
+      })
+    }
+    const receipt = await fetchReceiptWithGrace(ctx!, entry.txHash)
+    if (!receipt) {
+      ledger.trip(
+        'invalidSettle',
+        `恢复复查：结算状态未知，宽限 ${RECEIPT_GRACE_MS / 1000}s 内未取得回执（B4 失败关闭）tx=${entry.txHash}`,
+        { chainId: entry.chainId, txHash: entry.txHash },
+      )
+    }
+    if (receipt!.status !== 1) {
+      ledger.trip('invalidSettle', `恢复复查：结算 tx 回执 status=${receipt!.status} tx=${entry.txHash}`, {
+        chainId: entry.chainId,
+        txHash: entry.txHash,
+      })
+    }
+    const events = parseTradeEvents(receipt!, ctx!.chainCfg.contracts.settlement)
+    if (events.length !== entry.legs) {
+      ledger.trip(
+        'invalidSettle',
+        `恢复复查：成交事件数 ${events.length} != 撮合腿数 ${entry.legs} tx=${entry.txHash}`,
+        { chainId: entry.chainId, txHash: entry.txHash },
+      )
+    }
+    if (entry.takerAmountIn) {
+      const filledIn = (await traceCall('rpc.orderFilledIn', entry.chainId, () =>
+        ctx!.settlementRead.orderFilledIn(entry.takerDigest),
+      )) as bigint
+      if (filledIn > BigInt(entry.takerAmountIn)) {
+        ledger.trip(
+          'invalidSettle',
+          `恢复复查：taker 已成交量 ${filledIn} 超签名量 ${entry.takerAmountIn} tx=${entry.txHash}`,
+          { chainId: entry.chainId, txHash: entry.txHash, digest: entry.takerDigest },
+        )
+      }
+    }
+    const rec: SettlementRecord = {
+      txHash: entry.txHash,
+      chainId: entry.chainId,
+      pair: entry.pair,
+      takerDigest: entry.takerDigest,
+      legs: entry.legs,
+      settledAt: entry.notedAt,
+      events,
+      probe: { receipt: 'ok', eventsMatch: 'ok', indexer: 'pending' },
+    }
+    ledger.settlements.push(rec)
+    ledger.counts[entry.chainId].settlements += 1
+    ledger.counts[entry.chainId].legs += entry.legs
+    ledger.confirmPending(entry.txHash)
+    ledger.line({
+      kind: 'recovery',
+      ts: Date.now(),
+      chainId: entry.chainId,
+      txHash: entry.txHash,
+      result: 'confirmed',
+    })
+    ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
+    log(`恢复确认结算 tx=${entry.txHash}（chain ${entry.chainId}，${entry.legs} 腿）`)
+  }
+}
+
+/**
+ * 索引器探针复查：pending 的 settlement 反复查到收录且字段一致为止。
+ * 按 Ren 2026-11-09 新口径，索引器只是展示缓存：查询失败记无结论
+ * 观察项、超宽限未收录记 lagging 观察项、收录后字段不符记
+ * mismatch-observed 观察项——三种情况都不停机，后续周期继续复查；
+ * 成交正确性已由 probeSettlement 按链上回执+事件核完，不依赖索引器。
+ */
 async function recheckIndexerProbes(
   ledger: Stage4Ledger,
   cfg: Stage4Config,
@@ -759,17 +1112,38 @@ async function recheckIndexerProbes(
   if (!cfg.indexerUrl) return
   for (const rec of ledger.settlements) {
     if (rec.probe.indexer !== 'pending') continue
+    // B1 修复（2026-11-08 复审）：原先固定只读同交易对最近 50 条，
+    // 同对新成交多了会把待核验的早期成交挤出窗口、900s 后误触发
+    // indexerMismatch 假停机。改为按 offset 分页（每页 50、最多 10
+    // 页、短页即止），全部页里按 txHash 找本笔；任一页查询失败则
+    // 整笔按原口径稍后重试，不拿残缺窗口下结论。
     let rows: IndexerTrade[] = []
     try {
-      rows = await fetchIndexerTrades(
-        rec.chainId,
-        rec.pair,
-        50,
-        indexerFetchFn,
-        cfg.indexerUrl,
-      )
+      for (let page = 0; page < 10; page++) {
+        const chunk = await traceCall('indexer.fetchTrades', rec.chainId, () =>
+          fetchIndexerTrades(
+            rec.chainId,
+            rec.pair,
+            50,
+            indexerFetchFn,
+            cfg.indexerUrl,
+            page * 50,
+          ),
+        )
+        rows.push(...chunk)
+        if (chunk.length < 50) break
+      }
     } catch (e) {
-      log(`索引器探针查询失败（稍后重试）：${e instanceof Error ? e.message : String(e)}`)
+      const reason = e instanceof Error ? e.message : String(e)
+      ledger.line({
+        kind: 'probe-inconclusive',
+        ts: Date.now(),
+        chainId: rec.chainId,
+        source: 'indexer',
+        txHash: rec.txHash,
+        reason,
+      })
+      log(`索引器探针查询失败（无结论观察项，稍后重试）：${reason}`)
       continue
     }
     const mine = rows.filter((r) => lc(r.txHash) === lc(rec.txHash))
@@ -790,22 +1164,34 @@ async function recheckIndexerProbes(
         rec.probe.indexerCheckedAt = Date.now()
         ledger.line({ kind: 'probe-indexer', ts: Date.now(), txHash: rec.txHash, chainId: rec.chainId, result: 'ok' })
       } else {
+        // 收录了但字段对不上：观察项留痕（fail 行 + probe-indexer 行），
+        // 不停机——账本在链上，索引器只是展示缓存（Ren 09:13 口径）。
         rec.probe.indexer = 'mismatch'
-        ledger.trip(
-          'indexerMismatch',
-          `索引器成交与回执事件多重集不符 tx=${rec.txHash} want=${JSON.stringify(want)} got=${JSON.stringify(got)}`,
-          { chainId: rec.chainId, txHash: rec.txHash },
-        )
+        ledger.line({ kind: 'probe-indexer', ts: Date.now(), txHash: rec.txHash, chainId: rec.chainId, result: 'mismatch-observed', want, got })
+        ledger.fail({
+          ts: Date.now(),
+          chainId: rec.chainId,
+          kind: 'indexer-mismatch-observed',
+          detail: `索引器成交与回执事件多重集不符（观察项，不停机）tx=${rec.txHash} want=${JSON.stringify(want)} got=${JSON.stringify(got)}`,
+          txHash: rec.txHash,
+        })
       }
       continue
     }
-    if (Date.now() - rec.settledAt > cfg.indexerGraceSec * 1000) {
-      rec.probe.indexer = 'mismatch'
-      ledger.trip(
-        'indexerMismatch',
-        `索引器在宽限期 ${cfg.indexerGraceSec}s 后仍未收录成交 tx=${rec.txHash}`,
-        { chainId: rec.chainId, txHash: rec.txHash },
-      )
+    if (Date.now() - rec.settledAt > cfg.indexerGraceSec * 1000 && !rec.lagReported) {
+      // 超宽限仍未收录：记一次 lagging 观察项后保持 pending，后续
+      // 周期继续复查（阶段 4 两次实测均为免费层收录滞后 18–30+ 分钟，
+      // 最终字段全对——滞后是展示时效问题，不是数据不一致）。
+      rec.lagReported = true
+      ledger.line({
+        kind: 'probe-indexer',
+        ts: Date.now(),
+        txHash: rec.txHash,
+        chainId: rec.chainId,
+        result: 'lagging',
+        graceSec: cfg.indexerGraceSec,
+      })
+      log(`索引器滞后观察：tx=${rec.txHash} 超宽限 ${cfg.indexerGraceSec}s 仍未收录（观察项，不停机，继续复查）`)
     }
   }
 }
@@ -906,15 +1292,17 @@ async function processExpiryChecks(
       detail: `过期单在 expiresAt+17min 后仍在中继簿 orderId=${chk.orderId}`,
       digest: chk.digest,
     })
-    const round = await runDualReadRound(
-      {
-        mode: 'shadow',
-        nodeAdapter: ctx.nodeAdapter,
-        relayAdapter: ctx.relayAdapter,
-        chainReader: ctx.chainReader,
-      },
-      chk.chainId,
-      [chk.pair],
+    const round = await traceCall('dualread.round', chk.chainId, () =>
+      runDualReadRound(
+        {
+          mode: 'shadow',
+          nodeAdapter: ctx.nodeAdapter,
+          relayAdapter: ctx.relayAdapter,
+          chainReader: ctx.chainReader,
+        },
+        chk.chainId,
+        [chk.pair],
+      ),
     )
     const view = round.views.find((v) => v.pair === chk.pair)
     const inTradeable = view?.tradeable.some(
@@ -940,11 +1328,13 @@ async function scenarioTamper(
   ctx: ChainCtx,
   pair: string,
 ): Promise<void> {
-  const { generated, skipped } = await generateBatch(
-    ctx.chainId,
-    [ctx.maker, ctx.taker],
-    [{ role: 'maker', pair, side: 'sell', amount: '0.0005', price: PRICE }],
-    ctx.nonceCursor,
+  const { generated, skipped } = await traceCall('gen.generateBatch', ctx.chainId, () =>
+    generateBatch(
+      ctx.chainId,
+      [ctx.maker, ctx.taker],
+      [{ role: 'maker', pair, side: 'sell', amount: '0.0005', price: PRICE }],
+      ctx.nonceCursor,
+    ),
   )
   if (generated.length === 0) {
     scenarioLine(ledger, ctx.chainId, 'tamper', 'skipped', `生成跳过：${skipped[0]?.reason ?? ''}`)
@@ -1025,9 +1415,13 @@ async function scenarioCancel(
     ctx.makerSigner,
   )
   const contractOrder = orderDataToContractOrder(data)
-  const lockTx = await vaultWrite.lockForOrder(contractOrder, String(gen.body.signature))
-  await lockTx.wait()
-  const lock = await ctx.vaultRead.orderLocks(gen.digest)
+  await traceCall('tx.lockForOrder', ctx.chainId, async () => {
+    const lockTx = await vaultWrite.lockForOrder(contractOrder, String(gen.body.signature))
+    await lockTx.wait()
+  })
+  const lock = await traceCall('rpc.orderLocks', ctx.chainId, () =>
+    ctx.vaultRead.orderLocks(gen.digest),
+  )
   const remaining = BigInt(lock.remaining ?? lock[2] ?? 0n)
   if (remaining <= 0n) {
     ledger.fail({
@@ -1039,8 +1433,10 @@ async function scenarioCancel(
     })
     return
   }
-  const relTx = await vaultWrite.releaseOrderLock(gen.digest)
-  await relTx.wait()
+  await traceCall('tx.releaseOrderLock', ctx.chainId, async () => {
+    const relTx = await vaultWrite.releaseOrderLock(gen.digest)
+    await relTx.wait()
+  })
   // 中继无撤单路由：单仍在中继簿属预期（记录观察），防线是链上过滤
   const book = await ctx.relayAdapter.fetchBook(ctx.chainId, pair)
   const stillListed = [...book.bids, ...book.asks].some(
@@ -1163,19 +1559,21 @@ async function scenarioRace(
   const runOne = async (gen: GeneratedOrder) => {
     const data = buildSignedOrderData(asRaw(gen), ctx.chainId)
     if (!data) return { status: 'aborted' as const, legsKept: 0, message: '重构失败' }
-    const outcome = await executeFrontendMatch(
-      {
-        chainId: ctx.chainId,
-        pair,
-        takerData: data,
-        takerSignature: String(gen.body.signature),
-        signer: ctx.takerSigner,
-      },
-      {
-        nodeAdapter: ctx.nodeAdapter,
-        relayAdapter: ctx.relayAdapter,
-        chainReader: ctx.chainReader,
-      },
+    const outcome = await traceCall('match.execute', ctx.chainId, () =>
+      executeFrontendMatch(
+        {
+          chainId: ctx.chainId,
+          pair,
+          takerData: data,
+          takerSignature: String(gen.body.signature),
+          signer: ctx.takerSigner,
+        },
+        {
+          nodeAdapter: ctx.nodeAdapter,
+          relayAdapter: ctx.relayAdapter,
+          chainReader: ctx.chainReader,
+        },
+      ),
     )
     return outcome
   }
@@ -1280,11 +1678,13 @@ async function scenarioAttribution(
     [...VAULT_LOCK_ABI, ...VAULT_EXTRA_ABI] as unknown as ethers.InterfaceAbi,
     ctx.makerSigner,
   )
-  const lockTx = await vaultWrite.lockForOrder(
-    orderDataToContractOrder(data),
-    String(gen.body.signature),
-  )
-  await lockTx.wait()
+  await traceCall('tx.lockForOrder', ctx.chainId, async () => {
+    const lockTx = await vaultWrite.lockForOrder(
+      orderDataToContractOrder(data),
+      String(gen.body.signature),
+    )
+    await lockTx.wait()
+  })
   const digest = gen.digest
   const makerData = data
   const makerSig = String(gen.body.signature)
@@ -1294,18 +1694,22 @@ async function scenarioAttribution(
     run: async () => {
       const steps: Record<string, string> = {}
       try {
-        const relTx = await vaultWrite.releaseExpiredOrderLock(digest)
-        const relReceipt = await relTx.wait()
+        const relReceipt = await traceCall('tx.releaseExpiredOrderLock', ctx.chainId, async () => {
+          const relTx = await vaultWrite.releaseExpiredOrderLock(digest)
+          return relTx.wait()
+        })
         steps.releaseExpired = `tx=${relReceipt?.hash} status=${relReceipt?.status}`
       } catch (e) {
         steps.releaseExpired = `error: ${e instanceof Error ? e.message.slice(0, 140) : String(e)}`
       }
       // 组 taker 单 + Fill（fills.ts 同口径内联，与 stage3-e2e 驱动同法）
-      const { generated } = await generateBatch(
-        ctx.chainId,
-        [ctx.maker, ctx.taker],
-        [{ role: 'taker', pair, side: 'buy', amount: '0.0005', price: PRICE }],
-        ctx.nonceCursor,
+      const { generated } = await traceCall('gen.generateBatch', ctx.chainId, () =>
+        generateBatch(
+          ctx.chainId,
+          [ctx.maker, ctx.taker],
+          [{ role: 'taker', pair, side: 'buy', amount: '0.0005', price: PRICE }],
+          ctx.nonceCursor,
+        ),
       )
       if (generated.length === 0) {
         scenarioLine(ledger, ctx.chainId, 'attribution', 'blocked', `taker 生成跳过；steps=${JSON.stringify(steps)}`)
@@ -1331,15 +1735,19 @@ async function scenarioAttribution(
         ctx.takerSigner,
       )
       try {
-        await settleTaker.settleTrade.staticCall(fill)
+        await traceCall('tx.settleTradeStatic', ctx.chainId, () =>
+          settleTaker.settleTrade.staticCall(fill),
+        )
         steps.staticCall = 'UNEXPECTED-SUCCESS'
       } catch (e) {
         steps.staticCall = `reverted: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`
       }
       let failGasUsed: bigint | null = null
       try {
-        const tx = await settleTaker.settleTrade(fill, { gasLimit: 1_500_000n })
-        const rc = await tx.wait()
+        const rc = await traceCall('tx.settleTrade', ctx.chainId, async () => {
+          const tx = await settleTaker.settleTrade(fill, { gasLimit: 1_500_000n })
+          return tx.wait()
+        })
         steps.realTx = `tx=${rc?.hash} status=${rc?.status}`
         if (rc && rc.status === 1) {
           const filled = (await ctx.settlementRead.orderFilledIn(digest)) as bigint
@@ -1370,12 +1778,14 @@ async function scenarioAttribution(
             CHARGE_FAILED_ABI as unknown as ethers.InterfaceAbi,
             ctx.deployerSigner,
           )
-          const chargeTx = await settleOwner.chargeFailedSettlement(
-            { order: orderDataToContractOrder(makerData), signature: makerSig },
-            FAIL_ORDER_EXPIRED,
-            failGasUsed,
-          )
-          const crc = await chargeTx.wait()
+          const crc = await traceCall('tx.chargeFailedSettlement', ctx.chainId, async () => {
+            const chargeTx = await settleOwner.chargeFailedSettlement(
+              { order: orderDataToContractOrder(makerData), signature: makerSig },
+              FAIL_ORDER_EXPIRED,
+              failGasUsed,
+            )
+            return chargeTx.wait()
+          })
           steps.charge = `tx=${crc?.hash} status=${crc?.status}`
         } catch (e) {
           steps.charge = `error: ${e instanceof Error ? e.message.slice(0, 160) : String(e)}`
@@ -1492,16 +1902,20 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
   }
   const metricsPath = join(cfg.outDir, 'stage4-metrics.jsonl')
   const statePath = join(cfg.outDir, 'stage4-state.json')
+  const pendingPath = join(cfg.outDir, 'stage4-pending-settlements.json')
   const windowStart = Date.now()
   const ledger = new Stage4Ledger(
     metricsPath,
     statePath,
+    pendingPath,
     windowStart,
     windowStart + cfg.maxHours * 3600_000,
   )
+  setTraceSink((l) => ledger.line(l))
   ledger.line({
     kind: 'window-start',
     ts: windowStart,
+    buildNote: BUILD_NOTE,
     windowEndPlanned: ledger.windowEndPlanned,
     relayUrl: cfg.relayUrl,
     indexerUrl: cfg.indexerUrl || '(unset)',
@@ -1518,6 +1932,18 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
     `阶段 4 运行器启动：窗口 ${new Date(windowStart).toISOString()} → ${new Date(ledger.windowEndPlanned).toISOString()}，` +
       `间隔 ${cfg.intervalSec}s，目标每链 ≥${cfg.targetPerChain} 单`,
   )
+  log(BUILD_NOTE)
+  // B5：先复查遗留待确认结算，确认完才进新周期（失败关闭在此拦截）
+  try {
+    await recoverPendingSettlements(ledger, ctxs)
+  } catch (e) {
+    if (e instanceof ZeroToleranceError) {
+      log(`启动恢复触发失败关闭，停跑保全证据：${e.message}`)
+      ledger.saveState('zero-tolerance-triggered')
+      return 3
+    }
+    throw e
+  }
   let stopping = false
   const onSig = () => {
     stopping = true
@@ -1534,7 +1960,11 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
       await processExpiryChecks(ledger, ctxs)
       for (const chainId of CHAINS) {
         try {
-          await runChainCycle(ledger, cfg, ctxs.get(chainId)!, cycle)
+          await withTimeout(
+            runChainCycle(ledger, cfg, ctxs.get(chainId)!, cycle),
+            CHAIN_CYCLE_TIMEOUT_MS,
+            `chain ${chainId} cycle ${cycle}`,
+          )
         } catch (e) {
           if (e instanceof ZeroToleranceError) throw e
           ledger.fail({
@@ -1545,7 +1975,21 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
           })
         }
       }
-      await recheckIndexerProbes(ledger, cfg, ctxs)
+      try {
+        await withTimeout(
+          recheckIndexerProbes(ledger, cfg, ctxs),
+          RECHECK_TIMEOUT_MS,
+          '索引器探针复查',
+        )
+      } catch (e) {
+        if (e instanceof ZeroToleranceError) throw e
+        ledger.fail({
+          ts: Date.now(),
+          chainId: 0,
+          kind: 'probe-recheck-error',
+          detail: e instanceof Error ? e.message.slice(0, 200) : String(e),
+        })
+      }
       ledger.saveState('running')
       const c1 = ledger.counts[11155111]
       const c2 = ledger.counts[84532]
@@ -1570,16 +2014,20 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
     }
     throw e
   }
-  // 收尾复查：给索引器 pending 探针最后一次机会（超宽限的会在此触发）
+  // 收尾复查：给索引器 pending 探针最后一次机会（滞后只记观察项，不停机）
   await sleep(30_000)
   try {
-    await recheckIndexerProbes(ledger, cfg, ctxs)
+    await withTimeout(
+      recheckIndexerProbes(ledger, cfg, ctxs),
+      RECHECK_TIMEOUT_MS,
+      '收尾索引器探针复查',
+    )
   } catch (e) {
     if (e instanceof ZeroToleranceError) {
       ledger.saveState('zero-tolerance-triggered')
       return 3
     }
-    throw e
+    log(`收尾复查未完成（不阻断收尾记账）：${e instanceof Error ? e.message.slice(0, 200) : String(e)}`)
   }
   ledger.line({ kind: 'window-end', ts: Date.now(), cycles: ledger.cycles })
   ledger.saveState(stopping ? 'stopped-by-signal' : 'completed')
