@@ -330,3 +330,104 @@ describe('resolveReferencePrice（总入口）', () => {
     expect(res).toEqual({ status: 'none' })
   })
 })
+
+describe('resolveReferencePrice（第六十轮：自助上架对的聚合报价路径）', () => {
+  const LISTED_PAIR =
+    '11155111:0x1111111111111111111111111111111111111111/0x2222222222222222222222222222222222222222'
+  const listed = {
+    baseAddress: '0x1111111111111111111111111111111111111111',
+    quoteAddress: '0x2222222222222222222222222222222222222222',
+    quoteSymbol: 'USDT',
+  }
+  const noMarket = { lastTradePrice: null, lastTradeAtSec: null }
+  const mkDeps = (
+    dexUsdPrices: ReferencePriceDeps['dexUsdPrices'],
+  ): ReferencePriceDeps => ({
+    readFeed: vi.fn(async () => {
+      throw new Error('不应读喂价')
+    }),
+    nowSec: () => NOW,
+    dexUsdPrices,
+  })
+
+  it('两腿 USD 价都有：参考价 = baseUsd / quoteUsd，来源 dexscreener、美元计价', async () => {
+    const res = await resolveReferencePrice(
+      SEPOLIA,
+      LISTED_PAIR,
+      noMarket,
+      mkDeps(async () => ({ baseUsd: 4.5, quoteUsd: 1.5 })),
+      { listed },
+    )
+    expect(res.status).toBe('ok')
+    if (res.status === 'ok') {
+      expect(res.ref.source).toBe('dexscreener')
+      expect(res.ref.price).toBeCloseTo(3)
+      expect(res.ref.usdDenominated).toBe(true)
+    }
+  })
+
+  it('只有 base 腿 USD 价且计价币是稳定币：按 $1 计价币换算', async () => {
+    const res = await resolveReferencePrice(
+      SEPOLIA,
+      LISTED_PAIR,
+      noMarket,
+      mkDeps(async () => ({ baseUsd: 2.25, quoteUsd: null })),
+      { listed },
+    )
+    expect(res.status).toBe('ok')
+    if (res.status === 'ok') expect(res.ref.price).toBeCloseTo(2.25)
+  })
+
+  it('只有 base 腿且计价币非稳定币：不冒充，落本所兜底（无数据 → none）', async () => {
+    const res = await resolveReferencePrice(
+      SEPOLIA,
+      LISTED_PAIR,
+      noMarket,
+      mkDeps(async () => ({ baseUsd: 2.25, quoteUsd: null })),
+      { listed: { ...listed, quoteSymbol: 'WETH' } },
+    )
+    expect(res).toEqual({ status: 'none' })
+  })
+
+  it('聚合报价全空（测试网常态）：落本所最近成交兜底', async () => {
+    const res = await resolveReferencePrice(
+      SEPOLIA,
+      LISTED_PAIR,
+      { lastTradePrice: 0.75, lastTradeAtSec: NOW - 5 },
+      mkDeps(async () => ({ baseUsd: null, quoteUsd: null })),
+      { listed },
+    )
+    expect(res.status).toBe('ok')
+    if (res.status === 'ok') {
+      expect(res.ref.source).toBe('lastTrade')
+      expect(res.ref.usdDenominated).toBeUndefined()
+    }
+  })
+
+  it('聚合报价抛错：不拦截，继续走兜底', async () => {
+    const res = await resolveReferencePrice(
+      SEPOLIA,
+      LISTED_PAIR,
+      noMarket,
+      mkDeps(async () => {
+        throw new Error('dex down')
+      }),
+      { listed },
+    )
+    expect(res).toEqual({ status: 'none' })
+  })
+
+  it('Chainlink 喂价对：ok 结果带 usdDenominated=true（$1 校验锚）', async () => {
+    const res = await resolveReferencePrice(
+      SEPOLIA,
+      'ETH/USD',
+      noMarket,
+      {
+        readFeed: async () => ({ answer: 224202584969n, decimals: 8, updatedAtSec: NOW - 100 }),
+        nowSec: () => NOW,
+      },
+    )
+    expect(res.status).toBe('ok')
+    if (res.status === 'ok') expect(res.ref.usdDenominated).toBe(true)
+  })
+})

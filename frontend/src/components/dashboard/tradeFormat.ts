@@ -26,6 +26,20 @@ export function fromScaled(v: unknown): number {
   return n / FIXED_SCALE
 }
 
+/**
+ * 任意小数位缩放 → 人类单位数值（第六十轮）：自助上架对的价格缩放为
+ * 18+quote 位数−base 位数、数量缩放为 base 位数，展示层按交易对的实际
+ * 小数位换算；decimals=18 时与 fromScaled 完全一致。浮点口径与 fromScaled 同。
+ */
+export function fromScaledDecimals(v: unknown, decimals: number): number {
+  if (decimals === 18) return fromScaled(v)
+  if (v == null) return NaN
+  if (typeof v === 'string' && v.trim() === '') return NaN
+  const n = typeof v === 'number' ? v : Number(String(v).trim())
+  if (!Number.isFinite(n)) return NaN
+  return n / 10 ** decimals
+}
+
 /** 数值 → 定点展示字符串（供订单簿行等既有「人类单位字符串」接口回填） */
 export function toPlain(n: number): string {
   if (!Number.isFinite(n)) return '0'

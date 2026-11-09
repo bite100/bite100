@@ -119,9 +119,9 @@ export async function withSigner<T>(fn: (signer: Signer) => Promise<T>): Promise
 }
 
 /** 将 bigint 转为保留 6 位小数的字符串 */
-export function formatTokenAmount(value: bigint | undefined): string {
+export function formatTokenAmount(value: bigint | undefined, decimals = 18): string {
   if (value == null) return '0'
-  return (Number(value) / 1e18).toFixed(6)
+  return (Number(value) / 10 ** decimals).toFixed(6)
 }
 
 /** 短地址显示 */

@@ -1,6 +1,9 @@
 import { Paper, Text, Button, Select } from '@mantine/core'
 import type { PairStats } from '../../hooks/usePairStats'
-import { TRADE_PAIRS, type TradePair } from '../../config/pairs'
+import { TRADE_PAIRS } from '../../config/pairs'
+import { CHAIN_ID } from '../../config'
+import { useListedPairs } from '../../hooks/useListedPairs'
+import { useResolvedPair } from '../../hooks/useResolvedPair'
 import { fmtPrice, fmtAmount } from './tradeFormat'
 import { pairSameChainOnly } from '../../services/defaultBridge/support'
 
@@ -9,8 +12,8 @@ export interface PairStatsBarProps {
   stats: PairStats
   /** 订单簿中间价（无成交时最新价的兜底，来自现有订单簿管道） */
   midPrice?: string
-  /** 第二十五轮：交易对切换（选中对写 URL ?pair=，交易台各组件随对切换） */
-  onPairChange?: (pair: TradePair) => void
+  /** 第二十五轮：交易对切换（选中对写 URL ?pair=，交易台各组件随对切换）；第六十轮起含自助上架对 */
+  onPairChange?: (pair: string) => void
   onShowFullOrderbook?: () => void
 }
 
@@ -25,7 +28,24 @@ function fmt(n: number | null | undefined): string {
  * 本应用没有标记价格/指数价格/资金费率等永续概念，故不设对应字段。
  */
 export function PairStatsBar({ pair, stats, midPrice, onPairChange, onShowFullOrderbook }: PairStatsBarProps) {
-  const [base, quote] = pair.split('/')
+  // 第六十轮：选对器 = 种子 8 对 + 注册表自助上架对（标注「自助上架」）
+  const { pairs: listedPairs } = useListedPairs(CHAIN_ID)
+  const resolvedPair = useResolvedPair(CHAIN_ID, pair)
+  const [base, quote] = (resolvedPair?.displayPair ?? pair).split('/')
+  const selectData = [
+    ...TRADE_PAIRS.map((p) => ({
+      value: p as string,
+      label: pairSameChainOnly(p) ? `${p}（仅同链交易）` : p,
+    })),
+    ...listedPairs.map((p) => ({
+      value: p.pairKey,
+      label: `${p.base.symbol}/${p.quote.symbol}（自助上架）`,
+    })),
+  ]
+  // 当前对是自助对但注册表还没拉到时，补一条临时选项避免选择器空白
+  if (resolvedPair?.source === 'listed' && !selectData.some((d) => d.value === pair)) {
+    selectData.push({ value: pair, label: `${resolvedPair.displayPair}（自助上架）` })
+  }
   const lastPrice = stats.lastPrice ?? (midPrice ? Number(midPrice) : null)
   const change = stats.change24hPct
   const changeColor =
@@ -37,13 +57,10 @@ export function PairStatsBar({ pair, stats, midPrice, onPairChange, onShowFullOr
         {onPairChange ? (
           <Select
             aria-label="交易对"
-            data={TRADE_PAIRS.map((p) => ({
-              value: p,
-              label: pairSameChainOnly(p) ? `${p}（仅同链交易）` : p,
-            }))}
+            data={selectData}
             value={pair}
             onChange={(v) => {
-              if (v) onPairChange(v as TradePair)
+              if (v) onPairChange(v)
             }}
             size="md"
             fw={700}

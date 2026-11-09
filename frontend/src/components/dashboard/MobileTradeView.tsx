@@ -18,13 +18,15 @@ import { useRelayOrderBook } from '../../hooks/useRelayOrderBook'
 import { useReferencePrice } from '../../hooks/useReferencePrice'
 import type { PairStats } from '../../hooks/usePairStats'
 import { CHAIN_ID } from '../../config'
-import type { TradePair } from '../../config/pairs'
+import { useResolvedPair } from '../../hooks/useResolvedPair'
+import { isListedPairKey } from '../../services/pairRegistry'
 import { fmtPrice } from './tradeFormat'
 import './MobileTrade.css'
 
 interface MobileTradeViewProps {
-  pair: TradePair
-  setPair: (pair: TradePair) => void
+  /** 交易对：种子符号键或自助上架地址型键（第六十轮起为普通字符串） */
+  pair: string
+  setPair: (pair: string) => void
   stats: PairStats
   account: string | null
   getSigner: () => Promise<Signer | null>
@@ -32,7 +34,12 @@ interface MobileTradeViewProps {
 }
 
 export function MobileTradeView({ pair, setPair, stats, account, getSigner, onShowFullOrderbook }: MobileTradeViewProps) {
-  const [base, quote] = pair.split('/')
+  // 第六十轮：符号/展示名走解析层（自助对的 pair 是地址型键，不能拆键、不能直出）
+  const resolvedPair = useResolvedPair(CHAIN_ID, pair)
+  const [seedBase, seedQuote] = pair.split('/')
+  const base = resolvedPair?.base.symbol ?? (isListedPairKey(pair) ? '基础币' : seedBase)
+  const quote = resolvedPair?.quote.symbol ?? (isListedPairKey(pair) ? '计价币' : seedQuote)
+  const displayPair = resolvedPair?.displayPair ?? (isListedPairKey(pair) ? '自助上架交易对' : pair)
   const [pricePick, setPricePick] = useState<{ price: string; seq: number }>({ price: '', seq: 0 })
   const [ordersRefresh, setOrdersRefresh] = useState(0)
   const [chartOpen, setChartOpen] = useState(false)
@@ -50,8 +57,12 @@ export function MobileTradeView({ pair, setPair, stats, account, getSigner, onSh
     lastTradeAtSec: stats.lastTradeAt,
     book,
   })
+  // 外部参考价（Chainlink 或 DexScreener 聚合报价）才作为参考锚展示；本所兜底价不冒充
   const refChainlink =
-    reference.status === 'ok' && reference.ref.source === 'chainlink' ? reference.ref.price : null
+    reference.status === 'ok' &&
+    (reference.ref.source === 'chainlink' || reference.ref.source === 'dexscreener')
+      ? reference.ref.price
+      : null
 
   const mid = useMemo(() => {
     const bb = book.bids.length ? Number(book.bids[0].price) : NaN
@@ -70,7 +81,7 @@ export function MobileTradeView({ pair, setPair, stats, account, getSigner, onSh
     <div className="mtrade">
       <div className="mtrade-pairrow">
         <button type="button" className="mtrade-pairbtn" onClick={() => setPickerOpen(true)}>
-          <b>{pair}</b>
+          <b>{displayPair}</b>
           <span className="mtrade-chev" aria-hidden="true">
             ▾
           </span>
@@ -140,17 +151,17 @@ export function MobileTradeView({ pair, setPair, stats, account, getSigner, onSh
 
       <button type="button" className="mtrade-chartbar" onClick={() => setChartOpen(true)}>
         <span>
-          {pair} 图表
+          {displayPair} 图表
         </span>
         <span className="mtrade-chartbar-toggle">展开 ⌃</span>
       </button>
 
       {chartOpen && (
-        <div className="mtrade-overlay" role="dialog" aria-label={`${pair} 图表`}>
+        <div className="mtrade-overlay" role="dialog" aria-label={`${displayPair} 图表`}>
           <section className="card mtrade-head-card">
             <div className="mtrade-head-top">
               <div>
-                <div className="mtrade-head-pair">{pair}</div>
+                <div className="mtrade-head-pair">{displayPair}</div>
                 <div className={`mtrade-head-last num ${changeCls}`}>
                   {stats.lastPrice != null ? fmtPrice(stats.lastPrice) : '暂无成交'}
                 </div>
@@ -233,7 +244,7 @@ export function MobileTradeView({ pair, setPair, stats, account, getSigner, onSh
           </section>
 
           <button type="button" className="mtrade-chartbar" onClick={() => setChartOpen(false)}>
-            <span>{pair} 图表</span>
+            <span>{displayPair} 图表</span>
             <span className="mtrade-chartbar-toggle">收起 ⌄</span>
           </button>
         </div>
@@ -248,7 +259,7 @@ export function MobileTradeView({ pair, setPair, stats, account, getSigner, onSh
               mode="picker"
               onBack={() => setPickerOpen(false)}
               onSelectPair={(p) => {
-                setPair(p as TradePair)
+                setPair(p)
                 setPickerOpen(false)
               }}
             />

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Text } from '@mantine/core'
 import { CHAIN_ID } from '../../config'
-import { DEFAULT_PAIR } from '../../config/pairs'
+import { DEFAULT_PAIR, getPairDecimals } from '../../config/pairs'
 import { createRelayBookAdapter } from '../../services/dualread/adapters'
-import { fromScaled, toPlain, fmtPrice, fmtAmount, fmtTotal } from './tradeFormat'
+import { useResolvedPair } from '../../hooks/useResolvedPair'
+import { fromScaledDecimals, toPlain, fmtPrice, fmtAmount, fmtTotal } from './tradeFormat'
 
 /** 右栏盘口每侧展示档位数（对标 HY 右栏密度） */
 const DISPLAY_DEPTH = 10
@@ -60,9 +61,14 @@ export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClic
       try {
         const book = await adapter.fetchBook(CHAIN_ID, pair)
         if (cancelled) return
+        // 第六十轮：按交易对实际小数位换算（价格缩放 18+quote−base、数量缩放
+        // base）；种子对 18/18 与旧口径一致。每次轮询现读，注册表缓存变热后自动跟上。
+        const dec = getPairDecimals(CHAIN_ID, pair)
+        const priceDec = dec ? 18 + dec.quote - dec.base : 18
+        const amountDec = dec?.base ?? 18
         const toRow = (o: { price: string; amount: string }, side: 'buy' | 'sell'): OrderBookRow => ({
-          price: toPlain(fromScaled(o.price)),
-          amount: toPlain(fromScaled(o.amount)),
+          price: toPlain(fromScaledDecimals(o.price, priceDec)),
+          amount: toPlain(fromScaledDecimals(o.amount, amountDec)),
           side,
         })
         const newBids = book.bids.slice(0, 15).map((o) => toRow(o, 'buy'))
@@ -89,7 +95,11 @@ export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClic
     }
   }, [pair, onBookUpdate])
 
-  const [base, quote] = pair.split('/')
+  // 第六十轮：自助上架对的 pair 是地址型键，列头符号取注册表元数据，不拆键
+  const resolvedPair = useResolvedPair(CHAIN_ID, pair)
+  const [seedBase, seedQuote] = pair.split('/')
+  const base = resolvedPair?.base.symbol ?? seedBase
+  const quote = resolvedPair?.quote.symbol ?? seedQuote
   const askLevels = withTotals(asks.slice(0, DISPLAY_DEPTH))
   const bidLevels = withTotals(bids.slice(0, DISPLAY_DEPTH))
   // 卖盘展示时最佳卖价贴近价差行：数组本身最佳档在前，渲染时反转为高价在上
@@ -135,7 +145,7 @@ export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClic
         <Text size="sm" fw={600}>
           订单簿
         </Text>
-        <Text size="xs" c="dimmed">{pair}</Text>
+        <Text size="xs" c="dimmed">{resolvedPair?.displayPair ?? pair}</Text>
       </div>
       <div className="book-cols" aria-hidden>
         <span>价格 ({quote})</span>

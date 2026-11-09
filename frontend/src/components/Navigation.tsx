@@ -14,6 +14,7 @@ export type Tab =
   | 'govern'
   | 'data'
   | 'ai'
+  | 'list'
 
 export const PRIMARY_TABS: { key: Tab; label: string }[] = [
   { key: 'trade', label: '交易' },
@@ -22,9 +23,9 @@ export const PRIMARY_TABS: { key: Tab; label: string }[] = [
   { key: 'other', label: '其他' },
 ]
 
-/** 二级页在底部栏的归属：桥 / 治理 / 数据内容页 / AI 接入说明页都归「其他」 */
+/** 二级页在底部栏的归属：桥 / 治理 / 数据内容页 / AI 接入说明页 / 上架新币页都归「其他」 */
 export function bottomTabOf(tab: Tab): Tab {
-  if (tab === 'bridge' || tab === 'govern' || tab === 'data' || tab === 'ai') return 'other'
+  if (tab === 'bridge' || tab === 'govern' || tab === 'data' || tab === 'ai' || tab === 'list') return 'other'
   return tab
 }
 
