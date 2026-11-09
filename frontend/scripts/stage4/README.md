@@ -50,6 +50,95 @@
 结算先落盘，启动时先复查确认（口径同结算探针）才进新周期，
 确认后清除。
 
+第 48 轮（第 45 轮运行器半复审 P1/P2 修复，口径变更）：
+
+- **记账时序**：拿到结算 txHash 先写恢复账本、再探回执（旧顺序
+  先等 ≤120s 回执宽限才记账，窗口期进程被杀会丢账）；确认时先
+  写 probe/恢复记录、再清账本，遗留条目下次启动按 txHash 幂等
+  合并复查，不重复计数。
+- **周期超时隔离**：单链周期被 420s 硬超时打断后，该链进入隔离
+  状态（metrics 落 `quarantine` 行）——被放弃的在飞撮合可能迟到
+  上链，下一周期开始前先对账（`reconcileAfterTimeout`：遗留待
+  确认结算逐笔链上确认 + 自超时周期起始区块扫描 Settlement
+  成交事件、认回涉及本运行器钱包的未知 txHash 并计数，落
+  `reconcile`/`quarantine-cleared` 行），对完账才许对该链提新
+  单；对账失败保隔离、跳过该链本轮，对账中发现不符按失败关闭
+  停机。
+- **恢复账本损坏 = 失败关闭**：账本文件不存在是空账本（正常）；
+  存在但解析失败/形状不对按零容忍类停机（`PendingLedgerCorruptError`，
+  状态标 `zero-tolerance-triggered`），不再静默当空账本。
+- **恢复路径补齐**：已成交量读取与主路径共用 3 次重试助手；
+  待确认记录缺 taker 签名量时不再跳过超量核对，按结算状态未知
+  失败关闭。
+- **中继通道口径**：发单请求超时标「接受状态未知」（metrics 落
+  `relay-acceptance-unknown` 行）——在场探针连这批单一起查簿，
+  在簿即认账补记接单（`relay-unknown-resolved`），到点不在簿只
+  记无结论、不按订单丢失计；拉簿经适配器 fetchFn 注入带真实
+  `AbortSignal` 的 fetch，超时真正掐断连接（外层硬超时保留为
+  第二道保险）；`relay.postOrder` 打点覆盖到响应体读取。错误按
+  timeout/http/network 分类（`isTimeoutError`），慢 ≠ 错。
+
+第 50 轮（第 48 轮推送后复审条件项修复，口径变更）：
+
+- **对账不得放行未验真的迟到成交**：事件扫描发现的迟到成交若
+  回执在宽限内取不到或 status≠1，对账只留痕（`late-tx-unverified`
+  + `incomplete-unverified-late-tx` 行）并抛错——**不报 complete、
+  隔离保留**，下一周期重新对账；回执届时可见即认回。自家已记
+  账本的结算仍走逐笔确认路径（回执不可见直接失败关闭停机）。
+- **恢复账本首次创建崩溃窗兜底**：主账本文件缺失时，若遗留
+  `.tmp`（写入后 rename 前被杀），先按全字段 schema 校验它：
+  合法则采用并 rename 愈合；不合法按账本损坏失败关闭。
+- **恢复账本全字段校验**：每行逐字段验（txHash/chainId/pair/
+  takerDigest/legs/takerAmountIn/notedAt）；同 txHash 重复条目
+  内容相同合并、内容冲突按账本损坏失败关闭，不再静默覆盖。
+- **跨进程幂等判重落盘化**：已确认判重除内存记录外，再查
+  metrics 里既有的 probe 记录行——进程死在「probe 行已写、
+  pending 未清」时，重启不再重复确认、不再重复追加 probe 行。
+- **故障注入自检**：`node scripts/stage4/faults.test.mjs`（假
+  provider 驱动账本/恢复/对账四场景；回执始终不可见的变体须
+  等满 120s 宽限，默认跳过，`S4_FAULTS_INCLUDE_SLOW=1` 启用）。
+
+第 52 轮（第 50 轮推送后 ChatGPT 复审条件项修复，口径变更）：
+
+- **迟到成交认回须过事件对账**：回执 status=1 不再直接计数——
+  回执解析出的成交事件（`parseTradeEvents` 本已保证只取目标
+  Settlement 合约的日志）必须**非空**，且其多重集（maker/
+  taker/amountIn/amountOut 逐笔计数）必须**覆盖事件扫描的发现**
+  （扫描侧同步留存每笔事件参数）。对不上 = RPC 两次读取不一
+  致或链重组，按未验真处理（`late-tx-unverified` 留痕 + 进
+  `incomplete-unverified-late-tx` 抛错保隔离），不计数。
+  对账能做到的程度如实说明：扫描与回执是同一批链上事件的两
+  种读法，多重集覆盖即证明两者一致；回执里多出的同 tx 他方
+  事件（批量结算混入）不影响覆盖判定，也不计入本运行器账目。
+- **恢复账本 fsync 持久化序**：`persistPending` 改走
+  `writeFileAtomicDurable`（写 `.tmp` → fsync 文件 → rename →
+  fsync 父目录），保证范围见下「运行约束」。
+- **恢复账本语义校验**：全字段校验在类型之上补语义——txHash/
+  takerDigest 为 0x+64 位 hex、chainId ∈ {11155111, 84532}、
+  pair ∈ `TRADE_PAIRS`、legs 为整数且 ≥1（创建点 =
+  已提交结算的保留腿数，恒 ≥1）、takerAmountIn 为十进制整数
+  串或 null、notedAt 为正数；每条都与创建点（`probeSettlement`
+  的 `notePending` 入参）实际取值对齐，不误杀自产条目。
+
+## 运行约束（第 52 轮 B4 写明）
+
+- **单写者**：同一 `S4_DIR`（同一套 metrics/state/pending
+  文件）**同时只允许一个运行器进程**。落盘判重（第 50 轮
+  `hasProbeRecord`）保证的是**串行重启**幂等——进程死了再启
+  不重复确认/记账；它**不保证两个进程并发**共用同一目录时
+  的幂等（两进程可能同时判「无记录」而双记）。需要并行跑时
+  每进程用独立 `S4_DIR`。
+- **持久化保证范围**：恢复账本（pending 文件）的落盘顺序为
+  写 `.tmp` → fsync 文件 → rename → fsync 父目录。因此：
+  **进程崩溃/被杀**（含 SIGKILL）下，已 `notePending` 的条目
+  不丢（rename 原子性 + `.tmp` 遗留兜底，第 50 轮）；**掉电/
+  系统崩溃**下同样不丢，**以 fsync 语义为限**——个别平台/文
+  件系统不支持 fsync（尤其目录 fsync）时该步降级跳过（代码
+  注释有记），此时掉电保证退化为「尽力而为」。metrics JSONL
+  为逐行 append 的记账流、state 文件为可重建的汇总快照，不
+  在本保证范围内（口径与第 50 轮一致：判重读 metrics 只防
+  重复，账本损坏判定只看 pending 文件）。
+
 ## 骑乘对照表（不重复造轮子）
 
 | 本运行器的件 | 骑乘的既有件 |
@@ -62,7 +151,7 @@
 | 回执事件解析 | 产品 `SETTLEMENT_ABI`（indexer association 同一 ABI） |
 | 已成交量/释锁/归责入口 | 最小 ABI 片段（与 generator 的最小 ABI 模式同构；产品 ABI 子集未覆盖 orderFilledIn/releaseOrderLock/chargeFailedSettlement） |
 | 打包 | 仓库既有 esbuild（与 soak 的 build.mjs 同法） |
-| 自有代码 | 中继单发、场景轮转、探针编排、JSONL/状态记账、CLI、第 45 轮的调用打点（traceCall）/失败关闭/恢复账本（落盘骑 saveState 同款 tmp+rename 原子写法，不新造框架） |
+| 自有代码 | 中继单发、场景轮转、探针编排、JSONL/状态记账、CLI、第 45 轮的调用打点（traceCall）/失败关闭/恢复账本（落盘骑 saveState 同款 tmp+rename 原子写法，第 52 轮在其上补 fsync 持久化序，不新造框架） |
 
 ## 构建与运行
 
@@ -100,6 +189,8 @@ S4_INTERVAL_SEC=180 S4_MAX_HOURS=17 \
 | S4_TARGET_PER_CHAIN | 150 | 每链目标单数（记账口径，不作提前停跑条件） |
 | S4_SUBMIT_GAP_MS | 1500 | maker 相邻投递间隔 |
 | S4_INDEXER_GRACE_SEC | 900 | 索引器探针宽限期（秒） |
+| S4_CHAINS | `11155111,84532` | 本次运行的链集合（逗号分隔，限 11155111/84532；单链补测靠它保证另一条链零动作，非法值拒绝启动） |
+| S4_PAIRS | 全部 8 对 | 交易对轮转子集（逗号分隔、按给定顺序轮转，限已登记对；无单回落也限子集内；非法值拒绝启动） |
 
 ## 安全边界
 

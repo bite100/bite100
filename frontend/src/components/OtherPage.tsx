@@ -1,6 +1,6 @@
 /**
  * 「其他」页（第 31 轮）：分组菜单页，只做入口——
- * 功能组（跨链桥 / 治理与贡献两个二级页）、数据组（数据内容页的四个锚点）、关于组。
+ * 功能组（跨链桥 / 治理与贡献 / AI 接入三个二级页）、数据组（数据内容页的四个锚点）、关于组。
  * 不编造不存在的入口（没有客服、没有设置项）。
  */
 import { useState } from 'react'
@@ -11,6 +11,7 @@ import './OtherPage.css'
 interface OtherPageProps {
   onOpenBridge: () => void
   onOpenGovern: () => void
+  onOpenAi: () => void
   onOpenData: (anchor: string) => void
   /** 第四十一轮：跨链交付设置入口行要读当前用户的设置摘要 */
   account?: string | null
@@ -32,7 +33,7 @@ function Icon({ d }: { d: string }) {
   )
 }
 
-export function OtherPage({ onOpenBridge, onOpenGovern, onOpenData, account }: OtherPageProps) {
+export function OtherPage({ onOpenBridge, onOpenGovern, onOpenAi, onOpenData, account }: OtherPageProps) {
   const [aboutOpen, setAboutOpen] = useState(false)
   // 第四十一轮：跨链交付设置入口行（设计 §2.2）——摘要读本机保存的设置，未连接/未设置时给通用文案
   const deliverySummary = (() => {
@@ -47,7 +48,7 @@ export function OtherPage({ onOpenBridge, onOpenGovern, onOpenData, account }: O
   return (
     <div className="other-page">
       <p className="other-intro">
-        跨链桥、治理与贡献，以及原「数据」页的公开数据都收在这里，从下面进入。
+        跨链桥、治理与贡献、AI 接入，以及原「数据」页的公开数据都收在这里，从下面进入。
       </p>
 
       <h3 className="menu-group-title">功能</h3>
@@ -79,6 +80,16 @@ export function OtherPage({ onOpenBridge, onOpenGovern, onOpenData, account }: O
           <span className="menu-txt">
             <b>治理与贡献</b>
             <span>提案投票（7 天表决 + 2 天时锁）与贡献奖励领取</span>
+          </span>
+          <span className="menu-arrow">›</span>
+        </button>
+        <button type="button" className="menu-row" onClick={onOpenAi}>
+          <span className="menu-ico">
+            <Icon d="M7 7h10v10H7zM4 10h3M4 14h3M17 10h3M17 14h3M10 4v3M14 4v3M10 17v3M14 17v3" />
+          </span>
+          <span className="menu-txt">
+            <b>AI 接入</b>
+            <span>把你自己的 AI 接到交易所：读盘口、下单、交易（测试网申请制）</span>
           </span>
           <span className="menu-arrow">›</span>
         </button>

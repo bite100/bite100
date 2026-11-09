@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
+import { act } from 'react'
 import { useTokenPrice, usePairMarketPrice, PAIR_COINGECKO_IDS } from './useTokenPrice'
 
 describe('PAIR_COINGECKO_IDS', () => {
@@ -50,6 +51,42 @@ describe('useTokenPrice', () => {
     })
     expect(result.current.price).toBeNull()
     expect(result.current.error?.message).toContain('unknown-token')
+  })
+
+  it('第54轮：请求挂死时 8 秒超时 abort 并落到 error，不再永远 loading', async () => {
+    vi.useFakeTimers()
+    try {
+      // fetch 永不主动返回，只在 abort 时 reject（模拟对端不回）
+      ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (_url: unknown, init?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })),
+            )
+          }),
+      )
+      const { result } = renderHook(() => useTokenPrice('ethereum', 0))
+      expect(result.current.loading).toBe(true)
+      await act(async () => {
+        vi.advanceTimersByTime(8000)
+      })
+      expect(result.current.loading).toBe(false)
+      expect(result.current.error).not.toBeNull()
+      expect(result.current.price).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('第54轮：上一笔请求在飞时 refetch 跳过，不叠加请求', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(() => {}), // 永不落定
+    )
+    const { result } = renderHook(() => useTokenPrice('ethereum', 0))
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    result.current.refetch()
+    result.current.refetch()
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
   })
 
   it('exposes refetch that re-runs fetch', async () => {

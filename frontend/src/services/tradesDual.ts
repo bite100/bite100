@@ -1,32 +1,22 @@
 /**
- * 第 34 轮（无节点阶段 2C）成交记录双源合并。
+ * 成交记录读取：第 34 轮建立时为「节点 API + Envio 索引」双源合并；
+ * 第 51 轮（无节点阶段 5 节点退役）改为链上索引单源。
  *
- * 口径（简报定稿）：
- * - 节点 API 成交为过渡源保留；配置 VITE_INDEXER_URL 后 Envio 为权威展示源。
- * - 去重键 = (chainId, txHash, logIndex)。节点成交不带 logIndex，因此同 tx
- *   内的配对规则：先按 (maker, taker, amountIn, amountOut) 多重集精确匹配；
- *   同 tx 同双方但数量对不上的节点行判为冲突，链上事件为准、节点行抑制；
- *   其余节点独有行标「待索引」（pendingIndex，含尚未上链、无 txHash 的行）。
- * - Envio 独有行照常展示（节点漏记/未同步时以链上为准）。
+ * 口径（Ren 2026-11-09 定版）：链是唯一账本，索引（Envio）只是网页的
+ * 展示缓存——成交记录直接读索引的链上 Trade 事件，不再与节点记录做
+ * 去重/冲突合并（节点的成交记录随节点下线一并退役）。索引不可达时
+ * 界面如实显示「暂不可用」，绝不拿空数据冒充「暂无成交」。
+ *
+ * 第 52 轮 A3 补两处诚实性：① GraphQL 响应无 data 且无 errors（或
+ * data.Trade 缺失）按索引源失败抛错，不再以空数组冒充「查到 0 笔」；
+ * ② 索引滞后标注：并行查 _meta 进度，outcome.stale 只作展示标注
+ * （未就绪或落后 >50 块），绝不阻断、不并入 failed。
+ *
+ * 文件名 tradesDual 沿用以保持 import 路径稳定；导出 fetchIndexerTrades
+ * / IndexerTrade 被 scripts/stage4 等已关闭的验收工具引用，不得改签名。
  */
 import { INDEXER_URL } from '../config/indexer'
 import { getPairTokens } from '../config/pairs'
-
-/** 节点 /api/trades 归一化行（保留合并所需字段） */
-export interface NodeTrade {
-  tradeId: string
-  txHash: string
-  maker: string
-  taker: string
-  tokenIn: string
-  tokenOut: string
-  amountIn: string
-  amountOut: string
-  /** 1e18 定点整数字符串（节点口径） */
-  price: string
-  amount: string
-  timestamp: number
-}
 
 /** Envio Trade 实体归一化行 */
 export interface IndexerTrade {
@@ -46,25 +36,17 @@ export interface IndexerTrade {
   takerDigest: string | null
 }
 
-export type MergedTradeSource = 'envio' | 'node' | 'both'
-
-export interface MergedTrade {
-  /** 展示键：优先链上身份 (chainId-txHash-logIndex)，节点独有行用节点 tradeId */
+/** 展示用成交行（价格/数量已换算为人类单位数值，时间戳为链上区块时间） */
+export interface DisplayTrade {
+  /** 链上身份 (chainId-txHash-logIndex) */
   key: string
-  source: MergedTradeSource
-  /** 节点独有（Envio 尚未索引/尚未上链） */
-  pendingIndex: boolean
   price: number
   amount: number
   timestamp: number
   txHash: string
-  logIndex: number | null
-}
-
-export interface MergeResult {
-  trades: MergedTrade[]
-  /** 同 tx 同双方但数量不一致、按链上为准抑制了节点行的数量 */
-  conflicts: number
+  logIndex: number
+  maker: string
+  taker: string
 }
 
 const lc = (s: string) => (s ?? '').toLowerCase()
@@ -79,7 +61,7 @@ function scaledToNumber(v: string): number {
   }
 }
 
-/** 价格/数量展示换算：与节点口径对齐（price 为计价/基础，amount 为基础币数量） */
+/** 价格/数量展示换算（price 为计价/基础，amount 为基础币数量） */
 function displayValues(
   tokenIn: string,
   amountIn: string,
@@ -96,89 +78,19 @@ function displayValues(
   return { price: outN > 0 ? inN / outN : 0, amount: outN }
 }
 
-function matchKey(t: { maker: string; taker: string; amountIn: string; amountOut: string }): string {
-  const norm = (v: string) => {
-    try {
-      return BigInt(v).toString()
-    } catch {
-      return v
-    }
+/** 索引行 → 展示行（baseToken 为交易对的基础代币地址） */
+export function indexerTradeToDisplay(t: IndexerTrade, baseToken: string): DisplayTrade {
+  const { price, amount } = displayValues(t.tokenIn, t.amountIn, t.amountOut, baseToken)
+  return {
+    key: t.id,
+    price,
+    amount,
+    timestamp: t.blockTimestamp,
+    txHash: t.txHash,
+    logIndex: t.logIndex,
+    maker: t.maker,
+    taker: t.taker,
   }
-  return `${lc(t.maker)}|${lc(t.taker)}|${norm(t.amountIn)}|${norm(t.amountOut)}`
-}
-
-/** 双源合并（纯函数，可单测） */
-export function mergeTradeSources(
-  nodeTrades: NodeTrade[],
-  indexerTrades: IndexerTrade[],
-  baseToken: string,
-): MergeResult {
-  const byTx = new Map<string, IndexerTrade[]>()
-  for (const t of indexerTrades) {
-    const k = lc(t.txHash)
-    const arr = byTx.get(k) ?? []
-    arr.push(t)
-    byTx.set(k, arr)
-  }
-  const usedIndexer = new Set<string>()
-  const out: MergedTrade[] = []
-  let conflicts = 0
-
-  const toMerged = (
-    t: IndexerTrade,
-    source: MergedTradeSource,
-  ): MergedTrade => {
-    const { price, amount } = displayValues(t.tokenIn, t.amountIn, t.amountOut, baseToken)
-    return {
-      key: t.id,
-      source,
-      pendingIndex: false,
-      price,
-      amount,
-      timestamp: t.blockTimestamp,
-      txHash: t.txHash,
-      logIndex: t.logIndex,
-    }
-  }
-
-  for (const n of nodeTrades) {
-    const candidates = n.txHash ? (byTx.get(lc(n.txHash)) ?? []) : []
-    const exact = candidates.find(
-      (c) => !usedIndexer.has(c.id) && matchKey(c) === matchKey(n),
-    )
-    if (exact) {
-      usedIndexer.add(exact.id)
-      out.push(toMerged(exact, 'both'))
-      continue
-    }
-    // 同 tx、同双方、数量对不上 → 冲突，以链上事件为准，抑制节点行
-    const conflicted = candidates.some(
-      (c) =>
-        !usedIndexer.has(c.id) &&
-        lc(c.maker) === lc(n.maker) &&
-        lc(c.taker) === lc(n.taker),
-    )
-    if (conflicted && n.txHash) {
-      conflicts += 1
-      continue
-    }
-    const price = scaledToNumber(n.price)
-    out.push({
-      key: n.tradeId || `node-${n.txHash}-${n.timestamp}`,
-      source: 'node',
-      pendingIndex: true,
-      price,
-      amount: scaledToNumber(n.amount),
-      timestamp: n.timestamp,
-      txHash: n.txHash,
-      logIndex: null,
-    })
-  }
-  for (const t of indexerTrades) {
-    if (!usedIndexer.has(t.id)) out.push(toMerged(t, 'envio'))
-  }
-  out.sort((a, b) => b.timestamp - a.timestamp || (b.logIndex ?? -1) - (a.logIndex ?? -1))
-  return { trades: out, conflicts }
 }
 
 /**
@@ -191,8 +103,7 @@ export function mergeTradeSources(
  * （order_by + limit + offset）。
  *
  * 第 39 轮：服务端排序补次级键 logIndex desc（Hasura 多字段排序）——
- * 同块多笔成交时分页边界确定，与客户端 merge 的 (timestamp, logIndex)
- * 排序口径对齐。
+ * 同块多笔成交时分页边界确定，与客户端 (timestamp, logIndex) 排序口径对齐。
  */
 export const TRADES_QUERY = `
 query Bit100Trades($chainId: Int!, $limit: Int!, $offset: Int!, $base: [String!], $quote: [String!]) {
@@ -225,48 +136,17 @@ query Bit100Trades($chainId: Int!, $limit: Int!, $offset: Int!, $base: [String!]
   }
 }`
 
-/**
- * 节点 /api/trades 原始行 → NodeTrade 归一化（第 39 轮抽为共用）：
- * 「最新成交」（RecentTradesWidget）与桌面「成交记录」页签
- * （TradeTabsPanel）走同一条双源路径、共用同一映射，避免两处口径漂移。
- */
-export function normalizeNodeTradeRow(t: unknown): NodeTrade {
-  const o: Record<string, unknown> =
-    t && typeof t === 'object' ? (t as Record<string, unknown>) : {}
-  return {
-    tradeId: String(o.tradeId ?? o.TradeID ?? ''),
-    txHash: String(o.txHash ?? ''),
-    maker: String(o.maker ?? ''),
-    taker: String(o.taker ?? ''),
-    tokenIn: String(o.tokenIn ?? ''),
-    tokenOut: String(o.tokenOut ?? ''),
-    amountIn: String(o.amountIn ?? '0'),
-    amountOut: String(o.amountOut ?? '0'),
-    price: String(o.price ?? '0'),
-    amount: String(o.amount ?? '0'),
-    timestamp: Number(o.timestamp ?? 0),
-  }
-}
-
-/** 节点源取数超时（第 39 轮）：节点在本机/隧道近端，5 秒足够判活 */
-export const NODE_TRADES_TIMEOUT_MS = 5000
 /** 索引器源取数超时（第 39 轮）：Envio GraphQL 跨公网且有冷查询，宽放至 8 秒 */
 export const INDEXER_TRADES_TIMEOUT_MS = 8000
 
-/** 双源取数器：接收超时控制器信号，须把 signal 真传进底层 fetch */
+/** 取数器：接收超时控制器信号，须把 signal 真传进底层 fetch */
 export type SourceFetcher<T> = (signal: AbortSignal) => Promise<T>
-
-export interface DualTradesTimeouts {
-  nodeTimeoutMs?: number
-  indexerTimeoutMs?: number
-}
 
 /**
  * 第 39 轮：带真取消的超时调用。第 35 轮 D6 的 allSettled 只能隔离
- * reject——请求永不返回（挂死）时 allSettled 永不落定，健康源已取到的
- * 数据也被拖住不展示。本函数以平台标准 AbortController 在超时时真
- * abort 底层 fetch（连接随之释放），同时以竞速兜底：即使对端 promise
- * 不理会 signal，也准时判该源失败。
+ * reject——请求永不返回（挂死）时永不落定。本函数以平台标准
+ * AbortController 在超时时真 abort 底层 fetch（连接随之释放），同时
+ * 以竞速兜底：即使对端 promise 不理会 signal，也准时判失败。
  */
 async function callWithTimeout<T>(
   timeoutMs: number,
@@ -288,51 +168,156 @@ async function callWithTimeout<T>(
   }
 }
 
-export interface DualTradesOutcome {
-  result: MergeResult
-  /** 节点源本轮失败（Envio 数据不受影响，照常展示） */
-  nodeFailed: boolean
-  /** 索引源本轮失败（节点独有行全部标「待索引」展示） */
-  indexerFailed: boolean
-  /** 两源皆失败 → 无数据可用，界面须明示不可用而非「暂无成交」 */
-  unavailable: boolean
+export interface IndexerTradesOutcome {
+  trades: DisplayTrade[]
+  /** 本轮索引取数失败（界面须明示不可用，而非「暂无成交」） */
+  failed: boolean
+  /**
+   * 索引滞后标注（第 52 轮 A3）：该链索引未就绪（isReady 明确为
+   * false）或落后链头超过 INDEXER_STALE_LAG_BLOCKS 块时为 true。
+   * 口径（Ren 定版）：索引只是展示缓存——滞后只标注、绝不阻断、
+   * 不影响 failed；滞后判不出（_meta 查询失败）时为 false，不拿
+   * 不确定当滞后喊。第 53 轮补：isReady 字段缺失同属「判不出」，
+   * 不得据此标 stale（只有明确 false 才算未就绪）。
+   */
+  stale: boolean
+}
+
+/** 索引滞后阈值（块）：落后链头超过此数即标 stale（第 52 轮 A3） */
+export const INDEXER_STALE_LAG_BLOCKS = 50
+
+/** Envio 索引进度查询：_meta 是跨链列表（实测字段），客户端按 chainId 挑行 */
+export const INDEXER_META_QUERY = `
+query Bit100IndexerMeta {
+  _meta {
+    chainId
+    progressBlock
+    sourceBlock
+    isReady
+  }
+}`
+
+/**
+ * 块高字段形态校验（第 54 轮）：只接受有限数字或非空十进制数字字符串，
+ * 其余（null / '' / 非数字）→ null。此前直接 Number(...)：Number(null)
+ * 与 Number('') 都是 0（有限值），能溜过 isFinite 检查——sourceBlock
+ * 为 null 时块差被压成 0（漏报滞后），progressBlock 为 null 时块差被
+ * 放大到整条链高（误报滞后）。与 isReady 三态同一口径：形态不合即
+ * 「无证据」，整个进度按判不出处理。
+ */
+function parseBlockHeight(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string') {
+    const t = v.trim()
+    if (!/^[0-9]+$/.test(t)) return null
+    const n = Number(t)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+export interface IndexerChainProgress {
+  /** 落后链头的块数（sourceBlock − progressBlock，下限 0） */
+  lagBlocks: number
+  /**
+   * 索引就绪三态（第 53 轮，修第 52 轮复审 P2）：true / false 只认
+   * _meta 行里明确的布尔值；字段缺失或非布尔 → null（无证据）。
+   * 此前 `row.isReady === true` 把「缺失」压成 false，stale 公式
+   * 再据此误标滞后——与本文件「标注只凭实证」口径自相矛盾。
+   */
+  isReady: boolean | null
 }
 
 /**
- * 第 35 轮 D6：两源独立取数、独立失败。旧实现先 await 节点、外层 catch
- * 一把清——节点宕机时 Envio 明明有数据也被整页盖掉，与「配置索引后以
- * 索引为权威」矛盾。本函数以 allSettled 并发取两源：任一源失败只降级
- * 该源（失败标记随结果返回供界面明示），合并口径仍走 mergeTradeSources。
- *
- * 第 39 轮：两源各加取数超时（callWithTimeout，默认节点 5 秒 / 索引器
- * 8 秒，可注入更小值供测试）——超时按该源失败降级，语义与 D6 一致；
- * 任一源被拖死不再连累另一源的展示。
+ * 查 Envio 某链的索引进度（第 52 轮 A3）：骑与成交查询同一条
+ * fetch 路径，不引入第二套 GraphQL 客户端。任何失败/进度字段
+ * 缺失/找不到该链的行 → 返回 null（滞后判不出），由调用方按
+ * 「不标 stale」处理——标注只凭实证，不凭猜测。第 53 轮起
+ * isReady 单独三态：缺失只让 isReady=null，不拖垮块差证据。
+ * 第 54 轮起块高先经 parseBlockHeight 验形态：null/''/非数字不
+ * 再被 Number() 压成 0 溜过检查，形态不合整个进度返回 null。
  */
-export async function loadDualTrades(
-  fetchNode: SourceFetcher<NodeTrade[]>,
-  fetchIndexer: SourceFetcher<IndexerTrade[]>,
-  baseToken: string,
-  timeouts: DualTradesTimeouts = {},
-): Promise<DualTradesOutcome> {
-  const [n, i] = await Promise.allSettled([
-    callWithTimeout(timeouts.nodeTimeoutMs ?? NODE_TRADES_TIMEOUT_MS, 'node trades', fetchNode),
-    callWithTimeout(
-      timeouts.indexerTimeoutMs ?? INDEXER_TRADES_TIMEOUT_MS,
+export async function fetchIndexerChainProgress(
+  chainId: number,
+  fetchFn: FetchFn = defaultFetch,
+  endpoint: string = INDEXER_URL,
+  signal?: AbortSignal,
+): Promise<IndexerChainProgress | null> {
+  if (!endpoint) return null
+  try {
+    const res = await fetchFn(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: INDEXER_META_QUERY }),
+      signal,
+    })
+    if (!res.ok) return null
+    const json = (await res.json()) as { data?: { _meta?: unknown } } | null
+    const meta = json?.data?._meta
+    const rows: unknown[] = Array.isArray(meta) ? meta : meta ? [meta] : []
+    const row = rows.find(
+      (r) =>
+        r !== null &&
+        typeof r === 'object' &&
+        Number((r as Record<string, unknown>).chainId) === chainId,
+    ) as Record<string, unknown> | undefined
+    if (!row) return null
+    const progressBlock = parseBlockHeight(row.progressBlock)
+    const sourceBlock = parseBlockHeight(row.sourceBlock)
+    if (progressBlock === null || sourceBlock === null) return null
+    return {
+      lagBlocks: Math.max(0, sourceBlock - progressBlock),
+      isReady: typeof row.isReady === 'boolean' ? row.isReady : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+export interface LoadIndexerOptions {
+  timeoutMs?: number
+  fetchFn?: FetchFn
+  endpoint?: string
+}
+
+/**
+ * 成交记录单源读取（第 51 轮）：拉索引 → 换算展示值。索引未配置
+ * （endpoint 为空）或交易对未知 → failed=true、无数据；取数抛错/超时
+ * 同样 failed=true——调用方据此显示「暂不可用」，不冒充空成交。
+ */
+export async function loadIndexerTrades(
+  chainId: number,
+  pair: string,
+  limit = 50,
+  opts: LoadIndexerOptions = {},
+): Promise<IndexerTradesOutcome> {
+  const endpoint = opts.endpoint ?? INDEXER_URL
+  const tokens = getPairTokens(chainId, pair)
+  if (!endpoint || !tokens) return { trades: [], failed: true, stale: false }
+  try {
+    // 成交查询与索引进度查询并行、同受本层超时约束；进度查询失败
+    // 只意味着滞后判不出（stale=false），不拖垮成交数据本身。
+    const { rows, progress } = await callWithTimeout(
+      opts.timeoutMs ?? INDEXER_TRADES_TIMEOUT_MS,
       'indexer trades',
-      fetchIndexer,
-    ),
-  ])
-  const nodeFailed = n.status === 'rejected'
-  const indexerFailed = i.status === 'rejected'
-  return {
-    result: mergeTradeSources(
-      nodeFailed ? [] : (n as PromiseFulfilledResult<NodeTrade[]>).value,
-      indexerFailed ? [] : (i as PromiseFulfilledResult<IndexerTrade[]>).value,
-      baseToken,
-    ),
-    nodeFailed,
-    indexerFailed,
-    unavailable: nodeFailed && indexerFailed,
+      async (signal) => {
+        const [tradeRows, chainProgress] = await Promise.all([
+          fetchIndexerTrades(chainId, pair, limit, opts.fetchFn, endpoint, 0, { signal }),
+          fetchIndexerChainProgress(chainId, opts.fetchFn, endpoint, signal),
+        ])
+        return { rows: tradeRows, progress: chainProgress }
+      },
+    )
+    const stale =
+      progress !== null &&
+      (progress.isReady === false || progress.lagBlocks > INDEXER_STALE_LAG_BLOCKS)
+    return {
+      trades: rows.map((t) => indexerTradeToDisplay(t, tokens.base)),
+      failed: false,
+      stale,
+    }
+  } catch {
+    return { trades: [], failed: true, stale: false }
   }
 }
 
@@ -368,7 +353,7 @@ export function buildTradesQueryVariables(
 /**
  * 索引器取数函数契约（第 40 轮，第 39 轮复审 F2）：注入的 FetchFn 必须
  * 遵守 init.signal——信号取消后应尽快 reject。fetchIndexerTrades 的直
- * 调路径只靠 signal 取消、不另设竞速兜底；竞速兜底只在 loadDualTrades
+ * 调路径只靠 signal 取消、不另设竞速兜底；竞速兜底只在 loadIndexerTrades
  * 的 callWithTimeout 一层（两者分工，不重复造轮子）。
  */
 export type FetchFn = (
@@ -383,7 +368,7 @@ const defaultFetch: FetchFn = async (url, init) => {
 
 export interface FetchIndexerOptions {
   /**
-   * 外部取消信号（双源路径由 loadDualTrades 的超时控制器传入）；传入时
+   * 外部取消信号（由 loadIndexerTrades 的超时控制器传入）；传入时
    * 以外部信号为准，本函数不再另设计时。
    */
   signal?: AbortSignal
@@ -396,7 +381,7 @@ export interface FetchIndexerOptions {
  * D5），返回后再做一层客户端精确集合校验作兜底（索引实体只有代币地址、
  * 无 pair 符号；无序集合比对，两个方向都算本对成交）。
  *
- * 第 39 轮：① 取数超时真取消——双源路径用外部 signal，直接调用时自建
+ * 第 39 轮：① 取数超时真取消——单源路径用外部 signal，直接调用时自建
  * AbortController 按 INDEXER_TRADES_TIMEOUT_MS 兜底，signal 真传进
  * fetch；② GraphQL 在 HTTP 200 下仍可带 errors（执行/部分失败），非空
  * errors 视为索引源失败抛错，走既有降级路径，不当成「成功查到 0 笔」。
@@ -436,7 +421,15 @@ export async function fetchIndexerTrades(
     if (Array.isArray(json?.errors) && json.errors.length > 0) {
       throw new Error('indexer graphql query failed')
     }
-    const rows = Array.isArray(json?.data?.Trade) ? json.data!.Trade : []
+    // 第 52 轮 A3：GraphQL 响应必须至少带 data 或 errors——两者皆无
+    // （或 data 在但 Trade 字段缺失/非数组）是异常响应，旧实现以 []
+    // 兜底会被上层当成「查到 0 笔成交」展示成暂无成交。现按索引源
+    // 失败抛错，走既有 failed 口径。data.Trade 为空数组才是真空。
+    const tradeField = json?.data?.Trade
+    if (!Array.isArray(tradeField)) {
+      throw new Error('indexer graphql response missing data.Trade')
+    }
+    const rows = tradeField
     const pairSet = new Set([lc(tokens.base), lc(tokens.quote)])
     return rows
       .map((r) => {

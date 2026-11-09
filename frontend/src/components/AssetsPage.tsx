@@ -1,9 +1,12 @@
 /**
- * 资产页（第 31 轮 v2）：总览 / 金库双页签。
+ * 资产页（第 31 轮 v2；第 53 轮下线做市金库产品面后为单页总览）。
  * 总览 = 估值头卡（只汇总有已验证 Chainlink 价格的代币，无价明示排除）→ 快捷动作 →
- * 做市金库卡 → 持仓分布 → 余额列表（三数：Vault 可用 / 锁定中 / 钱包）→ 查询其他代币入口。
+ * 持仓分布 → 余额列表（三数：Vault 可用 / 锁定中 / 钱包）→ 查询其他代币入口。
  * 存入 / 提取 / 查询其他代币都是动作触发的子视图；存提逻辑与文案沿用原资产页
  * （Vault deposit/withdraw + 授权口径不变），只是搬进子视图。
+ * 第 53 轮：做市金库（MakerVault）产品退役（Ren 2026-11-09 拍板）——
+ * 金库页签、快捷入口与做市金库卡一并删除，用户不再有入口到达金库页；
+ * 合约代码保留在仓库，通用 ERC-1271 合约钱包验签不受影响。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Select } from '@mantine/core'
@@ -24,9 +27,7 @@ import {
   fmtUsd,
   type TokenBalance,
 } from './assets/valuation'
-import { useMakerVaultData } from './assets/makerVaultData'
 import { SparklineChart } from './SparklineChart'
-import { MakerVaultPage } from './MakerVaultPage'
 import { ensureAllowance, parseAmountInput } from './assets/tokenOps'
 import { evaluateFeedReading, getFeedConfig, readChainlinkFeed } from '../services/referencePrice'
 import { CHANNEL_DISCLOSURES } from '../services/defaultBridge/disclosures'
@@ -35,7 +36,7 @@ import { loadSettings } from '../services/defaultBridge/settings'
 import { getChainConfig } from '../config/chains'
 import './AssetsPage.css'
 
-type AssetsView = 'overview' | 'vault' | 'deposit' | 'withdraw' | 'query'
+type AssetsView = 'overview' | 'deposit' | 'withdraw' | 'query'
 
 interface AssetsPageProps {
   account: string | null
@@ -62,7 +63,6 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
   const [refreshTick, setRefreshTick] = useState(0)
   const [hideTotal, setHideTotal] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
-  const mv = useMakerVaultData(chainConfig, account, refreshTick)
 
   /* ---------- 第四十一轮：跨链交付摘要（入口行）+ 在途金额标注（设计 §2.2 / §4.2） ---------- */
   const deliverySettings = account ? loadSettings(account) : null
@@ -210,22 +210,6 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
     )
   }
 
-  if (view === 'vault') {
-    return (
-      <div className="assets-page">
-        <AssetsTabs view={view} setView={setView} />
-        <MakerVaultPage
-          chainConfig={chainConfig}
-          account={account}
-          data={mv.data}
-          loading={mv.loading}
-          failed={mv.failed}
-          onChanged={() => setRefreshTick((n) => n + 1)}
-        />
-      </div>
-    )
-  }
-
   if (view === 'deposit' || view === 'withdraw') {
     return (
       <div className="assets-page">
@@ -257,8 +241,6 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
 
   return (
     <div className="assets-page">
-      <AssetsTabs view={view} setView={setView} />
-
       <section className="card assets-hero">
         <div className="assets-hero-label">
           总资产估值（Vault + 钱包）
@@ -339,41 +321,7 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
         >
           <span className="assets-act-ico">⇄</span>去交易
         </button>
-        <button type="button" onClick={() => setView('vault')}>
-          <span className="assets-act-ico">▣</span>金库
-        </button>
       </div>
-
-      <section className="card assets-vault-card">
-        <div className="assets-vault-head">
-          <b>做市金库</b>
-          <span className="pill pill-accent">做市金库 · MAKERVAULT</span>
-        </div>
-        <p className="assets-vault-desc">
-          把 USDT 存进金库，份额随金库做市盈亏涨跌；随时可提取未被挂单锁定的部分。
-        </p>
-        {mv.data ? (
-          <div className="assets-vault-nums num">
-            <div>
-              <span>份额净值 NAV</span>
-              <b>{fmtQty(mv.data.derived.nav)}</b>
-            </div>
-            <div>
-              <span>金库总规模</span>
-              <b>{fmtQty(mv.data.totalAssets)} USDT</b>
-            </div>
-            <div>
-              <span>我的份额</span>
-              <b>{fmtQty(mv.data.myShares)}</b>
-            </div>
-          </div>
-        ) : (
-          <p className="assets-dim">{mv.loading ? '金库读数加载中…' : '金库读数暂时不可用（链上读取失败或喂价过期），数字不展示。'}</p>
-        )}
-        <button type="button" className="btn assets-vault-btn" onClick={() => setView('vault')}>
-          进入金库
-        </button>
-      </section>
 
       {valuation && valuation.distribution.length > 0 && (
         <section className="card">
@@ -466,19 +414,6 @@ export function AssetsPage({ account, chainConfig, chainId, connectionLabel, eth
           查询其他代币余额 <span aria-hidden="true">›</span>
         </button>
       </section>
-    </div>
-  )
-}
-
-function AssetsTabs({ view, setView }: { view: AssetsView; setView: (v: AssetsView) => void }) {
-  return (
-    <div className="assets-tabs" role="tablist" aria-label="资产分区">
-      <button type="button" role="tab" aria-selected={view !== 'vault'} className={view !== 'vault' ? 'on' : undefined} onClick={() => setView('overview')}>
-        总览
-      </button>
-      <button type="button" role="tab" aria-selected={view === 'vault'} className={view === 'vault' ? 'on' : undefined} onClick={() => setView('vault')}>
-        金库
-      </button>
     </div>
   )
 }

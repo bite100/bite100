@@ -15,7 +15,9 @@
  *    仍 VALID（锁由提交者结算前补齐，见 Vault.lockForOrder 无许可口径）。
  * 同 digest 两源未签名业务字段（side / pair / execType）不一致 → conflict，
  * 无论 validity 为何都不进可成交集合（evaluate 输出 validity=UNKNOWN +
- * CONFLICT 原因码，保守口径）。
+ * CONFLICT 原因码，保守口径）。【第 51 轮：节点源退役后候选只剩中继
+ * 一份副本，冲突判定无从发生——函数已删除，EvaluatedOrder.conflict
+ * 恒为 false，字段保留以兼容评估输出形状；tradeable 的合取条件不变。】
  *
  * 第 35 轮加固（ChatGPT 复审 D1）：
  * - D1 分页完整度：候选记录每个来源的 SourceBook.complete；仅被不完整
@@ -179,33 +181,6 @@ export async function prepareCandidates(
 }
 
 /**
- * execType 归一化：缺失/空/'limit' 都是协议缺省的限价语义（第 17 轮：
- * 市价单靠未签名的 execType:'market' 标记，其余皆限价）；relay/orders.ts
- * 的合法取值域只有 limit/market。旧冲突判定把缺失映射成 'GTC'，会把
- * 「一源写 limit、一源不写」误判冲突——按缺省语义归一后才对。
- */
-export function normalizeExecType(x?: string): string {
-  const v = (x ?? '').trim().toLowerCase()
-  return v === '' || v === 'limit' ? 'limit' : v
-}
-
-/**
- * 未签名业务字段冲突判定（pair/execType 不进 EIP-712 签名；side 自
- * 阶段 3 起已进签名——同候选的两副本 side 必然相同（不同 side 重构出
- * 不同 digest、根本不会同候选），此处的 side 比较只作防御性冗余，
- * 保留以防未来重构口径变化时静默放行）。
- */
-export function unsignedFieldConflict(c: PreparedCandidate): boolean {
-  const n = c.raws.node
-  const r = c.raws.relay
-  if (!n || !r) return false
-  if (n.side !== r.side) return true
-  if (n.pair !== r.pair) return true
-  if (normalizeExecType(n.execType) !== normalizeExecType(r.execType)) return true
-  return false
-}
-
-/**
  * 从 Vault 链上锁仓代币派生「落锁义务方向」——仅作观察提示，不作
  * 认证依据（认证只认 sideProof 的签名证明）。
  *
@@ -253,15 +228,14 @@ export function evaluateCandidate(
   opts?: EvaluateOptions,
 ): EvaluatedOrder {
   const sources = Object.keys(c.raws) as BookSource[]
-  const conflict = unsignedFieldConflict(c)
+  // 第 51 轮：单源（中继）下同 digest 只可能有一份副本，未签名业务字段
+  // 冲突无从发生；conflict 恒 false（字段保留兼容输出形状）。
+  const conflict = false
   const badCopies = sources.filter((s) => c.localVerify[s] === false).length
   // D1：有任一完整来源在场才算数据完整；展示/诊断字段优先取完整来源
   const incompleteOnly = sources.length > 0 && !sources.some((s) => c.complete[s])
   const primaryRaw =
-    (c.raws.node && c.complete.node ? c.raws.node : undefined) ??
-    (c.raws.relay && c.complete.relay ? c.raws.relay : undefined) ??
-    c.raws.node ??
-    c.raws.relay
+    (c.raws.relay && c.complete.relay ? c.raws.relay : undefined) ?? c.raws.relay
   const base: EvaluatedOrder = {
     identity: c.identity,
     orderId: c.data.orderId,
@@ -327,7 +301,7 @@ export function evaluateCandidate(
       // 不可信，降为 UNKNOWN（不进可成交集）。
       const caps: string[] = []
       if (incompleteOnly) caps.push('SOURCE_INCOMPLETE')
-      if (conflict || caps.length > 0) {
+      if (caps.length > 0) {
         merged.validity = 'UNKNOWN'
         merged.reasons = [...merged.reasons, ...caps]
       }

@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { valueTokens, changeVs24h, recordSnapshot, type TokenBalance } from './valuation'
-import {
-  deriveMakerVaultFigures,
-  estimateSharesForDeposit,
-  estimateQuoteForShares,
-} from './makerVaultMath'
 
 const bal = (patch: Partial<TokenBalance>): TokenBalance => ({
   symbol: 'USDT',
@@ -67,34 +62,3 @@ describe('valuation snapshots', () => {
   })
 })
 
-describe('maker vault math', () => {
-  it('derives NAV, value, redeemable and locked shares', () => {
-    const d = deriveMakerVaultFigures({
-      totalAssets: 1000,
-      totalShares: 500,
-      myShares: 100,
-      liquidQuote: 120,
-      lockedQuoteValue: 200,
-    })
-    expect(d.nav).toBe(2)
-    expect(d.myValue).toBe(200)
-    expect(d.redeemableShares).toBe(60) // 流动性 120 / NAV 2 = 60 < 我的 100
-    expect(d.lockedShares).toBe(100)
-  })
-  it('redeemable is capped by my shares when liquidity is ample', () => {
-    const d = deriveMakerVaultFigures({
-      totalAssets: 1000,
-      totalShares: 1000,
-      myShares: 10,
-      liquidQuote: 900,
-      lockedQuoteValue: 0,
-    })
-    expect(d.redeemableShares).toBe(10)
-  })
-  it('deposit/redeem estimates follow NAV and 1:1 for an empty vault', () => {
-    expect(estimateSharesForDeposit(100, 1000, 500)).toBe(50)
-    expect(estimateSharesForDeposit(100, 0, 0)).toBe(100)
-    expect(estimateQuoteForShares(50, 1000, 500)).toBe(100)
-    expect(estimateQuoteForShares(0, 1000, 500)).toBe(0)
-  })
-})

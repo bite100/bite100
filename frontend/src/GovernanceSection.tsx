@@ -141,7 +141,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     try {
       proof = JSON.parse(voteProof) as string[]
     } catch {
-      setError('proof 需为 JSON 数组。若您在活跃集内，可先尝试 []；否则请运行 merkletool -proof-for 您的地址 生成后粘贴')
+      setError('proof 需为 JSON 数组。原用于生成 proof 的节点工具已随节点退役，活跃集证明的产出路径正在重整，目前暂时无法自助生成（见页面上方「当前状态」说明）')
       return
     }
     setError(null)
@@ -177,7 +177,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
     if (!account || !isGovDeployed()) return
     const root = createMerkleRoot.trim().toLowerCase()
     if (!root) {
-      setError('请填写活跃集 Merkle 根（merkleRoot），需先用 merkletool 生成')
+      setError('请填写活跃集 Merkle 根（merkleRoot）。活跃集名单的产出路径在节点退役后正在重整，当前暂无可用名单，创建提案暂时不可用（见页面上方「当前状态」说明）')
       return
     }
     if (!/^0x[0-9a-f]{64}$/.test(root)) {
@@ -230,7 +230,8 @@ export function GovernanceSection({ account }: { account: string | null }) {
   return (
     <div className="card vault-section governance-section">
       <h2>治理</h2>
-      <p className="hint">治理用于调整交易手续费等协议参数。流程：创建提案 → 投票期 7 天 → 支持票超过活跃集人数一半即通过 → 经过 2 天时间锁 → 执行生效。活跃集是由节点按贡献选出的投票成员名单，以 Merkle 根的形式记录在链上；只有名单内成员可以投票，投票时需提交一份证明（proof）向合约证明自己在名单内——链上只保存名单的 Merkle 根、不保存完整名单，所以需要这份证明。</p>
+      <p className="hint">治理用于调整交易手续费等协议参数。流程：创建提案 → 投票期 7 天 → 支持票超过活跃集人数一半即通过 → 经过 2 天时间锁 → 执行生效。活跃集是按贡献选出的投票成员名单，以 Merkle 根的形式记录在链上；只有名单内成员可以投票，投票时需提交一份证明（proof）向合约证明自己在名单内——链上只保存名单的 Merkle 根、不保存完整名单，所以需要这份证明。</p>
+      <p className="hint">当前状态：暂无提案。节点已于阶段 5 退役，原先由节点产出的活跃集名单与投票证明暂时没有新的产出路径，正在重整中；在此之前，创建提案与需要证明的投票暂时不可用。提案列表查看、已通过提案的执行不受影响。</p>
 
       <h3 className="gov-sub">
         提案列表
@@ -399,7 +400,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
       </button>
 
       <h3 className="gov-sub">投票</h3>
-      <p className="hint">怎么投票：连接钱包，在「投票中」的提案卡片上点「支持」或「反对」即可，前提是当前账户在活跃集内。若投票时提示需要 proof（活跃集证明），在项目 node 目录运行 <code>go run ./cmd/merkletool -proof-for 你的钱包地址</code> 生成，再展开下方「高级：手动填写 proof」粘贴并提交。不在活跃集内的地址无法投票。</p>
+      <p className="hint">怎么投票：连接钱包，在「投票中」的提案卡片上点「支持」或「反对」即可，前提是当前账户在活跃集内，且投票时要提交一份 proof（活跃集证明）。原生成该证明的节点工具已随节点退役，证明的产出路径正在重整，目前暂时无法自助生成证明（见上方「当前状态」说明）；下方「高级：手动填写 proof」只适用于已经持有证明的情况。不在活跃集内的地址无法投票。</p>
       <details className="vote-advanced">
         <summary>高级：手动填写 proof</summary>
         <textarea
@@ -443,7 +444,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
       </div>
 
       <h3 className="gov-sub">创建提案</h3>
-      <p className="hint">当前模板：调整交易手续费。步骤：填写新的手续费比例，展开下方高级选项，填入当前活跃集的人数与 Merkle 根（由 merkletool 按当前活跃集生成），再点「提交提案」。注意：提案提交后进入 7 天投票期，内容不可修改；同一参数在提案执行后一周内不可重复创建。</p>
+      <p className="hint">当前模板：调整交易手续费。创建提案需要当前活跃集的人数与 Merkle 根；活跃集名单的产出路径在节点退役后正在重整，当前暂无可用名单，创建提案暂时不可用（见上方「当前状态」说明）。路径恢复后的规则不变：提案提交后进入 7 天投票期，内容不可修改；同一参数在提案执行后一周内不可重复创建。</p>
       <div className="proposal-create-form">
         <div className="form-group">
           <label>新手续费比例（%）</label>
@@ -462,7 +463,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
           <p className="proposal-preview">本提案将把交易手续费调整为 {createFeePercent}%</p>
         )}
         <details className="proposal-create-advanced">
-          <summary>高级：活跃集证明（需 merkletool 生成）</summary>
+          <summary>高级：活跃集设置（人数与 Merkle 根）</summary>
           <div className="input-row">
             <input
               type="number"

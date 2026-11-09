@@ -1,40 +1,41 @@
 /**
- * 订单双通道广播竞速语义（第 45 轮 A1/A2；第 46 轮 P2-4 真签名化）：
- * - A1：任一通道先接单即返回，挂死通道不得拖住下单返回；双通道都
- *   挂死时在广播期限处按失败返回；落败通道的迟到结果只留
- *   console.debug 痕迹。中继通道 fetch 带显式超时（relayDualSend）。
- * - A2：双通道收到的是同一份签名订单原文（逐字节一致 → 同一
- *   EIP-712 digest），下游去重只认一个订单身份的依据在此钉住。
- * - P2-4（第 46 轮）：订单原文的签名不再用 0xab 假字节——用仓库既有
- *   测试钱包（Hardhat #0，与 dualread.test.ts 同一夹具）经生产
- *   signOrder 真实签名，并以生产 verifyOrderSignatureSignedData
- *   验签断言两通道收到的都是这张真单。
- * nodeClient / config/relay 以 mock 代替，relayDualSend、digest
- * 重算、签名与验签全部走真实实现。
+ * 下单广播测试：第 30–48 轮为「节点主通道 + 中继副通道」双通道竞速
+ * （broadcastOrderDualChannel 的双腿落定/期限/迟到留痕语义已随节点
+ * 退役删除，逐条登记见第 51 轮文档）；第 51 轮起中继单通道
+ * （broadcastOrder）口径：
+ * - 中继明确接单（2xx）→ viaRelay；请求体 = 订单原文 + chainId，
+ *   且原文里的签名经生产验签路径可验（原 A2/P2-4 真签名断言的
+ *   单源形态：中继收到的就是这张真单，下游按 digest 只认一单）；
+ * - 中继明确拒单（非 2xx）→ relayError 带中继返回的原因，不是 UNKNOWN；
+ * - 传输层失败（超时/网络错误）→ relayUnknown（结果未定，不得断言
+ *   未接单，第 46 轮 P2-3 口径在单源下保留）；
+ * - 发单请求带 AbortSignal 超时（15 秒），永不无界等待；
+ * - 中继未配置 → 不发请求、relayError 明示未配置。
+ * config 以 mock 代替，签名/验签/digest 重算全部走真实实现。
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ethers } from 'ethers'
 import { buildSignedOrderData, computeOrderDigest } from './dualread/digest'
 import { signOrder } from './orderSigning'
 import { verifyOrderSignatureSignedData } from './orderVerification'
 import type { RawOrder } from './dualread/types'
 
-const relayCfg = vi.hoisted(() => ({ url: 'http://relay.test', enabled: true }))
-const nodePostMock = vi.hoisted(() => vi.fn())
+const relayCfg = vi.hoisted(() => ({ url: 'http://relay.test' }))
 
 vi.mock('../config/relay', () => ({
   get RELAY_URL() {
     return relayCfg.url
   },
-  get RELAY_DUAL_SEND_ENABLED() {
-    return relayCfg.enabled
+  get RELAY_CONFIGURED() {
+    return relayCfg.url !== ''
   },
 }))
-vi.mock('../nodeClient', () => ({ nodePost: nodePostMock }))
+vi.mock('../config', () => ({ CHAIN_ID: 11155111 }))
 
 import {
-  broadcastOrderDualChannel,
-  BROADCAST_CHANNEL_DEADLINE_MS,
+  broadcastOrder,
+  BROADCAST_UNKNOWN_MESSAGE,
+  RELAY_POST_TIMEOUT_MS,
 } from './orderService'
 
 const CHAIN_ID = 11155111
@@ -44,156 +45,128 @@ const TEST_WALLET = new ethers.Wallet(
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
 )
 
-/** 与线上订单票同形状的订单原文（RawOrder 形状，wei 整数字符串） */
-const ORDER_BASE = {
-  orderId: 'ord-r45-a2',
-  trader: TEST_WALLET.address,
-  pair: 'BTC/USDT',
-  side: 'buy',
-  price: '2000000000000000000000',
-  amount: '1000000000000000000',
-  filled: '0',
-  status: 'open',
-  createdAt: 1762000000,
-  expiresAt: 1762604800,
-  nonce: 7,
-}
+const BODY = { orderId: 'ord-1', pair: 'BTC/USDT', side: 'buy' }
 
-/** 经生产 signOrder 真实签名的订单原文（每个用例前重建） */
-let ORDER_BODY: Record<string, unknown>
-async function makeSignedOrderBody(): Promise<Record<string, unknown>> {
-  const data = buildSignedOrderData(
-    { ...ORDER_BASE, signature: '' } as unknown as RawOrder,
-    CHAIN_ID,
-  )
-  if (!data) throw new Error('unbuildable test order')
-  const signature = await signOrder(data, TEST_WALLET, CHAIN_ID)
-  return { ...ORDER_BASE, signature }
-}
-
-const fetchMock = vi.fn()
-let debugSpy: ReturnType<typeof vi.spyOn>
-
-function digestOf(body: Record<string, unknown>): string {
-  const data = buildSignedOrderData(body as unknown as RawOrder, CHAIN_ID)
-  expect(data).not.toBeNull()
-  return computeOrderDigest(data!, CHAIN_ID)
-}
-
-/** 1 秒内不返回即判挂死回归（真计时下的人工上限，远小于通道期限） */
-async function withinOneSecond<T>(p: Promise<T>): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<never>((_resolve, reject) =>
-      setTimeout(() => reject(new Error('广播未在 1s 内返回（挂死回归）')), 1000),
-    ),
-  ])
-}
-
-describe('broadcastOrderDualChannel（第 45 轮 A1/A2）', () => {
-  beforeEach(async () => {
+describe('broadcastOrder（第 51 轮中继单通道）', () => {
+  beforeEach(() => {
     relayCfg.url = 'http://relay.test'
-    relayCfg.enabled = true
-    nodePostMock.mockReset()
-    fetchMock.mockReset()
-    globalThis.fetch = fetchMock as unknown as typeof fetch
-    debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
-    ORDER_BODY = await makeSignedOrderBody()
+    globalThis.fetch = vi.fn()
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
+  it('中继接单（200）→ viaRelay=true，请求体含 orderId 与 chainId', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, status: 200 })
+    const outcome = await broadcastOrder(BODY, CHAIN_ID)
+    expect(outcome.viaRelay).toBe(true)
+    expect(outcome.relayUnknown).toBeUndefined()
+    const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(url).toBe('http://relay.test/orders')
+    expect(JSON.parse(init.body)).toMatchObject({ orderId: 'ord-1', chainId: CHAIN_ID })
   })
 
-  it('A2：双通道都接单 → 两侧标志为真；两通道收到的订单原文逐字节一致、同 digest', async () => {
-    nodePostMock.mockResolvedValue({ data: { ok: true }, baseUrl: 'http://node1' })
-    fetchMock.mockResolvedValue({ ok: true })
-    const outcome = await broadcastOrderDualChannel(ORDER_BODY, CHAIN_ID)
-    expect(outcome).toEqual({ viaNode: true, viaRelay: true })
-
-    // 节点通道收到的就是传入的订单原文
-    const nodeBody = nodePostMock.mock.calls[0][1] as Record<string, unknown>
-    expect(nodeBody).toBe(ORDER_BODY)
-    // 中继通道收到的是同一原文 + chainId：去掉 chainId 后逐字节一致
-    const [relayUrl, relayInit] = fetchMock.mock.calls[0]
-    expect(relayUrl).toBe('http://relay.test/orders')
-    const relayBody = JSON.parse(relayInit.body as string) as Record<string, unknown>
-    expect(relayBody.chainId).toBe(CHAIN_ID)
-    const { chainId: _drop, ...relayOrderOnly } = relayBody
-    expect(JSON.stringify(relayOrderOnly)).toBe(JSON.stringify(nodeBody))
-    // 同一原文 → 同一 EIP-712 digest：下游（中继按 digest、节点按
-    // orderId）去重只认一个订单身份的依据
-    expect(digestOf(relayOrderOnly)).toBe(digestOf(nodeBody))
-    // P2-4：两通道收到的签名都是测试钱包经生产路径签出的真签名，
-    // 且经生产验签路径验证通过（checkExpiry 关：夹具时间戳固定，
-    // 本条只验签名本身不验时效）
-    const data = buildSignedOrderData(nodeBody as unknown as RawOrder, CHAIN_ID)!
-    expect(
-      await verifyOrderSignatureSignedData(data, nodeBody.signature as string, {
+  it('真签名断言（原 A2/P2-4 单源形态）：中继收到的订单原文签名可验、digest 与本地重算一致', async () => {
+    // 与旧双通道 A2 同一夹具口径：先由订单原文经生产 buildSignedOrderData
+    // 重构出签名数据、再经生产 signOrder 真签名，自洽性由构造保证。
+    const ORDER_BASE = {
+      orderId: 'ord-r51-a2',
+      trader: TEST_WALLET.address,
+      pair: 'BTC/USDT',
+      side: 'buy',
+      price: '2000000000000000000000',
+      amount: '1000000000000000000',
+      filled: '0',
+      status: 'open',
+      createdAt: 1762000000,
+      expiresAt: 1762604800,
+      nonce: 7,
+    }
+    const data = buildSignedOrderData(
+      { ...ORDER_BASE, signature: '' } as unknown as RawOrder,
+      CHAIN_ID,
+    )
+    expect(data).not.toBeNull()
+    const signature = await signOrder(data!, TEST_WALLET, CHAIN_ID)
+    const orderBody = { ...ORDER_BASE, signature }
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, status: 200 })
+    const outcome = await broadcastOrder(orderBody, CHAIN_ID)
+    expect(outcome.viaRelay).toBe(true)
+    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    const sent = JSON.parse(init.body) as Record<string, unknown>
+    // 中继收到的原文重构回签名订单：验签通过且 digest 与签名时一致
+    const rebuilt = buildSignedOrderData(sent as unknown as RawOrder, CHAIN_ID)
+    expect(rebuilt).not.toBeNull()
+    expect(computeOrderDigest(rebuilt!, CHAIN_ID)).toBe(computeOrderDigest(data!, CHAIN_ID))
+    await expect(
+      verifyOrderSignatureSignedData(rebuilt!, String(sent.signature), {
         chainId: CHAIN_ID,
         checkExpiry: false,
       }),
-    ).toBe(true)
-    expect(relayOrderOnly.signature).toBe(nodeBody.signature)
+    ).resolves.toBe(true)
   })
 
-  it('A1：节点挂死 + 中继接单 → 不等节点，立即按中继成功返回', async () => {
-    nodePostMock.mockImplementation(() => new Promise(() => {}))
-    fetchMock.mockResolvedValue({ ok: true })
-    const outcome = await withinOneSecond(broadcastOrderDualChannel(ORDER_BODY, CHAIN_ID))
-    expect(outcome.viaRelay).toBe(true)
-    expect(outcome.viaNode).toBe(false)
+  it('发单请求带 AbortSignal（显式超时纪律，永不无界等待）', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, status: 200 })
+    await broadcastOrder(BODY, CHAIN_ID)
+    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+    expect(RELAY_POST_TIMEOUT_MS).toBe(15_000)
   })
 
-  it('A1：中继挂死 + 节点接单 → 不等中继，立即按节点成功返回', async () => {
-    nodePostMock.mockResolvedValue({ data: { ok: true }, baseUrl: 'http://node1' })
-    fetchMock.mockImplementation(() => new Promise(() => {}))
-    const outcome = await withinOneSecond(broadcastOrderDualChannel(ORDER_BODY, CHAIN_ID))
-    expect(outcome.viaNode).toBe(true)
+  it('中继明确拒单（400 + error 原因）→ relayError 带原因、不是 UNKNOWN', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'invalid signature' }),
+    })
+    const outcome = await broadcastOrder(BODY, CHAIN_ID)
     expect(outcome.viaRelay).toBe(false)
+    expect(outcome.relayUnknown).toBeUndefined()
+    expect(outcome.relayError).toBeInstanceOf(Error)
+    expect((outcome.relayError as Error).message).toContain('中继拒单（HTTP 400）')
+    expect((outcome.relayError as Error).message).toContain('invalid signature')
   })
 
-  it('A1：双通道都挂死 → 广播期限处按失败返回，nodeError 为超时错误', async () => {
-    vi.useFakeTimers()
-    nodePostMock.mockImplementation(() => new Promise(() => {}))
-    fetchMock.mockImplementation(() => new Promise(() => {}))
-    const p = broadcastOrderDualChannel(ORDER_BODY, CHAIN_ID)
-    await vi.advanceTimersByTimeAsync(BROADCAST_CHANNEL_DEADLINE_MS + 1)
-    const outcome = await p
-    expect(outcome.viaNode).toBe(false)
+  it('中继拒单且响应体不可解析 → relayError 只带状态码', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new Error('not json')
+      },
+    })
+    const outcome = await broadcastOrder(BODY, CHAIN_ID)
     expect(outcome.viaRelay).toBe(false)
-    expect(outcome.nodeError).toBeInstanceOf(Error)
-    expect((outcome.nodeError as Error).message).toContain('超时')
-    // 第 46 轮 P2-3：期限到点时节点结果未落定 → nodeUnknown 在场，
-    // 调用方须按「待确认」呈现而非断言未接单
-    expect(outcome.nodeUnknown).toBe(true)
+    expect((outcome.relayError as Error).message).toContain('HTTP 502')
   })
 
-  it('A1：落败通道迟到接单 → 广播结果不变，迟到结果留 console 痕迹', async () => {
-    let lateResolve: ((v: unknown) => void) | undefined
-    nodePostMock.mockImplementation(
-      () => new Promise((res) => { lateResolve = res }),
-    )
-    fetchMock.mockResolvedValue({ ok: true })
-    const outcome = await withinOneSecond(broadcastOrderDualChannel(ORDER_BODY, CHAIN_ID))
-    expect(outcome.viaRelay).toBe(true)
-    lateResolve!({ data: { ok: true }, baseUrl: 'http://node1' })
-    await new Promise((r) => setTimeout(r, 10))
-    const traces = debugSpy.mock.calls
-      .map((c: unknown[]) => String(c[0]))
-      .filter((s: string) => s.includes('[broadcast]'))
-    expect(traces.some((s: string) => s.includes('迟到接单'))).toBe(true)
-  })
-
-  it('双通道都失败 → 返回失败结果，nodeError 带节点侧原始错误', async () => {
-    nodePostMock.mockRejectedValue(new Error('node down'))
-    fetchMock.mockRejectedValue(new Error('relay down'))
-    const outcome = await broadcastOrderDualChannel(ORDER_BODY, CHAIN_ID)
-    expect(outcome.viaNode).toBe(false)
+  it('网络失败（fetch reject）→ relayUnknown=true（结果未定）', async () => {
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('relay down'))
+    const outcome = await broadcastOrder(BODY, CHAIN_ID)
     expect(outcome.viaRelay).toBe(false)
-    expect(outcome.nodeError).toBeInstanceOf(Error)
-    expect((outcome.nodeError as Error).message).toBe('node down')
-    // 第 46 轮 P2-3：双通道都已落定为失败 → 不是 UNKNOWN，不得标待确认
-    expect(outcome.nodeUnknown).toBeUndefined()
+    expect(outcome.relayUnknown).toBe(true)
+    expect(outcome.relayError).toBeInstanceOf(Error)
+  })
+
+  it('超时（TimeoutError）→ relayUnknown=true', async () => {
+    const timeoutErr = new Error('timed out')
+    timeoutErr.name = 'TimeoutError'
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(timeoutErr)
+    const outcome = await broadcastOrder(BODY, CHAIN_ID)
+    expect(outcome.relayUnknown).toBe(true)
+  })
+
+  it('中继未配置（RELAY_URL 为空）→ relayError 明示未配置，且不发请求', async () => {
+    relayCfg.url = ''
+    const outcome = await broadcastOrder(BODY, CHAIN_ID)
+    expect(outcome.viaRelay).toBe(false)
+    expect(outcome.relayUnknown).toBeUndefined()
+    expect((outcome.relayError as Error).message).toContain('未配置')
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it('UNKNOWN 文案为中继口径：提示待确认与勿重复下单', () => {
+    expect(BROADCAST_UNKNOWN_MESSAGE).toContain('订单结果待确认')
+    expect(BROADCAST_UNKNOWN_MESSAGE).toContain('中继通道超时')
+    expect(BROADCAST_UNKNOWN_MESSAGE).toContain('请勿立即重复下单')
+    expect(BROADCAST_UNKNOWN_MESSAGE).not.toContain('节点')
   })
 })

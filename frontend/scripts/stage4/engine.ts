@@ -27,13 +27,50 @@
  * mismatch-observed），不停机；正确性一律以链上回执与事件为准。
  * zero.indexerMismatch 计数仅为状态结构历史兼容保留，不再递增。
  *
+ * 第 48 轮（第 45 轮运行器半复审 P1/P2 修复）：① txHash 到手先记
+ * 恢复账本再探回执（窗口期被杀不丢账）；② 周期超时后本链进隔离
+ * 状态，下一周期前先对账（遗留待确认结算复查 + 链上事件扫描认回
+ * 迟到广播的成交），对完账才许提新单；③ 恢复账本文件存在但损坏
+ * = 失败关闭（PendingLedgerCorruptError），不再静默当空账本；
+ * ④ 确认记账顺序定版：先写 probe/恢复记录再清 pending，恢复路径
+ * 的已成交量读取与主路径同等 3 次重试，签名量缺失不得跳过核对；
+ * ⑤ 中继发单超时标「接受状态未知」并纳入在场探针，中继拉簿把
+ * 真实 AbortSignal 经适配器 fetchFn 注入点传进底层 fetch（不再
+ * 只是等超时），relay.postOrder 打点覆盖到响应体读取。
+ *
+ * 第 50 轮（第 48 轮推送后 ChatGPT 复审条件项统一修复）：① 隔离
+ * 对账遇回执未验真的迟到成交不再报 complete——抛错保隔离、失败
+ * 关闭；② 恢复账本主文件缺失时读遗留 `.tmp` 兜底首次创建崩溃
+ * 窗（校验不过即失败关闭）；③ 跨进程幂等判重补 metrics 落盘
+ * probe 记录（hasProbeRecord），重启不重复确认/记账；④ 恢复
+ * 账本改全字段 schema 校验，同 txHash 异内容冲突 = 失败关闭，
+ * 禁止静默覆盖。
+ *
+ * 第 52 轮（第 50 轮推送后 ChatGPT 复审条件项修复）：① 隔离对账
+ * 认回迟到成交须再过事件对账——回执解析出的成交事件必须非空且
+ * 多重集覆盖事件扫描的发现（回执解析本已保证事件来自目标
+ * Settlement 合约），对不上按未验真保隔离；② 恢复账本落盘补
+ * fsync 持久化序（写 tmp → 同步文件 → rename → 同步父目录），
+ * 保证范围扩到掉电/系统崩溃（以 fsync 语义为限）；③ 全字段校
+ * 验补语义层（链/交易对白名单、哈希格式、腿数 ≥1、量为十进制
+ * 整数串、记账时间为正数）。
+ *
  * 密钥纪律：只从 S4_KEYS_DIR（默认 ~/workspace/bite100-deployer）
  * 的 maker.env / taker.env / wallet.env 运行时读取，绝不打印/落盘。
  * 仅测试网链（11155111 / 84532），其他 chainId 直接拒绝。
  */
-import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { ethers } from 'ethers'
 import { createPublicClient, http } from 'viem'
 import { getChainConfig, type ChainConfig } from '../../src/config/chains'
@@ -57,6 +94,7 @@ import {
   requireBookSides,
   sortBookSide,
   type BookAdapter,
+  type FetchFn,
 } from '../../src/services/dualread/adapters'
 import {
   createChainStateReader,
@@ -85,6 +123,62 @@ export interface Stage4Config {
   submitGapMs: number
   indexerGraceSec: number
   nodeUrls: Record<number, string>
+  /** 本次运行的链集合（S4_CHAINS，缺省 = CHAINS 双链） */
+  chains: number[]
+  /** 本次运行的交易对轮转集合（S4_PAIRS，缺省 = TRADE_PAIRS 全 8 对） */
+  pairs: string[]
+}
+
+/** 逗号分隔列表解析：去空白、去空项、保序去重；未设置/全空 → null（用缺省） */
+function parseCsvList(raw: string | undefined): string[] | null {
+  if (raw === undefined) return null
+  const items = [
+    ...new Set(
+      raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  ]
+  return items.length > 0 ? items : null
+}
+
+/**
+ * S4_CHAINS 解析（第 55 轮，Sepolia 补测 A 前置）：逗号分隔链 id，
+ * 缺省 [11155111, 84532] 双链与既有行为逐字一致。只接受 CHAINS 内
+ * 的测试网，非法值直接抛错拒绝启动（失败关闭，不静默回落）——
+ * 单链补测靠它保证另一条链零动作，解析含糊比不跑更危险。
+ */
+function parseChains(raw: string | undefined): number[] {
+  const items = parseCsvList(raw)
+  if (!items) return [...CHAINS]
+  return items.map((s) => {
+    const n = Number(s)
+    if (!Number.isInteger(n) || !(CHAINS as readonly number[]).includes(n)) {
+      throw new Error(
+        `S4_CHAINS 非法链 id「${s}」：只接受 ${CHAINS.join(' / ')} 的逗号组合`,
+      )
+    }
+    return n
+  })
+}
+
+/**
+ * S4_PAIRS 解析（第 55 轮）：逗号分隔交易对子集，轮转顺序按给定
+ * 顺序；缺省 TRADE_PAIRS 全 8 对与既有行为逐字一致。只接受已登记
+ * 交易对，非法值抛错拒绝启动（同 S4_CHAINS 口径）。
+ */
+function parsePairs(raw: string | undefined): string[] {
+  const items = parseCsvList(raw)
+  if (!items) return [...TRADE_PAIRS]
+  for (const p of items) {
+    if (!(TRADE_PAIRS as readonly string[]).includes(p)) {
+      throw new Error(
+        `S4_PAIRS 非法交易对「${p}」：只接受 ${TRADE_PAIRS.join(' / ')} 的逗号组合`,
+      )
+    }
+  }
+  return items
 }
 
 export function loadConfig(): Stage4Config {
@@ -106,9 +200,12 @@ export function loadConfig(): Stage4Config {
       11155111: process.env.S4_NODE_URL_11155111 ?? 'http://127.0.0.1:8080',
       84532: process.env.S4_NODE_URL_84532 ?? 'http://127.0.0.1:8081',
     },
+    chains: parseChains(process.env.S4_CHAINS),
+    pairs: parsePairs(process.env.S4_PAIRS),
   }
 }
 
+/** 运行器支持的测试网全集；S4_CHAINS 的可选范围与缺省值（第 55 轮起链集合配置驱动，见 loadConfig） */
 export const CHAINS = [11155111, 84532] as const
 const PRICE = '2000' // 合成定价（与 soak 同口径：测状态机保真，不测价格真实性）
 
@@ -142,6 +239,20 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 
 const CHAIN_CYCLE_TIMEOUT_MS = 420_000
 const RECHECK_TIMEOUT_MS = 240_000
+
+/**
+ * 超时错误分类（第 48 轮）：AbortSignal.timeout 触发的 TimeoutError、
+ * 主动取消的 AbortError、本模块的 CycleTimeoutError、以及消息含
+ * timeout/timed out 的错误都归「超时」。慢 ≠ 错：拉簿/发单超时只
+ * 说明等不到结果（接受状态未知/源无结论），不得按业务失败下结论，
+ * 分类供记账与探针分支使用。
+ */
+export function isTimeoutError(e: unknown): boolean {
+  if (e instanceof CycleTimeoutError) return true
+  if (!(e instanceof Error)) return false
+  if (e.name === 'TimeoutError' || e.name === 'AbortError') return true
+  return /timed?\s*out|timeout/i.test(e.message)
+}
 
 // ------------------------------------------------------- 调用打点
 /**
@@ -262,6 +373,8 @@ export interface PostedOrder {
   role: string
   side: string
   relayOk: boolean
+  /** 第 48 轮：发单请求超时——中继可能已接单也可能没收到，接受状态未知；在场探针须一并核查 */
+  relayUnknown?: boolean
   relayStatus: number | null
   tampered: boolean
   amountIn: string
@@ -320,8 +433,117 @@ export interface PendingSettlement {
 
 export class ZeroToleranceError extends Error {}
 
-/** 构建备注：第 45 轮（阶段 4 后修复轮）定版，随状态文件与 window-start 行落盘 */
-export const BUILD_NOTE = '第 45 轮阶段 4 后修复：含 B1/B3/B2-lite（索引器分页/探针容错/事件来源核对）+ 方案 B 超时硬化（单链周期 420s、复查 240s、中继发单 30s/节点拉簿 10s）+ 卡点隔离埋点（call-start/call-end 命名计时）与中继拉簿 30s 超时包裹 + B4 失败关闭（回执宽限轮询 120s、关键读数重试，结算状态未知按零容忍同级停机；索引器滞后/不符只记观察项——Ren 2026-11-09 新口径）+ B5 待确认结算恢复账本（启动先复查遗留结算）'
+/**
+ * 恢复账本损坏错误（第 48 轮 P1-3）：账本文件存在但解析失败/形状
+ * 不对时抛出。旧实现吞掉一切错误返回空账本，损坏被静默当作「无
+ * 遗留结算」继续跑——已提交未确认的结算就此丢账。定版口径：文件
+ * 不存在 = 空账本（正常）；存在但读不懂 = 失败关闭（属零容忍类），
+ * 由 runStage4 启动路径按 zero-tolerance-triggered 收尾停机。
+ */
+export class PendingLedgerCorruptError extends Error {
+  constructor(detail: string) {
+    super(`恢复账本损坏（失败关闭）：${detail}`)
+    this.name = 'PendingLedgerCorruptError'
+  }
+}
+
+/** 构建备注：第 54 轮定版（叠加第 53/52/50/48/45 轮），随状态文件与 window-start 行落盘 */
+export const BUILD_NOTE = '第 55 轮（Sepolia 补测 A 前置）：链/交易对选择开关——S4_CHAINS（逗号分隔，限 CHAINS 全集，缺省双链）+ S4_PAIRS（逗号分隔子集，限 TRADE_PAIRS，缺省全 8 对），缺省行为与既有逐字一致，非法值抛错拒绝启动；周期轮转与无单回落均限配置子集内。第 54 轮顺带项（第 53 轮复审 P2）：落盘 fsync 分类按场景拆分——EBADF 任何场景一律上抛；文件 fsync 仅 ENOTSUP/EOPNOTSUPP 降级；目录步（打开+同步）EINVAL/ENOTSUP/EOPNOTSUPP 降级；faults F9 补 EBADF 反例。第 53 轮复审 P2 顺带项：落盘 fsync 错误分类（仅平台不支持类错误码 EINVAL/ENOTSUP/EOPNOTSUPP/EBADF 降级跳过，EIO 等真实 I/O 错误向上抛、失败关闭，不再全吞）。第 52 轮审查条件项修复（基线第 50 轮）：迟到成交回执事件须与扫描发现多重集对账（空/不符按未验真保隔离）；恢复账本 fsync 持久化序（写 tmp→同步文件→rename→同步父目录）+ 语义校验（链白名单/交易对白名单/哈希与摘要格式/腿数 ≥1/量为十进制整数串）。第 50 轮审查条件项修复（基线第 48 轮）：隔离对账遇未验真迟到成交不报 complete、抛错保隔离（失败关闭）；恢复账本主文件缺失时读遗留 .tmp 兜底首次创建崩溃窗；恢复账本全字段 schema 校验 + 同 txHash 异内容冲突失败关闭；跨进程幂等判重补 metrics 落盘 probe 记录，重启不重复确认。第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
+
+/**
+ * fsync 降级白名单（第 53 轮建、第 54 轮按场景拆分）：只有「平台/
+ * 文件系统不支持同步」类错误码才允许降级跳过，其余错误（EIO、
+ * ENOSPC 等真实 I/O 故障）必须向上抛——第 52 轮的 catch 全吞写
+ * 法会让真实故障静默通过，「已持久化」在出事时无声失效；失败
+ * 关闭口径下，宁可抛错停机也不能假装落盘。
+ *
+ * 第 54 轮拆分依据（第 53 轮复审 P2）：第 53 轮的统一白名单把
+ * EBADF 也放行，但 EBADF（坏文件描述符）在任何场景下都是调用
+ * 方自身的错误，不是平台不支持——一律上抛。EINVAL 只在目录
+ * 句柄上是部分平台的正常回应（目录 fsync 不支持），普通文件
+ * fsync 报 EINVAL 同样异常，故只进目录白名单：
+ * - 文件 fsync：仅 ENOTSUP / EOPNOTSUPP 降级；
+ * - 目录步（打开父目录 + 目录 fsync）：EINVAL / ENOTSUP /
+ *   EOPNOTSUPP 降级。
+ */
+const FSYNC_FILE_DOWNGRADE_CODES: ReadonlySet<string> = new Set(['ENOTSUP', 'EOPNOTSUPP'])
+const FSYNC_DIR_DOWNGRADE_CODES: ReadonlySet<string> = new Set([
+  'EINVAL',
+  'ENOTSUP',
+  'EOPNOTSUPP',
+])
+
+function fsyncErrorCode(e: unknown): string | null {
+  const code = (e as { code?: unknown } | null)?.code
+  return typeof code === 'string' ? code : null
+}
+
+/** 文件 fsync 的降级判定（第 54 轮）：EBADF / EINVAL 一律不降级 */
+export function isFileFsyncDowngradeError(e: unknown): boolean {
+  const code = fsyncErrorCode(e)
+  return code !== null && FSYNC_FILE_DOWNGRADE_CODES.has(code)
+}
+
+/** 目录步（open / fsync）的降级判定（第 54 轮）：EBADF 一律不降级 */
+export function isDirFsyncDowngradeError(e: unknown): boolean {
+  const code = fsyncErrorCode(e)
+  return code !== null && FSYNC_DIR_DOWNGRADE_CODES.has(code)
+}
+
+/** fsync 一步：该场景的不支持类错误降级跳过，其余向上抛 */
+function fsyncOrDowngrade(fd: number, sync: (fd: number) => void, kind: 'file' | 'dir'): void {
+  try {
+    sync(fd)
+  } catch (e) {
+    const downgrade = kind === 'file' ? isFileFsyncDowngradeError(e) : isDirFsyncDowngradeError(e)
+    if (!downgrade) throw e
+    // 降级：本平台该句柄 fsync 不可用时跳过（见上方白名单）
+  }
+}
+
+/**
+ * 原子写 + 掉电持久化（第 52 轮 B2；第 53 轮补错误分类）：写
+ * `.tmp` → fsync 文件 → rename → fsync 父目录。rename 本身只
+ * 保证进程崩溃/被杀时读者要么见旧文件、要么见新文件（原子替
+ * 换）；数据真落盘要靠 fsync——没有它，掉电/系统崩溃时已
+ * rename 的文件内容仍可能随页缓存一起丢。fsync 在个别平台/
+ * 文件系统上可能不支持（尤其目录 fsync）：仅该场景的不支持类
+ * 错误码降级跳过该步（第 54 轮场景白名单），真实 I/O 错误向上
+ * 抛、由调用方失败关闭；保证范围以 fsync 语义为限，README
+ * 「运行约束」有明文（进程崩溃恒保、掉电以 fsync 成功为限）。
+ *
+ * 第三参数 sync 仅供故障注入测试替换 fsync（faults.test.mjs
+ * F9），生产调用恒用默认 fsyncSync。
+ */
+export function writeFileAtomicDurable(
+  path: string,
+  data: string,
+  sync: (fd: number) => void = fsyncSync,
+): void {
+  const tmp = `${path}.tmp`
+  const fd = openSync(tmp, 'w')
+  try {
+    writeFileSync(fd, data)
+    fsyncOrDowngrade(fd, sync, 'file')
+  } finally {
+    closeSync(fd)
+  }
+  renameSync(tmp, path)
+  let dfd: number | null = null
+  try {
+    dfd = openSync(dirname(path), 'r')
+  } catch (e) {
+    if (!isDirFsyncDowngradeError(e)) throw e
+    // 降级：父目录句柄以目录场景的不支持类错误打不开 → 跳过目录同步
+  }
+  if (dfd !== null) {
+    try {
+      fsyncOrDowngrade(dfd, sync, 'dir')
+    } finally {
+      closeSync(dfd)
+    }
+  }
+}
 
 export class Stage4Ledger {
   posted = new Map<string, PostedOrder>()
@@ -390,7 +612,7 @@ export class Stage4Ledger {
     throw new ZeroToleranceError(`${kind}: ${detail}`)
   }
 
-  /** B5：登记一笔待确认结算并立即落盘（tmp+rename，与 saveState 同法） */
+  /** B5：登记一笔待确认结算并立即落盘（第 52 轮起 persistPending 走 fsync 持久化序，见 writeFileAtomicDurable） */
   notePending(entry: PendingSettlement): void {
     this.pending.set(entry.txHash.toLowerCase(), entry)
     this.persistPending()
@@ -401,22 +623,193 @@ export class Stage4Ledger {
     if (this.pending.delete(txHash.toLowerCase())) this.persistPending()
   }
 
-  /** B5：读盘上遗留的待确认结算（文件缺失/损坏按空账本处理，不阻断启动） */
-  loadPending(): PendingSettlement[] {
-    try {
-      if (!existsSync(this.pendingPath)) return []
-      const rows = JSON.parse(readFileSync(this.pendingPath, 'utf8')) as PendingSettlement[]
-      this.pending = new Map(rows.map((r) => [r.txHash.toLowerCase(), r]))
-      return rows
-    } catch {
-      return []
+  /**
+   * 第 50 轮：单行全字段 schema 校验——账本条目的每个必填字段逐一
+   * 验类型/存在，任一不符即按账本损坏失败关闭。第 48 轮 P1-3 的
+   * 浅校验只验 txHash/chainId 两项，缺腿数/缺签名量/缺摘要的半残
+   * 条目会被放行、到恢复确认时才爆，且爆点远离损坏源。
+   *
+   * 第 52 轮 B3：在类型校验之上补语义校验（字段齐全 ≠ 语义合法）：
+   * - txHash / takerDigest 必须是 0x + 64 位 hex（交易哈希与
+   *   bytes32 摘要的固定形态）；
+   * - chainId 必须为正整数且 ∈ CHAINS（本运行器的测试网白名单，
+   *   与「只允许测试网链」的既有门禁同一集合）；
+   * - pair 必须 ∈ TRADE_PAIRS（运行器周期轮转的已知交易对集合，
+   *   创建点 probeSettlement 传入的 pair 只来自该轮转）；
+   * - legs 必须为整数且 ≥1（创建点 legs = attempt.legsKept：已
+   *   提交结算的保留腿数，提交成功即至少 1 腿，0/负数/小数都
+   *   不可能由运行器自己写出）；
+   * - takerAmountIn 非 null 时必须为十进制整数字符串（wei 量，
+   *   创建点取签名订单的 amountIn 原串）；
+   * - notedAt 必须为正数（创建点恒为 Date.now() 毫秒）。
+   * 账本由运行器自产，上述每条都与创建点实际取值对齐，不会误杀
+   * 自产条目；手改/半写/串话的条目在此失败关闭，爆点即损坏点。
+   */
+  private static validatePendingRows(parsed: unknown, source: string): PendingSettlement[] {
+    if (!Array.isArray(parsed)) {
+      throw new PendingLedgerCorruptError(`${source}：内容不是待确认结算数组`)
     }
+    const HEX64 = /^0x[0-9a-fA-F]{64}$/
+    parsed.forEach((r, i) => {
+      const bad = (field: string) =>
+        new PendingLedgerCorruptError(`${source}：第 ${i} 行字段 ${field} 缺失、类型不符或值不合法`)
+      if (!r || typeof r !== 'object') throw bad('(整行)')
+      const row = r as Record<string, unknown>
+      if (typeof row.txHash !== 'string' || !HEX64.test(row.txHash)) throw bad('txHash')
+      if (
+        typeof row.chainId !== 'number' ||
+        !Number.isInteger(row.chainId) ||
+        !(CHAINS as readonly number[]).includes(row.chainId)
+      ) {
+        throw bad('chainId')
+      }
+      if (
+        typeof row.pair !== 'string' ||
+        !(TRADE_PAIRS as readonly string[]).includes(row.pair)
+      ) {
+        throw bad('pair')
+      }
+      if (typeof row.takerDigest !== 'string' || !HEX64.test(row.takerDigest)) {
+        throw bad('takerDigest')
+      }
+      if (typeof row.legs !== 'number' || !Number.isInteger(row.legs) || row.legs < 1) {
+        throw bad('legs')
+      }
+      if (
+        !(
+          row.takerAmountIn === null ||
+          (typeof row.takerAmountIn === 'string' && /^\d+$/.test(row.takerAmountIn))
+        )
+      ) {
+        throw bad('takerAmountIn')
+      }
+      if (
+        typeof row.notedAt !== 'number' ||
+        !Number.isFinite(row.notedAt) ||
+        row.notedAt <= 0
+      ) {
+        throw bad('notedAt')
+      }
+    })
+    return parsed as PendingSettlement[]
+  }
+
+  /** 两行同 txHash 是否内容一致（逐字段比对，与键序无关） */
+  private static samePendingContent(a: PendingSettlement, b: PendingSettlement): boolean {
+    return (
+      a.chainId === b.chainId &&
+      a.pair === b.pair &&
+      lc(a.takerDigest) === lc(b.takerDigest) &&
+      a.legs === b.legs &&
+      a.takerAmountIn === b.takerAmountIn &&
+      a.notedAt === b.notedAt
+    )
+  }
+
+  /**
+   * B5：读盘上遗留的待确认结算。第 48 轮 P1-3 定版：文件不存在 =
+   * 空账本（正常）；文件存在但解析失败/形状不对 = 抛
+   * PendingLedgerCorruptError 失败关闭——账本里是已提交未确认的
+   * 结算，读不懂绝不能静默当空账本继续跑。
+   *
+   * 第 50 轮补三处（第 48 轮复审 P1/P2）：
+   * - **首次创建崩溃窗**：persistPending 先写 `.tmp` 再 rename，
+   *   进程若被 SIGKILL 卡在两者之间，主文件尚不存在而 `.tmp`
+   *   遗留——旧实现直接返回空账本，第一笔已记账结算就此丢失。
+   *   主文件缺失时改读遗留 `.tmp`：经全字段校验合法才采用，并
+   *   rename 愈合文件布局；校验不过按账本损坏失败关闭。
+   * - **全字段校验**：validatePendingRows 逐字段验，不再只验两项。
+   * - **同哈希重复条目**：内容相同则合并一条；内容冲突（同哈希
+   *   两套说法）抛 PendingLedgerCorruptError，禁止 Map 静默覆盖。
+   */
+  loadPending(): PendingSettlement[] {
+    let raw: string | null = null
+    let source = '恢复账本主文件'
+    let adoptTmp = false
+    if (existsSync(this.pendingPath)) {
+      raw = readFileSync(this.pendingPath, 'utf8')
+    } else if (existsSync(`${this.pendingPath}.tmp`)) {
+      raw = readFileSync(`${this.pendingPath}.tmp`, 'utf8')
+      source = '恢复账本 .tmp 遗留文件（主文件缺失，首次创建崩溃窗）'
+      adoptTmp = true
+    }
+    if (raw === null) return []
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch (e) {
+      throw new PendingLedgerCorruptError(
+        `${source} JSON 解析失败：${e instanceof Error ? e.message : String(e)}`,
+      )
+    }
+    const rows = Stage4Ledger.validatePendingRows(parsed, source)
+    if (adoptTmp) {
+      // .tmp 内容已验真：rename 愈合布局，后续 persistPending 回到
+      // 主文件口径。愈合失败不拦恢复——数据已在手、已在内存，
+      // 下一次落盘仍会重写主文件。
+      try {
+        renameSync(`${this.pendingPath}.tmp`, this.pendingPath)
+      } catch {
+        // 忽略：见上
+      }
+    }
+    for (const r of rows) {
+      const key = r.txHash.toLowerCase()
+      const prev = this.pending.get(key)
+      if (prev && !Stage4Ledger.samePendingContent(prev, r)) {
+        throw new PendingLedgerCorruptError(
+          `txHash ${r.txHash} 存在内容冲突的重复条目（同哈希异内容，拒绝静默覆盖）`,
+        )
+      }
+      this.pending.set(key, r)
+    }
+    return [...this.pending.values()]
+  }
+
+  /** 第 48 轮：内存账本快照（隔离对账读遗留待确认结算用，不再回读磁盘） */
+  pendingEntries(): PendingSettlement[] {
+    return [...this.pending.values()]
+  }
+
+  /**
+   * 第 50 轮 P2：跨进程幂等判重——metrics JSONL 里是否已有该
+   * txHash 的 probe 确认记录行。确认记账顺序是「先写 probe 行、
+   * 再清 pending」（第 48 轮 P2），进程恰好死在两者之间时，重启
+   * 后内存 settlements 是空的、只查内存的旧判重会把这笔再确认
+   * 一遍并重复追加 probe 行，下游按行汇总即双计。metrics 文件
+   * 是落盘事实，判重以它兜底。文件不存在或个别行是坏 JSON
+   * （半写行）按「无记录」跳过：判重只防重复，读不通不能反过
+   * 来把恢复堵死（账本损坏的失败关闭判定在 loadPending）。
+   */
+  hasProbeRecord(txHash: string): boolean {
+    if (!existsSync(this.metricsPath)) return false
+    const want = txHash.toLowerCase()
+    for (const line of readFileSync(this.metricsPath, 'utf8').split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const row = JSON.parse(line) as { kind?: unknown; txHash?: unknown }
+        if (
+          row.kind === 'probe' &&
+          typeof row.txHash === 'string' &&
+          row.txHash.toLowerCase() === want
+        ) {
+          return true
+        }
+      } catch {
+        // 坏行跳过，不影响其余行的判重
+      }
+    }
+    return false
   }
 
   private persistPending(): void {
-    const tmp = `${this.pendingPath}.tmp`
-    writeFileSync(tmp, JSON.stringify([...this.pending.values()], null, 2))
-    renameSync(tmp, this.pendingPath)
+    // 第 52 轮 B2：走 fsync 持久化序（writeFileAtomicDurable）——
+    // 恢复账本里是已提交未确认的结算，掉电也不能丢；saveState 的
+    // 运行状态只是汇总快照，维持原 tmp+rename 写法不在本轮面内。
+    writeFileAtomicDurable(
+      this.pendingPath,
+      JSON.stringify([...this.pending.values()], null, 2),
+    )
   }
 
   saveState(status: string): void {
@@ -520,10 +913,23 @@ function tracedBookAdapter(inner: BookAdapter, call: string): BookAdapter {
 }
 
 /**
- * 中继簿适配器：打点之外再套 30s 硬超时。产品 createRelayBookAdapter
- * 的 fetch 无任何超时——经 VM 代理的连接一旦挂死，拉簿永不返回，
- * 这正是阶段 4 卡死形态的头号候选点；运行器侧包裹后，超时按拉簿
- * 失败处理（双读记源错误、在场探针记无结论），周期不再被拖死。
+ * 中继拉簿的 fetch 实现（第 48 轮）：经产品适配器既有的 fetchFn
+ * 注入点传入，底层 fetch 带真实 AbortSignal.timeout——连接挂死时
+ * 30s 到点真正掐断 socket，而不是只在外层「等超时」放弃等待（第
+ * 45 轮复审 P2：旧包裹只是 wait-timeout，内层 fetch 不被取消、
+ * 挂死连接一直占着）。慢 ≠ 错：超时按拉簿失败/源无结论处理。
+ */
+const relayFetchWithTimeout: FetchFn = async (url: string) => {
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(RELAY_BOOK_TIMEOUT_MS),
+  })
+  return { ok: res.ok, status: res.status, json: () => res.json() }
+}
+
+/**
+ * 中继簿适配器：打点 + 外层硬超时兜底。内层 fetch 已带真实信号
+ * （见 relayFetchWithTimeout）；withTimeout 保留为第二道保险，防
+ * 适配器内部其他环节（json 解析等）挂死时周期被拖住。
  */
 function tracedRelayBookAdapter(inner: BookAdapter): BookAdapter {
   return {
@@ -586,7 +992,9 @@ export function buildChainCtx(
     ),
     nonceCursor: new Map(),
     nodeAdapter: tracedBookAdapter(createDirectNodeAdapter(cfg.nodeUrls[chainId]), 'book.node'),
-    relayAdapter: tracedRelayBookAdapter(createRelayBookAdapter(cfg.relayUrl)),
+    relayAdapter: tracedRelayBookAdapter(
+      createRelayBookAdapter(cfg.relayUrl, relayFetchWithTimeout),
+    ),
     chainReader: tracedChainReader(createChainStateReader(createViemChainTransport())),
   }
 }
@@ -597,9 +1005,22 @@ export interface RelayPostResult {
   ok: boolean
   status: number | null
   error?: string
+  /**
+   * 第 48 轮：错误分类——timeout（等不到回执）/ http（中继明确回
+   * 非 2xx）/ network（连接层失败）。慢 ≠ 错：timeout 时中继可能
+   * 已经接单，接受状态未知，见 unknown。
+   */
+  errorKind?: 'timeout' | 'http' | 'network'
+  /** 第 48 轮：请求超时导致接受状态未知（单可能已在中继簿里，在场探针须一并核查） */
+  unknown?: boolean
 }
 
-/** 只投中继（阶段 4 的唯一投递路径；形状与 generator.submitOrder 的中继半边一致） */
+/**
+ * 只投中继（阶段 4 的唯一投递路径；形状与 generator.submitOrder
+ * 的中继半边一致）。第 48 轮：traceCall 包裹范围扩到响应体读取
+ * （res.text() 也可能挂死，旧版在打点之外）；请求超时不下「未接
+ * 单」结论，标 unknown + errorKind=timeout 交在场探针认账。
+ */
 export async function postToRelay(
   relayUrl: string,
   gen: GeneratedOrder,
@@ -611,24 +1032,32 @@ export async function postToRelay(
     ...(sideOverride ? { side: sideOverride } : {}),
   }
   try {
-    const res = await traceCall('relay.postOrder', gen.chainId, () =>
-      fetch(`${relayUrl}/orders`, {
+    const out = await traceCall('relay.postOrder', gen.chainId, async () => {
+      const res = await fetch(`${relayUrl}/orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(30_000),
-      }),
-    )
-    if (!res.ok) {
-      return {
-        ok: false,
-        status: res.status,
-        error: `http ${res.status}: ${(await res.text()).slice(0, 160)}`,
+      })
+      if (!res.ok) {
+        return {
+          ok: false,
+          status: res.status,
+          error: `http ${res.status}: ${(await res.text()).slice(0, 160)}`,
+        }
       }
-    }
-    return { ok: true, status: res.status }
+      return { ok: true, status: res.status }
+    })
+    return out.ok ? out : { ...out, errorKind: 'http' as const }
   } catch (e) {
-    return { ok: false, status: null, error: e instanceof Error ? e.message : String(e) }
+    const timeout = isTimeoutError(e)
+    return {
+      ok: false,
+      status: null,
+      error: e instanceof Error ? e.message : String(e),
+      errorKind: timeout ? 'timeout' : 'network',
+      ...(timeout ? { unknown: true } : {}),
+    }
   }
 }
 
@@ -662,6 +1091,7 @@ async function genAndPost(
     role: spec.role,
     side: spec.side,
     relayOk: res.ok,
+    relayUnknown: res.unknown || undefined,
     relayStatus: res.status,
     tampered: Boolean(opts.tamper),
     amountIn: data ? data.amountIn : '0',
@@ -671,7 +1101,7 @@ async function genAndPost(
   ledger.posted.set(rec.digest, rec)
   ledger.counts[ctx.chainId].posted += 1
   if (res.ok && !opts.tamper) ledger.counts[ctx.chainId].relayAccepted += 1
-  ledger.line({ kind: 'posted', ...rec, relayError: res.error })
+  ledger.line({ kind: 'posted', ...rec, relayError: res.error, relayErrorKind: res.errorKind })
   if (opts.tamper) {
     // 篡改单被中继接受 = 零容忍（阶段 3 后 side 在签名内，改写副本
     // 验签必失败，中继应在入库处拒绝）
@@ -681,7 +1111,30 @@ async function genAndPost(
         digest: rec.digest,
       })
     }
-    log(`chain ${ctx.chainId} 篡改注入被中继拒绝（status=${res.status}），符合预期`)
+    if (res.unknown) {
+      // 发单超时：拒绝与否无从确认，记无结论失败行（不冒充已拒绝）
+      ledger.fail({
+        ts: Date.now(),
+        chainId: ctx.chainId,
+        kind: 'tamper-inject-unknown',
+        detail: `篡改注入发单超时，中继拒绝状态未知：${res.error ?? ''}`,
+        digest: rec.digest,
+      })
+    } else {
+      log(`chain ${ctx.chainId} 篡改注入被中继拒绝（status=${res.status}），符合预期`)
+    }
+  } else if (res.unknown) {
+    // 第 48 轮：发单超时 = 接受状态未知，不按投递失败下结论；
+    // 在场探针会连这批单一起查簿（在簿 = 已接单，不在簿 = 无结论）。
+    ledger.line({
+      kind: 'relay-acceptance-unknown',
+      ts: Date.now(),
+      chainId: ctx.chainId,
+      digest: rec.digest,
+      orderId: rec.orderId,
+      error: res.error,
+    })
+    log(`chain ${ctx.chainId} 订单投递中继超时，接受状态未知（digest=${rec.digest}），待在场探针认账`)
   } else if (!res.ok) {
     ledger.fail({
       ts: Date.now(),
@@ -694,7 +1147,12 @@ async function genAndPost(
   return { gen }
 }
 
-/** 在场探针：中继已接单的订单必须出现在中继簿里（按 orderId 查），否则按订单丢失计 */
+/**
+ * 在场探针：中继已接单的订单必须出现在中继簿里（按 orderId 查），
+ * 否则按订单丢失计。第 48 轮：发单超时「接受状态未知」的单也一并
+ * 查——在簿则认账为已接单（补记 relayAccepted 并留痕）；到点仍不
+ * 在簿只记无结论（中继可能压根没收到这张单），不按订单丢失 trip。
+ */
 async function probePresence(
   ledger: Stage4Ledger,
   ctx: ChainCtx,
@@ -703,7 +1161,7 @@ async function probePresence(
 ): Promise<void> {
   const want = gens.filter((g) => {
     const rec = ledger.posted.get(g.digest.toLowerCase())
-    return rec && rec.relayOk && !rec.tampered
+    return rec && (rec.relayOk || rec.relayUnknown) && !rec.tampered
   })
   if (want.length === 0) return
   const deadline = Date.now() + 60_000
@@ -730,10 +1188,43 @@ async function probePresence(
       return
     }
     const ids = new Set([...book.bids, ...book.asks].map((o) => o.orderId))
+    // 接受未知的单在簿出现 = 中继其实接了单，当场认账（只认一次）
+    for (const g of want) {
+      const rec = ledger.posted.get(g.digest.toLowerCase())
+      if (rec?.relayUnknown && ids.has(String(g.body.orderId))) {
+        rec.relayUnknown = undefined
+        rec.relayOk = true
+        ledger.counts[ctx.chainId].relayAccepted += 1
+        ledger.line({
+          kind: 'relay-unknown-resolved',
+          ts: Date.now(),
+          chainId: ctx.chainId,
+          digest: rec.digest,
+          orderId: rec.orderId,
+          result: 'present-in-book',
+        })
+        log(`chain ${ctx.chainId} 接受未知的订单已在中继簿认账（orderId=${rec.orderId}）`)
+      }
+    }
     missing = want.filter((g) => !ids.has(String(g.body.orderId)))
     if (missing.length > 0) await sleep(10_000)
   }
   for (const g of missing) {
+    const rec = ledger.posted.get(g.digest.toLowerCase())
+    if (rec?.relayUnknown) {
+      // 到点仍不在簿且接受状态未知：中继可能没收到，不下丢失结论
+      ledger.line({
+        kind: 'probe-inconclusive',
+        ts: Date.now(),
+        chainId: ctx.chainId,
+        pair,
+        reason: 'relay-acceptance-unknown-not-in-book',
+        digest: rec.digest,
+        orderId: rec.orderId,
+      })
+      log(`chain ${ctx.chainId} 接受未知的订单不在中继簿（无结论，不按丢失计）：orderId=${rec.orderId}`)
+      continue
+    }
     ledger.trip(
       'orderLost',
       `中继已接单但 60s 后仍不在中继簿：orderId=${String(g.body.orderId)} digest=${g.digest}`,
@@ -875,6 +1366,32 @@ function parseTradeEvents(
   return out
 }
 
+/**
+ * 回执事件多重集是否覆盖扫描发现的事件（第 52 轮 B1 对账）：键为
+ * (maker, taker, amountIn, amountOut)——扫描侧（getLogs 全量日志流）
+ * 与回执侧（单 tx 完整日志）是同一批链上事件的两种读法，同一笔交
+ * 易里扫描见到的每一笔成交都必须能在回执里找到一模一样的一笔
+ * （计数含重复：同参数两笔要各占一个名额）。回执是该 tx 的完整
+ * 日志集，正常情况下恒覆盖；不覆盖 = 两次 RPC 读不一致（或链重
+ * 组），按未验真处理，不认回。
+ */
+function tradeEventsCover(
+  receiptEvents: ParsedTradeEvent[],
+  scanEvents: ParsedTradeEvent[],
+): boolean {
+  const key = (e: ParsedTradeEvent) =>
+    `${lc(e.maker)}|${lc(e.taker)}|${e.amountIn}|${e.amountOut}`
+  const counts = new Map<string, number>()
+  for (const e of receiptEvents) counts.set(key(e), (counts.get(key(e)) ?? 0) + 1)
+  for (const e of scanEvents) {
+    const k = key(e)
+    const left = counts.get(k) ?? 0
+    if (left <= 0) return false
+    counts.set(k, left - 1)
+  }
+  return true
+}
+
 const indexerFetchFn = async (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
@@ -923,6 +1440,27 @@ async function fetchReceiptWithGrace(
   }
 }
 
+/**
+ * taker 已成交量读取（主路径与恢复/对账路径共用，第 48 轮 P2）：
+ * 失败重试共 3 次（间隔同回执轮询），仍失败返回 null——调用方按
+ * 「结算状态未知」失败关闭，不许拿缺失读数当 0 或跳过核对。
+ */
+async function readFilledInWithRetry(
+  ctx: ChainCtx,
+  digest: string,
+): Promise<bigint | null> {
+  for (let attemptNo = 0; attemptNo < 3; attemptNo++) {
+    try {
+      return (await traceCall('rpc.orderFilledIn', ctx.chainId, () =>
+        ctx.settlementRead.orderFilledIn(digest),
+      )) as bigint
+    } catch {
+      if (attemptNo < 2) await sleep(RECEIPT_POLL_MS)
+    }
+  }
+  return null
+}
+
 /** 结算落账后立即跑回执探针 + 登记 settlement（索引器探针异步在后续周期复查） */
 async function probeSettlement(
   ledger: Stage4Ledger,
@@ -933,6 +1471,28 @@ async function probeSettlement(
   takerGen: GeneratedOrder,
 ): Promise<void> {
   const txHash = attempt.txHash!
+  const takerData = buildSignedOrderData(asRaw(takerGen), ctx.chainId)
+  // 第 48 轮 P1-1：txHash 一到手先落恢复账本，再去探回执——旧顺序
+  // 先等回执宽限（≤120s）才 notePending，进程若死在宽限窗口里，
+  // 这笔已提交结算就从记账里凭空消失。记账在前、探针在后；进程
+  // 中途死掉，下次启动/对账先复查这笔，不丢账。全部核完才在下方
+  // 「先写 probe 记录、再 confirmPending 清除」（P2 记账顺序）。
+  ledger.notePending({
+    txHash,
+    chainId: ctx.chainId,
+    pair,
+    takerDigest: takerGen.digest.toLowerCase(),
+    legs: attempt.legsKept,
+    takerAmountIn: takerData ? takerData.amountIn : null,
+    notedAt: Date.now(),
+  })
+  if (!takerData) {
+    ledger.trip(
+      'invalidSettle',
+      `结算状态未知：taker 订单签名重构失败，无签名量可核对超量（失败关闭）tx=${txHash}`,
+      { chainId: ctx.chainId, txHash, digest: takerGen.digest },
+    )
+  }
   const receipt = await fetchReceiptWithGrace(ctx, txHash)
   const rec: SettlementRecord = {
     txHash,
@@ -945,19 +1505,6 @@ async function probeSettlement(
     probe: { receipt: 'pending', eventsMatch: 'pending', indexer: 'pending' },
   }
   ledger.settlements.push(rec)
-  const takerData = buildSignedOrderData(asRaw(takerGen), ctx.chainId)
-  // B5：拿到 txHash 先落恢复账本再往下核——进程若在确认完成前死掉
-  // （VM 重启/被杀），下次启动先复查这笔（recoverPendingSettlements），
-  // 不让已提交结算从记账里凭空消失。全部核完才在下方 confirmPending 清除。
-  ledger.notePending({
-    txHash,
-    chainId: ctx.chainId,
-    pair,
-    takerDigest: takerGen.digest.toLowerCase(),
-    legs: attempt.legsKept,
-    takerAmountIn: takerData ? takerData.amountIn : null,
-    notedAt: Date.now(),
-  })
   if (!receipt) {
     rec.probe.receipt = 'fail'
     ledger.trip(
@@ -985,17 +1532,9 @@ async function probeSettlement(
   }
   rec.probe.eventsMatch = 'ok'
   // taker 已成交量不得超签名量（合约累计记账之外的第二道独立核对）
-  // B4：读数失败先重试，仍失败 = 结算状态未知 → 失败关闭，不降级放行
-  let filledIn: bigint | null = null
-  for (let attemptNo = 0; attemptNo < 3 && filledIn === null; attemptNo++) {
-    try {
-      filledIn = (await traceCall('rpc.orderFilledIn', ctx.chainId, () =>
-        ctx.settlementRead.orderFilledIn(takerGen.digest),
-      )) as bigint
-    } catch {
-      if (attemptNo < 2) await sleep(RECEIPT_POLL_MS)
-    }
-  }
+  // B4：读数失败重试 3 次（readFilledInWithRetry，与恢复路径同
+  // 一助手），仍失败 = 结算状态未知 → 失败关闭，不降级放行
+  const filledIn = await readFilledInWithRetry(ctx, takerGen.digest)
   if (filledIn === null) {
     ledger.trip(
       'invalidSettle',
@@ -1003,24 +1542,104 @@ async function probeSettlement(
       { chainId: ctx.chainId, txHash, digest: takerGen.digest },
     )
   }
-  if (takerData && filledIn > BigInt(takerData.amountIn)) {
+  if (filledIn! > BigInt(takerData!.amountIn)) {
     ledger.trip(
       'invalidSettle',
-      `taker 已成交量 ${filledIn} 超签名量 ${takerData.amountIn}：digest=${takerGen.digest}`,
+      `taker 已成交量 ${filledIn} 超签名量 ${takerData!.amountIn}：digest=${takerGen.digest}`,
       { chainId: ctx.chainId, txHash, digest: takerGen.digest },
     )
   }
-  ledger.confirmPending(txHash)
+  // 第 48 轮 P2 记账顺序：先落 probe 确认记录，再清恢复账本——
+  // 进程死在两者之间时，遗留 pending 会在下次启动被幂等复查
+  // （见 recoverPendingSettlements 的 already-confirmed 合并），
+  // 反之先清账本后写记录，死掉就两头都丢。
   ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
+  ledger.confirmPending(txHash)
+}
+
+/**
+ * 待确认结算的单笔链上确认（启动恢复与超时对账共用，第 48 轮）：
+ * 口径与 probeSettlement 完全一致——回执 status=1、成交事件数 ==
+ * 腿数、taker 已成交量不超签名量，均以链上为准。任一项状态未知
+ * 或不符 → 按 B4 失败关闭 trip。第 48 轮 P2 补齐：已成交量读取
+ * 与主路径同等 3 次重试；takerAmountIn 缺失（记账时签名重构曾
+ * 失败）不得再当「可跳过核对」——无签名量就无法排除超量成交，
+ * 按结算状态未知失败关闭。
+ */
+async function confirmPendingEntry(
+  ledger: Stage4Ledger,
+  ctx: ChainCtx,
+  entry: PendingSettlement,
+  origin: string,
+): Promise<SettlementRecord> {
+  const receipt = await fetchReceiptWithGrace(ctx, entry.txHash)
+  if (!receipt) {
+    ledger.trip(
+      'invalidSettle',
+      `${origin}：结算状态未知，宽限 ${RECEIPT_GRACE_MS / 1000}s 内未取得回执（B4 失败关闭）tx=${entry.txHash}`,
+      { chainId: entry.chainId, txHash: entry.txHash },
+    )
+  }
+  if (receipt!.status !== 1) {
+    ledger.trip('invalidSettle', `${origin}：结算 tx 回执 status=${receipt!.status} tx=${entry.txHash}`, {
+      chainId: entry.chainId,
+      txHash: entry.txHash,
+    })
+  }
+  const events = parseTradeEvents(receipt!, ctx.chainCfg.contracts.settlement)
+  if (events.length !== entry.legs) {
+    ledger.trip(
+      'invalidSettle',
+      `${origin}：成交事件数 ${events.length} != 撮合腿数 ${entry.legs} tx=${entry.txHash}`,
+      { chainId: entry.chainId, txHash: entry.txHash },
+    )
+  }
+  if (entry.takerAmountIn === null) {
+    ledger.trip(
+      'invalidSettle',
+      `${origin}：结算状态未知，待确认记录缺 taker 签名量，无法核对超量成交（失败关闭）tx=${entry.txHash}`,
+      { chainId: entry.chainId, txHash: entry.txHash, digest: entry.takerDigest },
+    )
+  }
+  const filledIn = await readFilledInWithRetry(ctx, entry.takerDigest)
+  if (filledIn === null) {
+    ledger.trip(
+      'invalidSettle',
+      `${origin}：结算状态未知，taker 已成交量读取重试后仍失败（B4 失败关闭）tx=${entry.txHash}`,
+      { chainId: entry.chainId, txHash: entry.txHash, digest: entry.takerDigest },
+    )
+  }
+  if (filledIn! > BigInt(entry.takerAmountIn!)) {
+    ledger.trip(
+      'invalidSettle',
+      `${origin}：taker 已成交量 ${filledIn} 超签名量 ${entry.takerAmountIn} tx=${entry.txHash}`,
+      { chainId: entry.chainId, txHash: entry.txHash, digest: entry.takerDigest },
+    )
+  }
+  return {
+    txHash: entry.txHash,
+    chainId: entry.chainId,
+    pair: entry.pair,
+    takerDigest: entry.takerDigest,
+    legs: entry.legs,
+    settledAt: entry.notedAt,
+    events,
+    probe: { receipt: 'ok', eventsMatch: 'ok', indexer: 'pending' },
+  }
 }
 
 /**
  * B5 启动恢复：进新周期前先复查上次进程遗留的待确认结算，全部
- * 确认完才开跑。复查口径与 probeSettlement 完全一致（回执
- * status=1、成交事件数 == 腿数、taker 已成交量不超签名量，均以
- * 链上为准）；任一笔状态未知或不符 → 按 B4 失败关闭 trip 停机，
- * 宁可不开跑也不丢账。确认的结算并入本轮 settlements/计数并从
- * 恢复账本清除，索引器探针按 pending 在后续周期照常复查。
+ * 确认完才开跑（单笔确认走 confirmPendingEntry，口径见其注释）。
+ * 第 48 轮 P2：本轮 settlements 里已有同 txHash 的确认记录时按
+ * 幂等合并处理（只清账本、不重复计数）；确认记账顺序定版为
+ * 先写 probe/恢复记录、再清 pending——死在中间只会留下一笔可
+ * 幂等复查的遗留，不会两头都丢。恢复账本损坏在此抛
+ * PendingLedgerCorruptError，由启动路径失败关闭（P1-3）。
+ * 第 50 轮 P2：「已有确认记录」的判重补上落盘口径——除内存
+ * settlements 外再查 metrics 里既有的 probe 记录行（hasProbeRecord），
+ * 进程死在「probe 行已写、pending 未清」时重启不再重复确认、
+ * 不再重复追加 probe 行。
  */
 export async function recoverPendingSettlements(
   ledger: Stage4Ledger,
@@ -1037,54 +1656,25 @@ export async function recoverPendingSettlements(
         txHash: entry.txHash,
       })
     }
-    const receipt = await fetchReceiptWithGrace(ctx!, entry.txHash)
-    if (!receipt) {
-      ledger.trip(
-        'invalidSettle',
-        `恢复复查：结算状态未知，宽限 ${RECEIPT_GRACE_MS / 1000}s 内未取得回执（B4 失败关闭）tx=${entry.txHash}`,
-        { chainId: entry.chainId, txHash: entry.txHash },
-      )
-    }
-    if (receipt!.status !== 1) {
-      ledger.trip('invalidSettle', `恢复复查：结算 tx 回执 status=${receipt!.status} tx=${entry.txHash}`, {
+    if (
+      ledger.settlements.some((s) => lc(s.txHash) === lc(entry.txHash)) ||
+      ledger.hasProbeRecord(entry.txHash)
+    ) {
+      ledger.line({
+        kind: 'recovery',
+        ts: Date.now(),
         chainId: entry.chainId,
         txHash: entry.txHash,
+        result: 'already-confirmed',
       })
+      ledger.confirmPending(entry.txHash)
+      continue
     }
-    const events = parseTradeEvents(receipt!, ctx!.chainCfg.contracts.settlement)
-    if (events.length !== entry.legs) {
-      ledger.trip(
-        'invalidSettle',
-        `恢复复查：成交事件数 ${events.length} != 撮合腿数 ${entry.legs} tx=${entry.txHash}`,
-        { chainId: entry.chainId, txHash: entry.txHash },
-      )
-    }
-    if (entry.takerAmountIn) {
-      const filledIn = (await traceCall('rpc.orderFilledIn', entry.chainId, () =>
-        ctx!.settlementRead.orderFilledIn(entry.takerDigest),
-      )) as bigint
-      if (filledIn > BigInt(entry.takerAmountIn)) {
-        ledger.trip(
-          'invalidSettle',
-          `恢复复查：taker 已成交量 ${filledIn} 超签名量 ${entry.takerAmountIn} tx=${entry.txHash}`,
-          { chainId: entry.chainId, txHash: entry.txHash, digest: entry.takerDigest },
-        )
-      }
-    }
-    const rec: SettlementRecord = {
-      txHash: entry.txHash,
-      chainId: entry.chainId,
-      pair: entry.pair,
-      takerDigest: entry.takerDigest,
-      legs: entry.legs,
-      settledAt: entry.notedAt,
-      events,
-      probe: { receipt: 'ok', eventsMatch: 'ok', indexer: 'pending' },
-    }
+    const rec = await confirmPendingEntry(ledger, ctx!, entry, '恢复复查')
     ledger.settlements.push(rec)
     ledger.counts[entry.chainId].settlements += 1
     ledger.counts[entry.chainId].legs += entry.legs
-    ledger.confirmPending(entry.txHash)
+    ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
     ledger.line({
       kind: 'recovery',
       ts: Date.now(),
@@ -1092,9 +1682,180 @@ export async function recoverPendingSettlements(
       txHash: entry.txHash,
       result: 'confirmed',
     })
-    ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
+    ledger.confirmPending(entry.txHash)
     log(`恢复确认结算 tx=${entry.txHash}（chain ${entry.chainId}，${entry.legs} 腿）`)
   }
+}
+
+/**
+ * 第 48 轮 P1-2 超时对账：某链周期被 420s 硬超时打断后，被放弃的
+ * 在飞撮合可能迟到广播上链而运行器毫无记录。本函数在该链提交
+ * 任何新单之前先把账对清：① 内存恢复账本里本链的待确认结算逐
+ * 笔链上确认（confirmPendingEntry，口径同启动恢复）；② 从超时
+ * 周期开始的区块起扫描 Settlement 成交事件，把涉及本运行器
+ * maker/taker 的未知 txHash 认回来记账计数。扫描/确认失败向上
+ * 抛（调用方保隔离状态、本轮不对该链提新单）；确认中发现不符
+ * 按失败关闭 trip。对账能认回的是「已上链的成交」；迟到的单若
+ * 还没成交，它仍在 ledger.posted 与中继簿里，后续周期自然覆盖。
+ * 第 50 轮 P1：事件扫描发现的迟到成交若回执在宽限内不可验真
+ * （取不到或 status≠1），对账不得报 complete——留痕后抛错保
+ * 隔离、下周期重试，堵住「未验真的迟到成交被对完账放行」的洞。
+ */
+export async function reconcileAfterTimeout(
+  ledger: Stage4Ledger,
+  cfg: Stage4Config,
+  ctx: ChainCtx,
+  fromBlock: number,
+): Promise<void> {
+  void cfg
+  // ① 本链遗留待确认结算先确认完（第 50 轮：判重同恢复路径，
+  // 内存 settlements + metrics 落盘 probe 记录双查，不重复记账）
+  for (const entry of ledger.pendingEntries()) {
+    if (entry.chainId !== ctx.chainId) continue
+    if (
+      ledger.settlements.some((s) => lc(s.txHash) === lc(entry.txHash)) ||
+      ledger.hasProbeRecord(entry.txHash)
+    ) {
+      ledger.confirmPending(entry.txHash)
+      continue
+    }
+    const rec = await confirmPendingEntry(ledger, ctx, entry, '超时对账')
+    ledger.settlements.push(rec)
+    ledger.counts[entry.chainId].settlements += 1
+    ledger.counts[entry.chainId].legs += entry.legs
+    ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
+    ledger.line({
+      kind: 'reconcile',
+      ts: Date.now(),
+      chainId: entry.chainId,
+      txHash: entry.txHash,
+      result: 'pending-confirmed',
+    })
+    ledger.confirmPending(entry.txHash)
+  }
+  // ② 事件扫描认回迟到广播的成交（fromBlock 为 0/过旧时收敛到最近 2000 块）
+  const latest = await ctx.provider.getBlockNumber()
+  const scanFrom = fromBlock > 0 && latest - fromBlock <= 2000 ? fromBlock : Math.max(0, latest - 2000)
+  const logs = await traceCall('chain.getLogs', ctx.chainId, () =>
+    ctx.provider.getLogs({
+      address: ctx.chainCfg.contracts.settlement,
+      fromBlock: scanFrom,
+      toBlock: 'latest',
+    }),
+  )
+  const ours = new Set([lc(ctx.maker.address), lc(ctx.taker.address)])
+  const seenTx = new Set(ledger.settlements.map((s) => lc(s.txHash)))
+  const lateTxHashes: string[] = []
+  // 第 52 轮 B1：扫描侧每笔成交事件按 tx 留存（maker/taker/双量），
+  // 供下方与回执解析事件做多重集对账——只记 txHash 时回执那边
+  // 「status=1 且事件对不上」无从发现。
+  const scanEventsByTx = new Map<string, ParsedTradeEvent[]>()
+  for (const lg of logs) {
+    try {
+      const parsed = settleIface.parseLog({ topics: [...lg.topics], data: lg.data })
+      if (
+        parsed &&
+        (parsed.name === 'TradeSettled' || parsed.name === 'TradeSettledWithGasReimburse') &&
+        (ours.has(lc(String(parsed.args.maker))) || ours.has(lc(String(parsed.args.taker))))
+      ) {
+        const key = lc(lg.transactionHash)
+        if (!seenTx.has(key)) {
+          seenTx.add(key)
+          lateTxHashes.push(lg.transactionHash)
+        }
+        const ev: ParsedTradeEvent = {
+          maker: String(parsed.args.maker),
+          taker: String(parsed.args.taker),
+          amountIn: BigInt(parsed.args.amountIn).toString(),
+          amountOut: BigInt(parsed.args.amountOut).toString(),
+        }
+        const arr = scanEventsByTx.get(key)
+        if (arr) arr.push(ev)
+        else scanEventsByTx.set(key, [ev])
+      }
+    } catch {
+      // 非 Settlement 成交事件，忽略（与 parseTradeEvents 同口径）
+    }
+  }
+  let lateRecovered = 0
+  const unverifiedLate: string[] = []
+  for (const txHash of lateTxHashes) {
+    const receipt = await fetchReceiptWithGrace(ctx, txHash)
+    if (!receipt || receipt.status !== 1) {
+      ledger.line({
+        kind: 'reconcile',
+        ts: Date.now(),
+        chainId: ctx.chainId,
+        txHash,
+        result: 'late-tx-unverified',
+        detail: `迟到成交事件的回执${receipt ? ` status=${receipt.status}` : '宽限内未取得'}，只留痕不计数`,
+      })
+      unverifiedLate.push(txHash)
+      continue
+    }
+    const events = parseTradeEvents(receipt, ctx.chainCfg.contracts.settlement)
+    // 第 52 轮 B1：status=1 只说明交易成功，不等于扫描发现的成交
+    // 已在回执里验真——回执解析为空、或解析事件与扫描发现的事件
+    // 多重集对不上（RPC 两次读取不一致/链重组），都按未验真处理：
+    // 留痕并进 unverifiedLate（下方 incomplete 抛错保隔离），不计数。
+    const scanEvents = scanEventsByTx.get(lc(txHash)) ?? []
+    if (events.length === 0 || !tradeEventsCover(events, scanEvents)) {
+      ledger.line({
+        kind: 'reconcile',
+        ts: Date.now(),
+        chainId: ctx.chainId,
+        txHash,
+        result: 'late-tx-unverified',
+        detail: `迟到成交回执 status=1 但事件对账不通过（回执解析 ${events.length} 笔、扫描发现 ${scanEvents.length} 笔，多重集未覆盖扫描发现），只留痕不计数`,
+      })
+      unverifiedLate.push(txHash)
+      continue
+    }
+    ledger.counts[ctx.chainId].settlements += 1
+    ledger.counts[ctx.chainId].legs += events.length
+    lateRecovered += 1
+    ledger.line({
+      kind: 'reconcile',
+      ts: Date.now(),
+      chainId: ctx.chainId,
+      txHash,
+      result: 'late-settlement-recovered',
+      legs: events.length,
+      events,
+    })
+    log(`超时对账认回迟到成交 tx=${txHash}（chain ${ctx.chainId}，${events.length} 腿）`)
+  }
+  // 第 50 轮 P1：有迟到成交没验真回执时，对账不完整——绝不报
+  // complete。旧实现记一行 late-tx-unverified 就 continue、最后照
+  // 报 complete，调用方据此删隔离：一笔只靠事件扫描发现、回执当
+  // 时不可见的迟到成交就被「对完账」放行，再无人复查。现改为
+  // 留痕后抛错（普通错误，非零容忍 trip）：调用方保隔离、本轮
+  // 不对本链提新单，下一周期重新对账——回执届时可见即认回，
+  // 持续不可见则隔离持续保留（失败关闭）。自家已 notePending 的
+  // 结算不走这条：它们在上方 ① 经 confirmPendingEntry 确认，
+  // 回执不可见本就 trip 失败关闭，语义不变。
+  if (unverifiedLate.length > 0) {
+    ledger.line({
+      kind: 'reconcile',
+      ts: Date.now(),
+      chainId: ctx.chainId,
+      result: 'incomplete-unverified-late-tx',
+      fromBlock: scanFrom,
+      unverifiedLate,
+      detail: '存在回执未验真的迟到成交，对账不完整：不报 complete、保隔离、下周期重试（失败关闭）',
+    })
+    throw new Error(
+      `超时对账未完成：${unverifiedLate.length} 笔迟到成交回执未验真（${unverifiedLate.join(', ')}），隔离保留`,
+    )
+  }
+  ledger.line({
+    kind: 'reconcile',
+    ts: Date.now(),
+    chainId: ctx.chainId,
+    result: 'complete',
+    fromBlock: scanFrom,
+    lateRecovered,
+  })
 }
 
 /**
@@ -1837,12 +2598,12 @@ async function runChainCycle(
 ): Promise<void> {
   // 多腿市价剧本整周期替换标准流（每 8 周期一次）
   if (cycle % 8 === 7) {
-    const pair = TRADE_PAIRS[(cycle - 1) % TRADE_PAIRS.length]
+    const pair = cfg.pairs[(cycle - 1) % cfg.pairs.length]
     await scenarioMultileg(ledger, cfg, ctx, pair)
     ledger.line({ kind: 'cycle', ts: Date.now(), chainId: ctx.chainId, cycle, pair, mode: 'multileg' })
     return
   }
-  const pair = TRADE_PAIRS[(cycle - 1) % TRADE_PAIRS.length]
+  const pair = cfg.pairs[(cycle - 1) % cfg.pairs.length]
   const tryMakers = async (p: string): Promise<GeneratedOrder[]> => {
     const gens: GeneratedOrder[] = []
     for (const side of ['sell', 'buy'] as const) {
@@ -1860,11 +2621,14 @@ async function runChainCycle(
   }
   let usedPair = pair
   let makerGens = await tryMakers(pair)
-  if (makerGens.length === 0 && pair !== DEFAULT_PAIR) {
-    // 该对在该链未登记或钱包无可落锁余额：回落默认对保产出（与 soak 的预检跳过口径一致，差别是阶段 4 有计数目标）
-    log(`chain ${ctx.chainId} cycle ${cycle}: ${pair} 无单可发，回落 ${DEFAULT_PAIR}`)
-    usedPair = DEFAULT_PAIR
-    makerGens = await tryMakers(DEFAULT_PAIR)
+  // 回落对限本次配置子集内：子集含 DEFAULT_PAIR 用它（缺省配置行为
+  // 不变），否则用子集首对——不许发到 S4_PAIRS 之外（第 55 轮）。
+  const fallbackPair = cfg.pairs.includes(DEFAULT_PAIR) ? DEFAULT_PAIR : cfg.pairs[0]
+  if (makerGens.length === 0 && pair !== fallbackPair) {
+    // 该对在该链未登记或钱包无可落锁余额：回落保产出（与 soak 的预检跳过口径一致，差别是阶段 4 有计数目标）
+    log(`chain ${ctx.chainId} cycle ${cycle}: ${pair} 无单可发，回落 ${fallbackPair}`)
+    usedPair = fallbackPair
+    makerGens = await tryMakers(fallbackPair)
   }
   if (makerGens.length > 0) await probePresence(ledger, ctx, usedPair, makerGens)
 
@@ -1897,7 +2661,7 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
   const wallets = loadWallets(cfg.keysDir)
   const deployer = loadDeployer(cfg.keysDir)
   const ctxs = new Map<number, ChainCtx>()
-  for (const chainId of CHAINS) {
+  for (const chainId of cfg.chains) {
     ctxs.set(chainId, buildChainCtx(cfg, chainId, wallets, deployer))
   }
   const metricsPath = join(cfg.outDir, 'stage4-metrics.jsonl')
@@ -1921,16 +2685,18 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
     indexerUrl: cfg.indexerUrl || '(unset)',
     intervalSec: cfg.intervalSec,
     targetPerChain: cfg.targetPerChain,
-    chains: CHAINS.map((c) => ({
+    chains: cfg.chains.map((c) => ({
       chainId: c,
       settlement: getChainConfig(c)?.contracts.settlement,
       vault: getChainConfig(c)?.contracts.vault,
     })),
+    pairs: cfg.pairs,
   })
   ledger.saveState('running')
   log(
     `阶段 4 运行器启动：窗口 ${new Date(windowStart).toISOString()} → ${new Date(ledger.windowEndPlanned).toISOString()}，` +
-      `间隔 ${cfg.intervalSec}s，目标每链 ≥${cfg.targetPerChain} 单`,
+      `间隔 ${cfg.intervalSec}s，目标每链 ≥${cfg.targetPerChain} 单，` +
+      `链 ${cfg.chains.join('/')}，交易对 ${cfg.pairs.join('/')}`,
   )
   log(BUILD_NOTE)
   // B5：先复查遗留待确认结算，确认完才进新周期（失败关闭在此拦截）
@@ -1942,8 +2708,20 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
       ledger.saveState('zero-tolerance-triggered')
       return 3
     }
+    if (e instanceof PendingLedgerCorruptError) {
+      // 第 48 轮 P1-3：账本损坏 = 失败关闭（属零容忍类），与
+      // ZeroToleranceError 同路收尾：保全证据、状态标 triggered。
+      log(`启动恢复失败关闭（恢复账本损坏），停跑保全证据：${e.message}`)
+      ledger.zero.triggered = true
+      ledger.zero.detail = e.message
+      ledger.saveState('zero-tolerance-triggered')
+      return 3
+    }
     throw e
   }
+  // 第 48 轮 P1-2：被周期超时打断的链先进隔离——下一周期前先对账
+  // （reconcileAfterTimeout），对完账才许对该链提交新单。
+  const quarantine = new Map<number, { fromBlock: number; since: number }>()
   let stopping = false
   const onSig = () => {
     stopping = true
@@ -1958,10 +2736,47 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
       const cycle = ledger.cycles
       await processPendingActions(ledger)
       await processExpiryChecks(ledger, ctxs)
-      for (const chainId of CHAINS) {
+      for (const chainId of cfg.chains) {
+        const ctx = ctxs.get(chainId)!
+        const q = quarantine.get(chainId)
+        if (q) {
+          // 隔离中：先对账，对完账才恢复本链周期；对账失败保隔离、
+          // 本轮跳过本链（不提新单），下一周期继续对账。
+          try {
+            await withTimeout(
+              reconcileAfterTimeout(ledger, cfg, ctx, q.fromBlock),
+              RECHECK_TIMEOUT_MS,
+              `chain ${chainId} 超时对账`,
+            )
+            quarantine.delete(chainId)
+            ledger.line({
+              kind: 'quarantine-cleared',
+              ts: Date.now(),
+              chainId,
+              fromBlock: q.fromBlock,
+              quarantinedMs: Date.now() - q.since,
+            })
+            log(`chain ${chainId} 超时对账完成，隔离解除`)
+          } catch (e) {
+            if (e instanceof ZeroToleranceError) throw e
+            ledger.fail({
+              ts: Date.now(),
+              chainId,
+              kind: 'reconcile-error',
+              detail: `超时对账失败（保隔离，本轮不对本链提新单）：${e instanceof Error ? e.message.slice(0, 160) : String(e)}`,
+            })
+            continue
+          }
+        }
+        let startBlock = 0
+        try {
+          startBlock = await ctx.provider.getBlockNumber()
+        } catch {
+          startBlock = 0 // 取不到时对账侧会收敛扫描范围（最近 2000 块）
+        }
         try {
           await withTimeout(
-            runChainCycle(ledger, cfg, ctxs.get(chainId)!, cycle),
+            runChainCycle(ledger, cfg, ctx, cycle),
             CHAIN_CYCLE_TIMEOUT_MS,
             `chain ${chainId} cycle ${cycle}`,
           )
@@ -1973,6 +2788,19 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
             kind: 'cycle-error',
             detail: e instanceof Error ? e.message.slice(0, 200) : String(e),
           })
+          if (e instanceof CycleTimeoutError) {
+            // 硬超时取消不了已在飞的撮合：迟到广播可能随后上链。
+            // 本链进隔离，下一周期先对账认回，再许提新单。
+            quarantine.set(chainId, { fromBlock: startBlock, since: Date.now() })
+            ledger.line({
+              kind: 'quarantine',
+              ts: Date.now(),
+              chainId,
+              fromBlock: startBlock,
+              reason: e.message,
+            })
+            log(`chain ${chainId} 周期超时，进隔离状态：下一周期前先对账`)
+          }
         }
       }
       try {
@@ -2069,7 +2897,7 @@ export async function runCheck(cfg: Stage4Config): Promise<number> {
     hardFail = true
   }
   if (!hardFail) {
-    for (const chainId of CHAINS) {
+    for (const chainId of cfg.chains) {
       const ctx = buildChainCtx(cfg, chainId, wallets, deployer!)
       const info: Record<string, unknown> = {
         contracts: ctx.chainCfg.contracts,

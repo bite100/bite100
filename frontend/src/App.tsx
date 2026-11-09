@@ -11,6 +11,7 @@ import { MerkleAirdropClaim } from './components/MerkleAirdropClaim'
 import { Navigation, type Tab } from './components/Navigation'
 import { TopBar } from './components/TopBar'
 import { OtherPage } from './components/OtherPage'
+import { AiAccessPage } from './components/AiAccessPage'
 import { DataPage } from './components/DataPage'
 import { MarketsList } from './components/markets/MarketsList'
 import { AssetsPage } from './components/AssetsPage'
@@ -87,7 +88,7 @@ function App() {
       data: 'other',
     }
     if (t && legacy[t]) return legacy[t]
-    const valid: Tab[] = ['trade', 'markets', 'assets', 'other', 'bridge', 'govern', 'data']
+    const valid: Tab[] = ['trade', 'markets', 'assets', 'other', 'bridge', 'govern', 'data', 'ai']
     return valid.includes(t as Tab) ? (t as Tab) : 'trade'
   })
   const [governSub, setGovernSub] = useState<'governance' | 'contribution'>(() => {
@@ -168,7 +169,9 @@ function App() {
                     ? '跨链桥'
                     : activeTab === 'govern'
                       ? '治理与贡献'
-                      : '数据'
+                      : activeTab === 'ai'
+                        ? 'AI 接入'
+                        : '数据'
         }
         chainId={currentChainId}
         onChainChange={switchChain}
@@ -209,6 +212,7 @@ function App() {
             <OtherPage
               onOpenBridge={() => setActiveTab('bridge')}
               onOpenGovern={() => setActiveTab('govern')}
+              onOpenAi={() => setActiveTab('ai')}
               onOpenData={openData}
               account={account}
             />
@@ -285,6 +289,14 @@ function App() {
               <SubBar title="跨链桥" onBack={() => setActiveTab('other')} />
               <PageHead title="跨链桥" desc="通过 LayerZero 在链之间转移代币，资产到达目标链后可继续交易；发起转移需要连接钱包。" />
               <CrossChainBridge account={account} currentChainId={currentChainId} />
+            </>
+          )}
+
+          {activeTab === 'ai' && (
+            <>
+              <SubBar title="AI 接入" onBack={() => setActiveTab('other')} />
+              <PageHead title="AI 接入" desc="把你自己的 AI 通过 MCP 协议接到交易所，让它读盘口、下单、交易。当前为测试网阶段，向项目方申请令牌后接入。" />
+              <AiAccessPage />
             </>
           )}
 

@@ -1,26 +1,30 @@
 /**
- * 从节点 /api/trades 拉取成交并聚合成 OHLC K 线（供 KLineChart 使用）
- * 可选：通过 p2pWS 订阅 trade 实时追加/更新最后一根 K 线
+ * 拉取成交并聚合成 OHLC K 线（供 KLineChart 使用）。数据源第 51 轮
+ * （阶段 5 节点退役）由节点 /api/trades 改为链上索引（loadIndexerTrades，
+ * Envio Trade 事件）——聚合逻辑保留，只换数据入口（无节点设计 §5）；
+ * 索引是轮询源，故补 30 秒轮询刷新。可选：通过 p2pWS 订阅 trade 实时
+ * 追加/更新最后一根 K 线（浏览器 P2P 通道，非节点 API，保留）。
  *
- * 单位（第 28 轮）：节点 price 为 1e18 定点、amount 为 wei，本 hook 在归一化
- * 时统一经 fromScaled 换算为人类单位，并按 bar 累加成交量（base 数量合计）。
- * 数据源与聚合口径不变——仍是同一份 /api/trades 成交。
+ * 单位：索引展示行 price/amount 已是人类单位，直接聚合（第 28 轮起的
+ * 定点换算在 tradesDual 的展示换算里完成）。
  */
 import { useState, useEffect, useCallback } from 'react'
-import { nodeGet } from '../nodeClient'
+import { CHAIN_ID } from '../config'
+import { loadIndexerTrades } from '../services/tradesDual'
 import { p2pWS } from '../services/wsClient'
 import { fromScaled } from '../components/dashboard/tradeFormat'
 
 const DEFAULT_PAIR = 'TKA/TKB'
 const BAR_INTERVAL_SEC = 3600 // 1 小时一根 K 线
 const TRADES_LIMIT = 500
+const POLL_MS = 30000
 
 export interface TradeRecord {
   tradeId?: string
   pair?: string
-  /** 人类单位价格（已从节点定点换算） */
+  /** 人类单位价格 */
   price: number
-  /** 人类单位数量（已从 wei 换算） */
+  /** 人类单位数量 */
   amount: number
   timestamp: number
 }
@@ -35,7 +39,7 @@ export interface OHLCBar {
   volume: number
 }
 
-/** 把节点原始成交（定点/wei 字符串）归一化为人类单位记录；不可解析的价格记为 NaN 由聚合层过滤 */
+/** 把原始成交行（定点/wei 字符串）归一化为人类单位记录（供 p2pWS 实时行与单测使用）；不可解析的价格记为 NaN 由聚合层过滤 */
 export function normalizeTrade(raw: unknown): TradeRecord {
   const o: Record<string, unknown> =
     raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
@@ -82,12 +86,19 @@ export function useTradesOHLC(pair: string = DEFAULT_PAIR, intervalSec: number =
     setError(null)
     setLoading(true)
     try {
-      const { data } = await nodeGet<unknown>('/api/trades', {
-        pair,
-        limit: String(TRADES_LIMIT),
-      })
-      const list = Array.isArray(data) ? data : []
-      setBars(aggregateTradesToOHLC(list.map(normalizeTrade), intervalSec))
+      const outcome = await loadIndexerTrades(CHAIN_ID, pair, TRADES_LIMIT)
+      if (outcome.failed) throw new Error('链上索引暂不可达，成交数据暂不可用')
+      setBars(
+        aggregateTradesToOHLC(
+          outcome.trades.map((t) => ({
+            tradeId: t.key,
+            price: t.price,
+            amount: t.amount,
+            timestamp: t.timestamp,
+          })),
+          intervalSec,
+        ),
+      )
     } catch (e) {
       setBars([])
       setError(e instanceof Error ? e.message : String(e))
@@ -98,6 +109,9 @@ export function useTradesOHLC(pair: string = DEFAULT_PAIR, intervalSec: number =
 
   useEffect(() => {
     fetchTrades()
+    // 索引为轮询源：30 秒刷新一次（原节点路径靠单次拉取 + WS 追加）
+    const t = setInterval(fetchTrades, POLL_MS)
+    return () => clearInterval(t)
   }, [fetchTrades])
 
   // 实时成交：追加或更新最后一根 K 线（WS 与 REST 同构，同为定点/wei，同样换算）
