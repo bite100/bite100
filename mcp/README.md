@@ -114,6 +114,39 @@ npm test                                   # 单元测试（护栏/中继/工具
 npm run build && npm run e2e               # 真链自练：双链全环 + 负面用例（需要测试钥与少量测试网 gas）
 ```
 
+## 7. 公开入口形态（Workers，第 57 轮起）
+
+除上面的 stdio 形态外，本服务还有一个**公开 HTTPS 入口**（Cloudflare
+Workers），任何支持 MCP Streamable HTTP 的客户端都能远程接入：
+
+- 端点：`https://bit100-mcp.q3874758.workers.dev`（根路径 POST；
+  `GET /health` 免认证只回服务状态）。
+- 认证：每请求带 `Authorization: Bearer <你的 agent 令牌>`。令牌由
+  项目方按申请发放（申请制不变）；服务端只存哈希（D1 `agents` 表），
+  发放/停用/改限额都是改一行 SQL，不用重部署。
+- 工具面：只读 5 个 + `place_order` + `hard_cancel_order`，共 7 个。
+  `match_order` 暂未移植（撮合引擎的 Workers 适配在后续轮次），其余
+  护栏与 stdio 版完全一致：链/对白名单、单笔/每日/频率限额（计数在
+  D1）、全局急停（D1 `config.kill_switch` 置 `1` 或绑定
+  `KILL_SWITCH=1`）、审计只追加（D1 `audit_log`）。
+- AI 客户端配置（远程形态）：
+
+```json
+{
+  "mcpServers": {
+    "bit100": {
+      "url": "https://bit100-mcp.q3874758.workers.dev",
+      "headers": { "Authorization": "Bearer <你的 agent 令牌>" }
+    }
+  }
+}
+```
+
+- 运维（部署者）：`npm run deploy:worker` 重新部署（建 D1/迁移/上传/
+  写 secret/开子域一气呵成，脚本在 `worker/deploy.mjs`，经
+  custom.cloudflare 连接器）；`npm run smoke:worker` 对线上端点做
+  一次性令牌的真实客户端冒烟（结束时自动退役该令牌）。
+
 `npm run e2e` 会真实走完：挂单→吃单→结算→链上核对→部分成交→硬撤，
 并验证主网链被拒、白名单外交易对被拒、超限被拒、停用 agent 被拒、
 急停时写拒读通。
