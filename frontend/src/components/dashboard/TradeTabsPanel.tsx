@@ -15,6 +15,9 @@ import {
 } from '../../services/tradesDual'
 import { fromScaled, fmtPrice, fmtAmount, fmtDateTime } from './tradeFormat'
 import { DeliveryRecords } from '../bridge/DeliveryRecords'
+import { HardCancelAction } from '../HardCancelAction'
+import { createRelayBookAdapter, type FetchFn } from '../../services/dualread/adapters'
+import { RELAY_URL } from '../../config/relay'
 import type { Order, Trade } from '../../OrderBookSection'
 import type { Signer } from 'ethers'
 
@@ -97,6 +100,14 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
   const [tradesError, setTradesError] = useState(false)
   const [cancelLoading, setCancelLoading] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  /**
+   * 第 46 轮：节点不可用时「我的订单」回退中继簿（中继簿行 = 未成交
+   * 挂单，骑 dualread 的 createRelayBookAdapter；注入带 10s 超时的
+   * fetch——适配器的注入点本就是为此留的，超时骑平台
+   * AbortSignal.timeout，与 relayDualSend 同模式）。回退态下签名
+   * 撤单不可用，只给链上撤单（阶段 5 前置：节点停机也能撤单）。
+   */
+  const [ordersFromRelay, setOrdersFromRelay] = useState(false)
 
   const fetchMyOrders = useCallback(async () => {
     if (!account) {
@@ -111,8 +122,28 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
       })
       setMyOrders(Array.isArray(data) ? data : [])
       setNodeError(false)
+      setOrdersFromRelay(false)
     } catch {
-      setNodeError(true)
+      try {
+        const timedFetch: FetchFn = async (url: string) => {
+          const res = await fetch(url, {
+            signal:
+              typeof AbortSignal.timeout === 'function'
+                ? AbortSignal.timeout(10_000)
+                : undefined,
+          })
+          return { ok: res.ok, status: res.status, json: () => res.json() }
+        }
+        const book = await createRelayBookAdapter(RELAY_URL, timedFetch).fetchBook(CHAIN_ID, pair)
+        const mine = [...book.bids, ...book.asks].filter(
+          (r) => r.trader.toLowerCase() === account.toLowerCase(),
+        )
+        setMyOrders(mine)
+        setOrdersFromRelay(true)
+        setNodeError(false)
+      } catch {
+        setNodeError(true)
+      }
     }
   }, [account, pair])
 
@@ -296,15 +327,29 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
                 </td>
                 {withCancel && (
                   <td>
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      color="dark"
-                      onClick={() => handleCancel(o.orderId)}
-                      loading={cancelLoading === o.orderId}
-                    >
-                      撤单
-                    </Button>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {!ordersFromRelay && (
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="dark"
+                          onClick={() => handleCancel(o.orderId)}
+                          loading={cancelLoading === o.orderId}
+                        >
+                          撤单
+                        </Button>
+                      )}
+                      <HardCancelAction
+                        order={o}
+                        account={account}
+                        getSigner={getSigner}
+                        summary={`${o.side === 'buy' ? '买入' : '卖出'} ${fmtAmountCell(o.amount)} ${baseSymbol} @ ${fmtPriceCell(o.price)} ${quoteSymbol}`}
+                        onSettled={() => {
+                          void fetchMyOrders()
+                          void fetchBalances()
+                        }}
+                      />
+                    </div>
                   </td>
                 )}
               </tr>
@@ -341,10 +386,16 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
               {actionError}
             </Text>
           )}
+          {ordersFromRelay && account && (
+            <Text size="xs" c="dimmed" pb="xs">
+              节点服务暂时不可用，下面挂单来自中继簿（可能不全）。签名撤单不可用，可用「链上撤单」直接在链上释放锁定。
+            </Text>
+          )}
           {renderOrdersTable(openOrders, true)}
           {account && openOrders.length > 0 && (
             <Text size="xs" c="dimmed" pt="xs">
-              撤单只需钱包签名，不上链、不付 gas；已成交部分不受撤单影响。
+              撤单只需钱包签名，不上链、不付 gas；已成交部分不受撤单影响。「链上撤单」由钱包直接上链释放这张单锁住的余额（自付少量
+              gas），节点不可用时也能撤，释放后该单无法再成交。
             </Text>
           )}
         </Tabs.Panel>
