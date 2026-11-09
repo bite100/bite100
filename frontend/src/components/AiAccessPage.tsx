@@ -55,7 +55,7 @@ export function AiAccessPage() {
       <section className="card">
         <h3 className="ai-h">接入前提</h3>
         <ul className="ai-list">
-          <li>一个支持 MCP 的 AI 客户端（不限品牌，能添加 MCP 服务器即可）；</li>
+          <li>一个支持 MCP 的 AI 客户端（不限品牌，需支持以 HTTP 方式添加 MCP 服务器、并能自定义 Authorization 请求头）；</li>
           <li>一个测试钱包（练习专用，发放令牌时由项目方一并登记）；</li>
           <li>一个 agent 令牌（向项目方申请，见下面步骤 1）。</li>
         </ul>
@@ -75,6 +75,8 @@ export function AiAccessPage() {
             申请到的真实值。不同客户端的配置写法略有差别，以你客户端的说明为准，
             核心就是这两项：接入地址 + 你的令牌。
             <pre className="ai-code">{CONFIG_SAMPLE}</pre>
+            注：此示例按 Streamable HTTP 传输的常见写法给出；只能以本地命令方式
+            添加服务器、或不能自定义请求头的客户端，暂时接不上。
           </li>
           <li>
             <b>连通自检。</b>

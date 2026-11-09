@@ -89,6 +89,42 @@ describe('useTokenPrice', () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(1)
   })
 
+  it('第58轮：切换 token 时旧请求迟到返回不得写入新 token 的价格', async () => {
+    let resolveOld: (v: unknown) => void = () => {}
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      (url: unknown) => {
+        if (String(url).includes('ids=bitcoin')) {
+          return new Promise((resolve) => {
+            resolveOld = resolve
+          })
+        }
+        return Promise.resolve({
+          json: () =>
+            Promise.resolve({ ethereum: { usd: 3000, usd_24h_change: 2 } }),
+        })
+      },
+    )
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useTokenPrice(id, 0),
+      { initialProps: { id: 'bitcoin' } },
+    )
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    // 旧请求未回时切换 token：新请求应立即发出，不被旧在飞挡住
+    rerender({ id: 'ethereum' })
+    await waitFor(() => {
+      expect(result.current.price?.usd).toBe(3000)
+    })
+    // 旧 bitcoin 请求迟到返回（50000）：绝不能覆盖当前 ethereum 的价格
+    await act(async () => {
+      resolveOld({
+        json: () =>
+          Promise.resolve({ bitcoin: { usd: 50000, usd_24h_change: 9 } }),
+      })
+    })
+    expect(result.current.price?.usd).toBe(3000)
+    expect(result.current.error).toBeNull()
+  })
+
   it('exposes refetch that re-runs fetch', async () => {
     ;(globalThis.fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({
