@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Paper, Text, Select, NumberInput, Button, Stack, Slider, SegmentedControl } from '@mantine/core'
 import { ethers, Contract } from 'ethers'
-import { formatError, formatTokenAmount, getProvider } from '../../utils'
+import { formatError, formatTokenAmount, getProvider, withTimeout, BALANCE_READ_TIMEOUT_MS } from '../../utils'
 import { p2pOrderBroadcast } from '../../p2p/orderBroadcast'
 import { signOrder, generateOrderId, fetchOrderNonce } from '../../services/orderSigning'
 import { sideToSignedValue } from '../../services/orderSigningTypes'
@@ -135,10 +135,16 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         if (!provider) return
         const spendToken = side === 'sell' ? baseToken : quoteToken
         const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
-        const [avail, locked] = await Promise.all([
-          vault.availableBalance(account, spendToken) as Promise<bigint>,
-          (vault.locked(account, spendToken).catch(() => 0n) as Promise<bigint>),
-        ])
+        // 第 54 轮：与完整订单簿页同修——余额读取套应用层超时，钱包 RPC
+        // 卡住时不再无限等待，超时走下方 catch 清空（按读取失败处理）
+        const [avail, locked] = await withTimeout(
+          Promise.all([
+            vault.availableBalance(account, spendToken) as Promise<bigint>,
+            vault.locked(account, spendToken).catch(() => 0n) as Promise<bigint>,
+          ]),
+          BALANCE_READ_TIMEOUT_MS,
+          'vault balance',
+        )
         if (!cancelled) {
           setBalance(formatTokenAmount(avail))
           setAvailableWei(avail)
@@ -271,10 +277,16 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
         const spendToken = side === 'sell' ? baseToken : quoteToken
         const vaultRead = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
         const tokenRead = new Contract(spendToken, ERC20_ABI, provider)
-        const [availFresh, walletBal] = await Promise.all([
-          vaultRead.availableBalance(account, spendToken) as Promise<bigint>,
-          tokenRead.balanceOf(account) as Promise<bigint>,
-        ])
+        // 第 54 轮：提交前复核读同样套超时，RPC 卡住时明确报错而不是
+        // 永远停在「提交中」
+        const [availFresh, walletBal] = await withTimeout(
+          Promise.all([
+            vaultRead.availableBalance(account, spendToken) as Promise<bigint>,
+            tokenRead.balanceOf(account) as Promise<bigint>,
+          ]),
+          BALANCE_READ_TIMEOUT_MS,
+          'vault balance precheck',
+        )
         const vaultWrite = new Contract(VAULT_ADDRESS, VAULT_ABI, signer)
         const tokenWrite = new Contract(spendToken, ERC20_ABI, signer)
         await ensureVaultBalance({
@@ -291,7 +303,12 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
               const tx = await vaultWrite.deposit(spendToken, amt)
               await tx.wait()
             },
-            available: () => vaultRead.availableBalance(account, spendToken) as Promise<bigint>,
+            available: () =>
+              withTimeout(
+                vaultRead.availableBalance(account, spendToken) as Promise<bigint>,
+                BALANCE_READ_TIMEOUT_MS,
+                'vault balance recheck',
+              ),
           },
           onStep: (s) => setTopUpStep(s),
         })

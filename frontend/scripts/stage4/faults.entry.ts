@@ -11,6 +11,7 @@ export {
   recoverPendingSettlements,
   reconcileAfterTimeout,
   writeFileAtomicDurable,
-  isFsyncDowngradeError,
+  isFileFsyncDowngradeError,
+  isDirFsyncDowngradeError,
 } from './engine'
 export { SETTLEMENT_ABI } from '../../src/services/settlementAbi'

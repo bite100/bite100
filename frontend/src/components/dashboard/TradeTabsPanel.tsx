@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Tabs, Text } from '@mantine/core'
 import { Contract } from 'ethers'
-import { formatTokenAmount, getProvider } from '../../utils'
+import { formatTokenAmount, getProvider, withTimeout, BALANCE_READ_TIMEOUT_MS } from '../../utils'
 import { ERC20_ABI, VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from '../../config'
 import { INDEXER_ENABLED } from '../../config/indexer'
 import { DEFAULT_PAIR, getPairTokens } from '../../config/pairs'
@@ -134,12 +134,19 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
         [quoteSymbol, pairTokens.quote],
       ] as const) {
         const token = new Contract(addr, ERC20_ABI, provider)
-        const [w, v, va, vl] = await Promise.all([
-          token.balanceOf(account),
-          vault.balanceOf(addr, account).catch(() => 0n),
-          vault.availableBalance(account, addr).catch(() => 0n),
-          vault.locked(account, addr).catch(() => 0n),
-        ])
+        // 第 54 轮：与完整订单簿页同修——整组余额读取套应用层超时；
+        // .catch 只兜得住 reject，兜不住 RPC 卡死（永不落定），超时后
+        // 走外层 catch 按读取失败清空，不再让旧余额永远挂在界面上
+        const [w, v, va, vl] = await withTimeout(
+          Promise.all([
+            token.balanceOf(account),
+            vault.balanceOf(addr, account).catch(() => 0n),
+            vault.availableBalance(account, addr).catch(() => 0n),
+            vault.locked(account, addr).catch(() => 0n),
+          ]),
+          BALANCE_READ_TIMEOUT_MS,
+          'vault balances',
+        )
         rows.push({
           symbol,
           wallet: formatTokenAmount(w),

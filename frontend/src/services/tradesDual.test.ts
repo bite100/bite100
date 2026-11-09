@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest'
 import {
   TRADES_QUERY,
   buildTradesQueryVariables,
+  fetchIndexerChainProgress,
   fetchIndexerTrades,
   indexerTradeToDisplay,
   loadIndexerTrades,
@@ -178,7 +179,7 @@ describe('loadIndexerTrades（第 51 轮单源口径）', () => {
       fetchFn: ((_url: string, init: { signal?: AbortSignal }) => {
         seenSignal = init.signal
         return new Promise(() => {})
-      }) as never,
+      })
     })
     expect(outcome.failed).toBe(true)
     expect(outcome.trades).toEqual([])
@@ -338,6 +339,47 @@ describe('第 52 轮 A3：索引响应诚实性（缺失 data + 滞后标注）'
       }),
     })
     expect(weird.stale).toBe(false)
+  })
+
+  it('第 54 轮：块高字段形态不合（null / 空串）→ 进度判不出，不被 Number() 压成 0 误报/漏报', async () => {
+    const metaFetch = (meta: unknown) => dispatchFetch(meta)
+    // progressBlock=null：旧实现 Number(null)=0 → 块差=整条链高 → 误标 stale；
+    // 新实现整个进度返回 null → stale=false、failed=false
+    const nullProgress = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn: metaFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: null, sourceBlock: 1000, isReady: true }] },
+      }),
+    })
+    expect(nullProgress.failed).toBe(false)
+    expect(nullProgress.stale).toBe(false)
+    // 直查进度：sourceBlock=null（旧实现压成 0 → 块差 0 漏报）→ null
+    const nullSource = await fetchIndexerChainProgress(
+      11155111,
+      metaFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: 900, sourceBlock: null, isReady: true }] },
+      }) as never,
+      'https://idx.example/graphql',
+    )
+    expect(nullSource).toBeNull()
+    // 空串同样判不出
+    const emptyStr = await fetchIndexerChainProgress(
+      11155111,
+      metaFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: '', sourceBlock: 1000, isReady: true }] },
+      }) as never,
+      'https://idx.example/graphql',
+    )
+    expect(emptyStr).toBeNull()
+    // 非空十进制数字字符串是合法形态，照常算块差
+    const strHeights = await fetchIndexerChainProgress(
+      11155111,
+      metaFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: '900', sourceBlock: '1000', isReady: true }] },
+      }) as never,
+      'https://idx.example/graphql',
+    )
+    expect(strHeights).toEqual({ lagBlocks: 100, isReady: true })
   })
 
   it('进度查询失败 → stale=false（判不出不乱标），成交照常返回', async () => {

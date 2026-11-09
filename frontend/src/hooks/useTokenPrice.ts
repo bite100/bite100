@@ -2,7 +2,7 @@
  * 价格参考集成：从 CoinGecko 获取市场参考价，用于订单簿/下单表单展示
  * 与订单簿成交价对照展示
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 export interface TokenPrice {
   usd: number
@@ -19,6 +19,14 @@ export interface UseTokenPriceResult {
 const COINGECKO_API = 'https://api.coingecko.com/api/v3/simple/price'
 
 /**
+ * 参考价请求超时（第 54 轮）：此前 fetch 无任何超时，CoinGecko 不回时
+ * 请求永不落定，调用方（如订单簿页的 usePairMarketPrice）永远停在
+ * 「市场参考价加载中」。8 秒后 abort，走既有 error 路径（页面已有
+ * 「参考价服务暂时不可用」的诚实文案）。
+ */
+const PRICE_FETCH_TIMEOUT_MS = 8000
+
+/**
  * 获取单个代币价格（CoinGecko 免费 API，有速率限制）
  * @param tokenId CoinGecko 代币 ID（如 'ethereum', 'tether'）
  * @param refreshIntervalMs 刷新间隔（毫秒），默认 30 秒；0 表示不轮询
@@ -30,17 +38,24 @@ export function useTokenPrice(
   const [price, setPrice] = useState<TokenPrice | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
+  // 在飞标记（第 54 轮）：30 秒轮询不得叠加未完成的请求——上一笔还
+  // 没回来（含卡在超时窗内）时本轮跳过，避免挂死请求越积越多
+  const inFlightRef = useRef(false)
 
   const fetchPrice = useCallback(async () => {
     if (!tokenId) {
       setLoading(false)
       return
     }
+    if (inFlightRef.current) return
+    inFlightRef.current = true
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), PRICE_FETCH_TIMEOUT_MS)
     try {
       setLoading(true)
       setError(null)
       const url = `${COINGECKO_API}?ids=${encodeURIComponent(tokenId)}&vs_currencies=usd&include_24hr_change=true`
-      const res = await fetch(url)
+      const res = await fetch(url, { signal: controller.signal })
       const data = await res.json()
       const item = data[tokenId]
       if (item != null) {
@@ -54,6 +69,8 @@ export function useTokenPrice(
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch price'))
     } finally {
+      clearTimeout(timer)
+      inFlightRef.current = false
       setLoading(false)
     }
   }, [tokenId])

@@ -105,6 +105,20 @@
   align-items: center;
   gap: 6px;
   font-size: 14.5px;
+  /* 第 54 轮：窄屏下允许整行换行——此前不换行且标签不许收缩，对名 +
+     「现货」+「仅同链交易」+ 星标的总宽超过主列时整行溢出，压到右侧
+     价格数字上（Ren 截图实测 BTC/ETH 行压字）。改为标签成组换行到
+     第二行，任何宽度下都不再重叠；宽屏一行放得下时外观不变 */
+  flex-wrap: wrap;
+  row-gap: 3px;
+  min-width: 0;
+}
+.markets-pairline > b {
+  white-space: nowrap;
+}
+.markets-pairline .pill,
+.markets-pairline .markets-star {
+  flex: none;
 }
 .markets-star {
   border: none;
@@ -130,10 +144,13 @@
 .markets-price {
   text-align: right;
   min-width: 86px;
+  /* 第 54 轮：价格列不收缩、数字不折行，与左侧标签永不重叠 */
+  flex: none;
 }
 .markets-price .num {
   font-size: 14px;
   font-weight: 600;
+  white-space: nowrap;
 }
 .markets-ref {
   display: block;
