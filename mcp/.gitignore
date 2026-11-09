@@ -1,7 +1,7 @@
 node_modules/
 dist/
 audit/
-agents.json
+/agents.json
 kill-switch
 .env
 *.env
