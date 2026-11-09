@@ -28,6 +28,8 @@ import {
 import { ShadowObserver, computeShadowMetrics } from './metrics'
 import { runDualReadRound, type DualReadDeps } from './index'
 import { orderSideProof } from './sideProof'
+import { toMatcherOrders } from '../matching/fromEvaluated'
+import { matchTaker } from '../matching/matcher'
 import type {
   ChainOrderState,
   ChainSnapshot,
@@ -1114,5 +1116,44 @@ describe('第 42 轮：chain-unknown 阻断口径（窗口 1 遗留裁定）', (
     )
     expect(ev.chainKnown).toBe(true)
     expect(ev.tradableBlockers).not.toContain('CHAIN_UNPROVEN')
+  })
+})
+
+describe('第 46 轮 P1：双源同单（同 digest）合并+撮合只消费一次', () => {
+  it('同一签名订单同时在节点簿与中继簿 → 候选/可成交/撮合输入各只有一份，撮合只成交一次', async () => {
+    // 同一张真签名卖单（100 Token0 @ 2）原文同时出现在两源
+    const raw = await signedRaw()
+    const prepared = await prepareCandidates(CHAIN, [
+      book('node', [raw]),
+      book('relay', [raw]),
+    ])
+    // 合并层按 digest 只认一个订单身份，来源记双源
+    expect(prepared.candidates.length).toBe(1)
+    const view = mergeBooks(
+      CHAIN,
+      PAIR,
+      prepared,
+      snapshot(new Map([[digestOf(raw), state()]])),
+    )
+    expect(view.tradeable.length).toBe(1)
+    expect(view.tradeable[0].sources).toEqual(expect.arrayContaining(['node', 'relay']))
+    // 撮合输入层同样只有一份
+    const makers = toMatcherOrders(view.tradeable)
+    expect(makers.length).toBe(1)
+    // 撮合消费：买方 taker 想吃 150 Token0（超过该单余量 100）——若同单
+    // 被双源复制成两份，会成交两腿共 150；只消费一次则一腿封顶 100。
+    const result = matchTaker(
+      {
+        trader: wallet1.address,
+        side: 'buy',
+        priceWei: 2n * E18,
+        amountToken0: 150n * E18,
+      },
+      makers,
+    )
+    expect(result.legs.length).toBe(1)
+    expect(result.legs[0].makerOrderId).toBe(raw.orderId)
+    expect(result.filledToken0).toBe(100n * E18)
+    expect(result.remainderToken0).toBe(50n * E18)
   })
 })

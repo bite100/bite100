@@ -60,6 +60,17 @@ export async function nodeGet<T>(
   )
 }
 
+/**
+ * nodePost 单节点单次尝试超时（第 46 轮，45 轮复审 P2-3）：此前 POST
+ * 无任何超时，节点连接挂死会把下单/撤单无限拖住。骑平台
+ * AbortSignal.timeout（与 relayDualSend 同模式）；逐节点尝试各自
+ * 计时，超时按该节点失败走 tryNodes 的既有轮询/短路语义。
+ * 注意：超时只说明「等不到回执」，不等于节点没收到——下单广播层
+ * 对此有 UNKNOWN 口径（orderService 的 nodeUnknown），调用方不得
+ * 把 nodePost 超时直接断言为「未接单」。
+ */
+export const NODE_POST_TIMEOUT_MS = 15_000
+
 /** 使用当前节点列表发起 POST（向第一个成功节点发送） */
 export async function nodePost(
   path: string,
@@ -70,6 +81,10 @@ export async function nodePost(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal:
+        typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(NODE_POST_TIMEOUT_MS)
+          : undefined,
     })
     if (!r.ok) {
       // 把服务端响应体带进错误：市价单空盘口拒绝等业务原因写在 body 里，用户需要看到

@@ -1,15 +1,22 @@
 /**
- * 订单双通道广播竞速语义（第 45 轮 A1/A2）：
+ * 订单双通道广播竞速语义（第 45 轮 A1/A2；第 46 轮 P2-4 真签名化）：
  * - A1：任一通道先接单即返回，挂死通道不得拖住下单返回；双通道都
  *   挂死时在广播期限处按失败返回；落败通道的迟到结果只留
  *   console.debug 痕迹。中继通道 fetch 带显式超时（relayDualSend）。
  * - A2：双通道收到的是同一份签名订单原文（逐字节一致 → 同一
  *   EIP-712 digest），下游去重只认一个订单身份的依据在此钉住。
- * nodeClient / config/relay 以 mock 代替，relayDualSend 与 digest
- * 重算走真实实现（与 dualread.test.ts 同口径）。
+ * - P2-4（第 46 轮）：订单原文的签名不再用 0xab 假字节——用仓库既有
+ *   测试钱包（Hardhat #0，与 dualread.test.ts 同一夹具）经生产
+ *   signOrder 真实签名，并以生产 verifyOrderSignatureSignedData
+ *   验签断言两通道收到的都是这张真单。
+ * nodeClient / config/relay 以 mock 代替，relayDualSend、digest
+ * 重算、签名与验签全部走真实实现。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { ethers } from 'ethers'
 import { buildSignedOrderData, computeOrderDigest } from './dualread/digest'
+import { signOrder } from './orderSigning'
+import { verifyOrderSignatureSignedData } from './orderVerification'
 import type { RawOrder } from './dualread/types'
 
 const relayCfg = vi.hoisted(() => ({ url: 'http://relay.test', enabled: true }))
@@ -24,12 +31,6 @@ vi.mock('../config/relay', () => ({
   },
 }))
 vi.mock('../nodeClient', () => ({ nodePost: nodePostMock }))
-vi.mock('./orderSigning', () => ({
-  signOrder: vi.fn(async () => '0x' + 'ab'.repeat(65)),
-  signCancelOrder: vi.fn(async () => '0x' + 'cd'.repeat(65)),
-  generateOrderId: () => 'ord-test-1',
-  fetchOrderNonce: vi.fn(async () => 0),
-}))
 
 import {
   broadcastOrderDualChannel,
@@ -38,10 +39,15 @@ import {
 
 const CHAIN_ID = 11155111
 
-/** 与线上订单票同形状的签名订单原文（RawOrder 形状，wei 整数字符串） */
-const ORDER_BODY: Record<string, unknown> = {
+/** 仓库既有测试钱包（Hardhat 账户 #0，与 dualread.test.ts 同一夹具） */
+const TEST_WALLET = new ethers.Wallet(
+  '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+)
+
+/** 与线上订单票同形状的订单原文（RawOrder 形状，wei 整数字符串） */
+const ORDER_BASE = {
   orderId: 'ord-r45-a2',
-  trader: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
+  trader: TEST_WALLET.address,
   pair: 'BTC/USDT',
   side: 'buy',
   price: '2000000000000000000000',
@@ -51,7 +57,18 @@ const ORDER_BODY: Record<string, unknown> = {
   createdAt: 1762000000,
   expiresAt: 1762604800,
   nonce: 7,
-  signature: '0x' + 'ab'.repeat(65),
+}
+
+/** 经生产 signOrder 真实签名的订单原文（每个用例前重建） */
+let ORDER_BODY: Record<string, unknown>
+async function makeSignedOrderBody(): Promise<Record<string, unknown>> {
+  const data = buildSignedOrderData(
+    { ...ORDER_BASE, signature: '' } as unknown as RawOrder,
+    CHAIN_ID,
+  )
+  if (!data) throw new Error('unbuildable test order')
+  const signature = await signOrder(data, TEST_WALLET, CHAIN_ID)
+  return { ...ORDER_BASE, signature }
 }
 
 const fetchMock = vi.fn()
@@ -74,13 +91,14 @@ async function withinOneSecond<T>(p: Promise<T>): Promise<T> {
 }
 
 describe('broadcastOrderDualChannel（第 45 轮 A1/A2）', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     relayCfg.url = 'http://relay.test'
     relayCfg.enabled = true
     nodePostMock.mockReset()
     fetchMock.mockReset()
     globalThis.fetch = fetchMock as unknown as typeof fetch
     debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    ORDER_BODY = await makeSignedOrderBody()
   })
 
   afterEach(() => {
@@ -106,6 +124,17 @@ describe('broadcastOrderDualChannel（第 45 轮 A1/A2）', () => {
     // 同一原文 → 同一 EIP-712 digest：下游（中继按 digest、节点按
     // orderId）去重只认一个订单身份的依据
     expect(digestOf(relayOrderOnly)).toBe(digestOf(nodeBody))
+    // P2-4：两通道收到的签名都是测试钱包经生产路径签出的真签名，
+    // 且经生产验签路径验证通过（checkExpiry 关：夹具时间戳固定，
+    // 本条只验签名本身不验时效）
+    const data = buildSignedOrderData(nodeBody as unknown as RawOrder, CHAIN_ID)!
+    expect(
+      await verifyOrderSignatureSignedData(data, nodeBody.signature as string, {
+        chainId: CHAIN_ID,
+        checkExpiry: false,
+      }),
+    ).toBe(true)
+    expect(relayOrderOnly.signature).toBe(nodeBody.signature)
   })
 
   it('A1：节点挂死 + 中继接单 → 不等节点，立即按中继成功返回', async () => {
@@ -135,6 +164,9 @@ describe('broadcastOrderDualChannel（第 45 轮 A1/A2）', () => {
     expect(outcome.viaRelay).toBe(false)
     expect(outcome.nodeError).toBeInstanceOf(Error)
     expect((outcome.nodeError as Error).message).toContain('超时')
+    // 第 46 轮 P2-3：期限到点时节点结果未落定 → nodeUnknown 在场，
+    // 调用方须按「待确认」呈现而非断言未接单
+    expect(outcome.nodeUnknown).toBe(true)
   })
 
   it('A1：落败通道迟到接单 → 广播结果不变，迟到结果留 console 痕迹', async () => {
@@ -161,5 +193,7 @@ describe('broadcastOrderDualChannel（第 45 轮 A1/A2）', () => {
     expect(outcome.viaRelay).toBe(false)
     expect(outcome.nodeError).toBeInstanceOf(Error)
     expect((outcome.nodeError as Error).message).toBe('node down')
+    // 第 46 轮 P2-3：双通道都已落定为失败 → 不是 UNKNOWN，不得标待确认
+    expect(outcome.nodeUnknown).toBeUndefined()
   })
 })

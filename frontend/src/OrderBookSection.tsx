@@ -13,9 +13,10 @@ import { nodeGet, nodePost } from './nodeClient'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
 import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
 import { sideToSignedValue } from './services/orderSigningTypes'
-import { broadcastOrderDualChannel } from './services/orderService'
+import { broadcastOrderDualChannel, BROADCAST_NODE_UNKNOWN_MESSAGE } from './services/orderService'
 import { verifyOrderSignatureSignedData } from './services/orderVerification'
 import { LoadingSpinner } from './components/LoadingSpinner'
+import { HardCancelAction } from './components/HardCancelAction'
 import { ErrorDisplay } from './components/ErrorDisplay'
 import { FeeDisplay } from './components/FeeDisplay'
 import { VirtualList } from './components/VirtualList'
@@ -400,6 +401,9 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       // 下单成功（节点停机时订单照样进中继簿）；双通道都失败才报错。
       const broadcast = await broadcastOrderDualChannel({ ...order }, CHAIN_ID)
       if (!broadcast.viaNode && !broadcast.viaRelay) {
+        // UNKNOWN 优先于失败断言（第 46 轮 P2-3）：节点超时未定按
+        // 待确认呈现，提示勿重复下单。
+        if (broadcast.nodeUnknown) throw new Error(BROADCAST_NODE_UNKNOWN_MESSAGE)
         throw broadcast.nodeError instanceof Error
           ? broadcast.nodeError
           : new Error('订单广播失败：节点与中继通道均未接单，请稍后重试')
@@ -455,7 +459,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         )}
       </div>
       <p className="hint">
-        完整的盘口深度、全部挂单与成交记录，数据来自节点 API。在此下单与撤单只需钱包签名、订单不上链；订单被接受时即锁定对应 Vault 余额（成交消耗、撤单释放），可用余额不足的订单不会被接受。下单前请先在「资产」中存入足额余额；撤单在下方「我的订单」中操作。
+        完整的盘口深度、全部挂单与成交记录，数据来自节点 API。在此下单与撤单只需钱包签名、订单不上链；订单被接受时即锁定对应 Vault 余额（成交消耗、撤单释放），可用余额不足的订单不会被接受。下单前请先在「资产」中存入足额余额；撤单在下方「我的订单」中操作。节点不可用时也可用「链上撤单」：钱包直接上链释放这张单锁住的余额（自付少量 gas），释放后该单无法再成交。
         {nodeType && (
           <span className="node-type"> · 节点类型：{nodeType === 'match' ? '撮合' : nodeType === 'storage' ? '存储' : '中继'}</span>
         )}
@@ -677,14 +681,23 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
                     <td>{STATUS_LABEL[o.status] ?? o.status}</td>
                     <td>
                       {(o.status === 'open' || o.status === 'partial') && (
-                        <button
-                          type="button"
-                          className="btn secondary"
-                          onClick={() => handleCancel(o.orderId)}
-                          disabled={cancelLoading === o.orderId}
-                        >
-                          {cancelLoading === o.orderId ? '…' : '撤单'}
-                        </button>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn secondary"
+                            onClick={() => handleCancel(o.orderId)}
+                            disabled={cancelLoading === o.orderId}
+                          >
+                            {cancelLoading === o.orderId ? '…' : '撤单'}
+                          </button>
+                          <HardCancelAction
+                            order={o}
+                            account={account}
+                            getSigner={getSigner}
+                            summary={`${o.side === 'buy' ? '买入' : '卖出'} ${o.amount} @ ${o.price}（${pair}）`}
+                            onSettled={() => setRefreshAt((x) => x + 1)}
+                          />
+                        </div>
                       )}
                     </td>
                   </tr>
