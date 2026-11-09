@@ -17,8 +17,15 @@
  * 零容忍线（任一触发立即停跑、保全证据、状态文件标 triggered）：
  * 订单丢失（中继已接单却始终不出现在中继簿）、无效成交上链
  * （回执失败/成交事件与预期腿数不符/已成交量超签名量）、篡改单
- * 被中继接受、索引器成交与链上回执不一致（宽限期后仍缺失或
- * 金额多重集不符）。
+ * 被中继接受。第 45 轮 B4 起同级再加一条：结算状态未知——已提交
+ * 的结算在宽限内查不到回执、或关键链上读数重试后仍失败，按失败
+ * 关闭停机（提交结果不明，绝不带着未知状态继续跑）。
+ *
+ * 索引器不在零容忍线内（Ren 2026-11-09 09:13 口径：平台只是
+ * 中介，交易都在链上，索引器只是展示缓存、不是账本）：索引器
+ * 滞后或字段不符只记观察项（probe-indexer 的 lagging /
+ * mismatch-observed），不停机；正确性一律以链上回执与事件为准。
+ * zero.indexerMismatch 计数仅为状态结构历史兼容保留，不再递增。
  *
  * 密钥纪律：只从 S4_KEYS_DIR（默认 ~/workspace/bite100-deployer）
  * 的 maker.env / taker.env / wallet.env 运行时读取，绝不打印/落盘。
@@ -276,6 +283,8 @@ export interface SettlementRecord {
     indexer: 'pending' | 'ok' | 'mismatch'
     indexerCheckedAt?: number
   }
+  /** 索引器滞后观察项是否已记过（每笔只记一次，probe 本身保持 pending 继续复查） */
+  lagReported?: boolean
 }
 
 export interface FailureItem {
@@ -300,8 +309,8 @@ export interface ChainCounts {
 
 export class ZeroToleranceError extends Error {}
 
-/** 构建备注：2026-11-08 例行复审修复 B1/B3/B2-lite（工作树未提交版，随后续修复轮提交） */
-export const BUILD_NOTE = '运行器含 2026-11-08 复审修复 B1/B3/B2-lite（工作树未提交版）+ 2026-11-09 超时硬化（方案 B，Ren 批准）：单链周期 420s 硬超时、探针复查 240s 硬超时、中继发单 30s/节点拉簿 10s 请求超时；超时按 cycle-error 记账并继续，不再整夜卡死'
+/** 构建备注：第 45 轮（阶段 4 后修复轮）定版，随状态文件与 window-start 行落盘 */
+export const BUILD_NOTE = '第 45 轮阶段 4 后修复：含 B1/B3/B2-lite（索引器分页/探针容错/事件来源核对）+ 方案 B 超时硬化（单链周期 420s、复查 240s、中继发单 30s/节点拉簿 10s）+ 卡点隔离埋点（call-start/call-end 命名计时）与中继拉簿 30s 超时包裹 + B4 失败关闭（回执宽限轮询 120s、关键读数重试，结算状态未知按零容忍同级停机；索引器滞后/不符只记观察项——Ren 2026-11-09 新口径）+ B5 待确认结算恢复账本（启动先复查遗留结算）'
 
 export class Stage4Ledger {
   posted = new Map<string, PostedOrder>()
@@ -842,6 +851,35 @@ function tradeMultisetKey(t: { maker: string; taker: string; amountIn: string; a
   return `${lc(t.maker)}|${lc(t.taker)}|${norm(t.amountIn)}|${norm(t.amountOut)}`
 }
 
+const RECEIPT_GRACE_MS = 120_000
+const RECEIPT_POLL_MS = 5_000
+
+/**
+ * 回执宽限读取（第 45 轮 B4）：刚提交的结算回执可能短暂查不到，
+ * 在宽限内轮询；RPC 瞬时报错也不下结论、继续轮询到宽限届满。
+ * 返回 null = 宽限内始终没拿到回执——查不到与读不到都归「结算
+ * 状态未知」，由调用方按失败关闭处理（不再像旧口径那样把探针
+ * 异常降级成普通 cycle-error 带着未知状态继续跑）。
+ */
+async function fetchReceiptWithGrace(
+  ctx: ChainCtx,
+  txHash: string,
+): Promise<ethers.TransactionReceipt | null> {
+  const deadline = Date.now() + RECEIPT_GRACE_MS
+  for (;;) {
+    try {
+      const receipt = await traceCall('rpc.getTransactionReceipt', ctx.chainId, () =>
+        ctx.provider.getTransactionReceipt(txHash),
+      )
+      if (receipt) return receipt
+    } catch {
+      // RPC 瞬时错误不下结论，宽限内继续轮询
+    }
+    if (Date.now() >= deadline) return null
+    await sleep(RECEIPT_POLL_MS)
+  }
+}
+
 /** 结算落账后立即跑回执探针 + 登记 settlement（索引器探针异步在后续周期复查） */
 async function probeSettlement(
   ledger: Stage4Ledger,
@@ -852,7 +890,7 @@ async function probeSettlement(
   takerGen: GeneratedOrder,
 ): Promise<void> {
   const txHash = attempt.txHash!
-  const receipt = await ctx.provider.getTransactionReceipt(txHash)
+  const receipt = await fetchReceiptWithGrace(ctx, txHash)
   const rec: SettlementRecord = {
     txHash,
     chainId: ctx.chainId,
@@ -866,7 +904,11 @@ async function probeSettlement(
   ledger.settlements.push(rec)
   if (!receipt) {
     rec.probe.receipt = 'fail'
-    ledger.trip('invalidSettle', `结算 tx 无回执：${txHash}`, { chainId: ctx.chainId, txHash })
+    ledger.trip(
+      'invalidSettle',
+      `结算状态未知：宽限 ${RECEIPT_GRACE_MS / 1000}s 内未取得回执（B4 失败关闭）tx=${txHash}`,
+      { chainId: ctx.chainId, txHash },
+    )
   }
   if (receipt!.status !== 1) {
     rec.probe.receipt = 'fail'
@@ -887,9 +929,24 @@ async function probeSettlement(
   }
   rec.probe.eventsMatch = 'ok'
   // taker 已成交量不得超签名量（合约累计记账之外的第二道独立核对）
-  const filledIn = (await ctx.settlementRead.orderFilledIn(
-    takerGen.digest,
-  )) as bigint
+  // B4：读数失败先重试，仍失败 = 结算状态未知 → 失败关闭，不降级放行
+  let filledIn: bigint | null = null
+  for (let attemptNo = 0; attemptNo < 3 && filledIn === null; attemptNo++) {
+    try {
+      filledIn = (await traceCall('rpc.orderFilledIn', ctx.chainId, () =>
+        ctx.settlementRead.orderFilledIn(takerGen.digest),
+      )) as bigint
+    } catch {
+      if (attemptNo < 2) await sleep(RECEIPT_POLL_MS)
+    }
+  }
+  if (filledIn === null) {
+    ledger.trip(
+      'invalidSettle',
+      `结算状态未知：taker 已成交量读取重试后仍失败（B4 失败关闭）tx=${txHash}`,
+      { chainId: ctx.chainId, txHash, digest: takerGen.digest },
+    )
+  }
   const takerData = buildSignedOrderData(asRaw(takerGen), ctx.chainId)
   if (takerData && filledIn > BigInt(takerData.amountIn)) {
     ledger.trip(
@@ -901,7 +958,13 @@ async function probeSettlement(
   ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
 }
 
-/** 索引器探针复查：pending 的 settlement 在宽限期内反复查，超时仍不符即零容忍 */
+/**
+ * 索引器探针复查：pending 的 settlement 反复查到收录且字段一致为止。
+ * 按 Ren 2026-11-09 新口径，索引器只是展示缓存：查询失败记无结论
+ * 观察项、超宽限未收录记 lagging 观察项、收录后字段不符记
+ * mismatch-observed 观察项——三种情况都不停机，后续周期继续复查；
+ * 成交正确性已由 probeSettlement 按链上回执+事件核完，不依赖索引器。
+ */
 async function recheckIndexerProbes(
   ledger: Stage4Ledger,
   cfg: Stage4Config,
@@ -918,19 +981,30 @@ async function recheckIndexerProbes(
     let rows: IndexerTrade[] = []
     try {
       for (let page = 0; page < 10; page++) {
-        const chunk = await fetchIndexerTrades(
-          rec.chainId,
-          rec.pair,
-          50,
-          indexerFetchFn,
-          cfg.indexerUrl,
-          page * 50,
+        const chunk = await traceCall('indexer.fetchTrades', rec.chainId, () =>
+          fetchIndexerTrades(
+            rec.chainId,
+            rec.pair,
+            50,
+            indexerFetchFn,
+            cfg.indexerUrl,
+            page * 50,
+          ),
         )
         rows.push(...chunk)
         if (chunk.length < 50) break
       }
     } catch (e) {
-      log(`索引器探针查询失败（稍后重试）：${e instanceof Error ? e.message : String(e)}`)
+      const reason = e instanceof Error ? e.message : String(e)
+      ledger.line({
+        kind: 'probe-inconclusive',
+        ts: Date.now(),
+        chainId: rec.chainId,
+        source: 'indexer',
+        txHash: rec.txHash,
+        reason,
+      })
+      log(`索引器探针查询失败（无结论观察项，稍后重试）：${reason}`)
       continue
     }
     const mine = rows.filter((r) => lc(r.txHash) === lc(rec.txHash))
@@ -951,22 +1025,34 @@ async function recheckIndexerProbes(
         rec.probe.indexerCheckedAt = Date.now()
         ledger.line({ kind: 'probe-indexer', ts: Date.now(), txHash: rec.txHash, chainId: rec.chainId, result: 'ok' })
       } else {
+        // 收录了但字段对不上：观察项留痕（fail 行 + probe-indexer 行），
+        // 不停机——账本在链上，索引器只是展示缓存（Ren 09:13 口径）。
         rec.probe.indexer = 'mismatch'
-        ledger.trip(
-          'indexerMismatch',
-          `索引器成交与回执事件多重集不符 tx=${rec.txHash} want=${JSON.stringify(want)} got=${JSON.stringify(got)}`,
-          { chainId: rec.chainId, txHash: rec.txHash },
-        )
+        ledger.line({ kind: 'probe-indexer', ts: Date.now(), txHash: rec.txHash, chainId: rec.chainId, result: 'mismatch-observed', want, got })
+        ledger.fail({
+          ts: Date.now(),
+          chainId: rec.chainId,
+          kind: 'indexer-mismatch-observed',
+          detail: `索引器成交与回执事件多重集不符（观察项，不停机）tx=${rec.txHash} want=${JSON.stringify(want)} got=${JSON.stringify(got)}`,
+          txHash: rec.txHash,
+        })
       }
       continue
     }
-    if (Date.now() - rec.settledAt > cfg.indexerGraceSec * 1000) {
-      rec.probe.indexer = 'mismatch'
-      ledger.trip(
-        'indexerMismatch',
-        `索引器在宽限期 ${cfg.indexerGraceSec}s 后仍未收录成交 tx=${rec.txHash}`,
-        { chainId: rec.chainId, txHash: rec.txHash },
-      )
+    if (Date.now() - rec.settledAt > cfg.indexerGraceSec * 1000 && !rec.lagReported) {
+      // 超宽限仍未收录：记一次 lagging 观察项后保持 pending，后续
+      // 周期继续复查（阶段 4 两次实测均为免费层收录滞后 18–30+ 分钟，
+      // 最终字段全对——滞后是展示时效问题，不是数据不一致）。
+      rec.lagReported = true
+      ledger.line({
+        kind: 'probe-indexer',
+        ts: Date.now(),
+        txHash: rec.txHash,
+        chainId: rec.chainId,
+        result: 'lagging',
+        graceSec: cfg.indexerGraceSec,
+      })
+      log(`索引器滞后观察：tx=${rec.txHash} 超宽限 ${cfg.indexerGraceSec}s 仍未收录（观察项，不停机，继续复查）`)
     }
   }
 }
@@ -1776,7 +1862,7 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
     }
     throw e
   }
-  // 收尾复查：给索引器 pending 探针最后一次机会（超宽限的会在此触发）
+  // 收尾复查：给索引器 pending 探针最后一次机会（滞后只记观察项，不停机）
   await sleep(30_000)
   try {
     await withTimeout(

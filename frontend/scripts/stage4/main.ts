@@ -27,7 +27,7 @@ if (mode === 'check') {
 } else if (mode === 'run') {
   if (!cfg.indexerUrl) {
     console.error(
-      '[stage4] 拒绝启动 run：S4_INDEXER_URL 未设置——索引器探针是零容忍线的一部分，端点必须在 go 时给全',
+      '[stage4] 拒绝启动 run：S4_INDEXER_URL 未设置——索引器是展示一致性观察项的数据源，端点必须在 go 时给全',
     )
     process.exitCode = 2
   } else {
