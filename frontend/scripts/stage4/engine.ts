@@ -46,13 +46,31 @@
  * 账本改全字段 schema 校验，同 txHash 异内容冲突 = 失败关闭，
  * 禁止静默覆盖。
  *
+ * 第 52 轮（第 50 轮推送后 ChatGPT 复审条件项修复）：① 隔离对账
+ * 认回迟到成交须再过事件对账——回执解析出的成交事件必须非空且
+ * 多重集覆盖事件扫描的发现（回执解析本已保证事件来自目标
+ * Settlement 合约），对不上按未验真保隔离；② 恢复账本落盘补
+ * fsync 持久化序（写 tmp → 同步文件 → rename → 同步父目录），
+ * 保证范围扩到掉电/系统崩溃（以 fsync 语义为限）；③ 全字段校
+ * 验补语义层（链/交易对白名单、哈希格式、腿数 ≥1、量为十进制
+ * 整数串、记账时间为正数）。
+ *
  * 密钥纪律：只从 S4_KEYS_DIR（默认 ~/workspace/bite100-deployer）
  * 的 maker.env / taker.env / wallet.env 运行时读取，绝不打印/落盘。
  * 仅测试网链（11155111 / 84532），其他 chainId 直接拒绝。
  */
-import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { ethers } from 'ethers'
 import { createPublicClient, http } from 'viem'
 import { getChainConfig, type ChainConfig } from '../../src/config/chains'
@@ -370,8 +388,46 @@ export class PendingLedgerCorruptError extends Error {
   }
 }
 
-/** 构建备注：第 50 轮定版（叠加第 48/45 轮），随状态文件与 window-start 行落盘 */
-export const BUILD_NOTE = '第 50 轮审查条件项修复（基线第 48 轮）：隔离对账遇未验真迟到成交不报 complete、抛错保隔离（失败关闭）；恢复账本主文件缺失时读遗留 .tmp 兜底首次创建崩溃窗；恢复账本全字段 schema 校验 + 同 txHash 异内容冲突失败关闭；跨进程幂等判重补 metrics 落盘 probe 记录，重启不重复确认。第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
+/** 构建备注：第 52 轮定版（叠加第 50/48/45 轮），随状态文件与 window-start 行落盘 */
+export const BUILD_NOTE = '第 52 轮审查条件项修复（基线第 50 轮）：迟到成交回执事件须与扫描发现多重集对账（空/不符按未验真保隔离）；恢复账本 fsync 持久化序（写 tmp→同步文件→rename→同步父目录）+ 语义校验（链白名单/交易对白名单/哈希与摘要格式/腿数 ≥1/量为十进制整数串）。第 50 轮审查条件项修复（基线第 48 轮）：隔离对账遇未验真迟到成交不报 complete、抛错保隔离（失败关闭）；恢复账本主文件缺失时读遗留 .tmp 兜底首次创建崩溃窗；恢复账本全字段 schema 校验 + 同 txHash 异内容冲突失败关闭；跨进程幂等判重补 metrics 落盘 probe 记录，重启不重复确认。第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
+
+/**
+ * 原子写 + 掉电持久化（第 52 轮 B2）：写 `.tmp` → fsync 文件 →
+ * rename → fsync 父目录。rename 本身只保证进程崩溃/被杀时读者
+ * 要么见旧文件、要么见新文件（原子替换）；数据真落盘要靠
+ * fsync——没有它，掉电/系统崩溃时已 rename 的文件内容仍可能
+ * 随页缓存一起丢。fsync 在个别平台/文件系统上可能不支持（尤
+ * 其目录 fsync）：本助手降级为尽力而为——同步失败只跳过该步、
+ * 不拦写入；保证范围以 fsync 语义为限，README「运行约束」有
+ * 明文（进程崩溃恒保、掉电以 fsync 成功为限）。
+ */
+function writeFileAtomicDurable(path: string, data: string): void {
+  const tmp = `${path}.tmp`
+  const fd = openSync(tmp, 'w')
+  try {
+    writeFileSync(fd, data)
+    try {
+      fsyncSync(fd)
+    } catch {
+      // 降级：本平台文件 fsync 不可用时跳过（见函数头）
+    }
+  } finally {
+    closeSync(fd)
+  }
+  renameSync(tmp, path)
+  try {
+    const dfd = openSync(dirname(path), 'r')
+    try {
+      fsyncSync(dfd)
+    } catch {
+      // 降级：目录 fsync 不被支持时跳过（见函数头）
+    } finally {
+      closeSync(dfd)
+    }
+  } catch {
+    // 父目录句柄打不开：跳过目录同步，不拦业务
+  }
+}
 
 export class Stage4Ledger {
   posted = new Map<string, PostedOrder>()
@@ -440,7 +496,7 @@ export class Stage4Ledger {
     throw new ZeroToleranceError(`${kind}: ${detail}`)
   }
 
-  /** B5：登记一笔待确认结算并立即落盘（tmp+rename，与 saveState 同法） */
+  /** B5：登记一笔待确认结算并立即落盘（第 52 轮起 persistPending 走 fsync 持久化序，见 writeFileAtomicDurable） */
   notePending(entry: PendingSettlement): void {
     this.pending.set(entry.txHash.toLowerCase(), entry)
     this.persistPending()
@@ -456,25 +512,68 @@ export class Stage4Ledger {
    * 验类型/存在，任一不符即按账本损坏失败关闭。第 48 轮 P1-3 的
    * 浅校验只验 txHash/chainId 两项，缺腿数/缺签名量/缺摘要的半残
    * 条目会被放行、到恢复确认时才爆，且爆点远离损坏源。
+   *
+   * 第 52 轮 B3：在类型校验之上补语义校验（字段齐全 ≠ 语义合法）：
+   * - txHash / takerDigest 必须是 0x + 64 位 hex（交易哈希与
+   *   bytes32 摘要的固定形态）；
+   * - chainId 必须为正整数且 ∈ CHAINS（本运行器的测试网白名单，
+   *   与「只允许测试网链」的既有门禁同一集合）；
+   * - pair 必须 ∈ TRADE_PAIRS（运行器周期轮转的已知交易对集合，
+   *   创建点 probeSettlement 传入的 pair 只来自该轮转）；
+   * - legs 必须为整数且 ≥1（创建点 legs = attempt.legsKept：已
+   *   提交结算的保留腿数，提交成功即至少 1 腿，0/负数/小数都
+   *   不可能由运行器自己写出）；
+   * - takerAmountIn 非 null 时必须为十进制整数字符串（wei 量，
+   *   创建点取签名订单的 amountIn 原串）；
+   * - notedAt 必须为正数（创建点恒为 Date.now() 毫秒）。
+   * 账本由运行器自产，上述每条都与创建点实际取值对齐，不会误杀
+   * 自产条目；手改/半写/串话的条目在此失败关闭，爆点即损坏点。
    */
   private static validatePendingRows(parsed: unknown, source: string): PendingSettlement[] {
     if (!Array.isArray(parsed)) {
       throw new PendingLedgerCorruptError(`${source}：内容不是待确认结算数组`)
     }
+    const HEX64 = /^0x[0-9a-fA-F]{64}$/
     parsed.forEach((r, i) => {
       const bad = (field: string) =>
-        new PendingLedgerCorruptError(`${source}：第 ${i} 行字段 ${field} 缺失或类型不符`)
+        new PendingLedgerCorruptError(`${source}：第 ${i} 行字段 ${field} 缺失、类型不符或值不合法`)
       if (!r || typeof r !== 'object') throw bad('(整行)')
       const row = r as Record<string, unknown>
-      if (typeof row.txHash !== 'string' || row.txHash.length === 0) throw bad('txHash')
-      if (typeof row.chainId !== 'number') throw bad('chainId')
-      if (typeof row.pair !== 'string') throw bad('pair')
-      if (typeof row.takerDigest !== 'string') throw bad('takerDigest')
-      if (typeof row.legs !== 'number') throw bad('legs')
-      if (!(typeof row.takerAmountIn === 'string' || row.takerAmountIn === null)) {
+      if (typeof row.txHash !== 'string' || !HEX64.test(row.txHash)) throw bad('txHash')
+      if (
+        typeof row.chainId !== 'number' ||
+        !Number.isInteger(row.chainId) ||
+        !(CHAINS as readonly number[]).includes(row.chainId)
+      ) {
+        throw bad('chainId')
+      }
+      if (
+        typeof row.pair !== 'string' ||
+        !(TRADE_PAIRS as readonly string[]).includes(row.pair)
+      ) {
+        throw bad('pair')
+      }
+      if (typeof row.takerDigest !== 'string' || !HEX64.test(row.takerDigest)) {
+        throw bad('takerDigest')
+      }
+      if (typeof row.legs !== 'number' || !Number.isInteger(row.legs) || row.legs < 1) {
+        throw bad('legs')
+      }
+      if (
+        !(
+          row.takerAmountIn === null ||
+          (typeof row.takerAmountIn === 'string' && /^\d+$/.test(row.takerAmountIn))
+        )
+      ) {
         throw bad('takerAmountIn')
       }
-      if (typeof row.notedAt !== 'number') throw bad('notedAt')
+      if (
+        typeof row.notedAt !== 'number' ||
+        !Number.isFinite(row.notedAt) ||
+        row.notedAt <= 0
+      ) {
+        throw bad('notedAt')
+      }
     })
     return parsed as PendingSettlement[]
   }
@@ -588,9 +687,13 @@ export class Stage4Ledger {
   }
 
   private persistPending(): void {
-    const tmp = `${this.pendingPath}.tmp`
-    writeFileSync(tmp, JSON.stringify([...this.pending.values()], null, 2))
-    renameSync(tmp, this.pendingPath)
+    // 第 52 轮 B2：走 fsync 持久化序（writeFileAtomicDurable）——
+    // 恢复账本里是已提交未确认的结算，掉电也不能丢；saveState 的
+    // 运行状态只是汇总快照，维持原 tmp+rename 写法不在本轮面内。
+    writeFileAtomicDurable(
+      this.pendingPath,
+      JSON.stringify([...this.pending.values()], null, 2),
+    )
   }
 
   saveState(status: string): void {
@@ -1147,6 +1250,32 @@ function parseTradeEvents(
   return out
 }
 
+/**
+ * 回执事件多重集是否覆盖扫描发现的事件（第 52 轮 B1 对账）：键为
+ * (maker, taker, amountIn, amountOut)——扫描侧（getLogs 全量日志流）
+ * 与回执侧（单 tx 完整日志）是同一批链上事件的两种读法，同一笔交
+ * 易里扫描见到的每一笔成交都必须能在回执里找到一模一样的一笔
+ * （计数含重复：同参数两笔要各占一个名额）。回执是该 tx 的完整
+ * 日志集，正常情况下恒覆盖；不覆盖 = 两次 RPC 读不一致（或链重
+ * 组），按未验真处理，不认回。
+ */
+function tradeEventsCover(
+  receiptEvents: ParsedTradeEvent[],
+  scanEvents: ParsedTradeEvent[],
+): boolean {
+  const key = (e: ParsedTradeEvent) =>
+    `${lc(e.maker)}|${lc(e.taker)}|${e.amountIn}|${e.amountOut}`
+  const counts = new Map<string, number>()
+  for (const e of receiptEvents) counts.set(key(e), (counts.get(key(e)) ?? 0) + 1)
+  for (const e of scanEvents) {
+    const k = key(e)
+    const left = counts.get(k) ?? 0
+    if (left <= 0) return false
+    counts.set(k, left - 1)
+  }
+  return true
+}
+
 const indexerFetchFn = async (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal },
@@ -1501,17 +1630,32 @@ export async function reconcileAfterTimeout(
   const ours = new Set([lc(ctx.maker.address), lc(ctx.taker.address)])
   const seenTx = new Set(ledger.settlements.map((s) => lc(s.txHash)))
   const lateTxHashes: string[] = []
+  // 第 52 轮 B1：扫描侧每笔成交事件按 tx 留存（maker/taker/双量），
+  // 供下方与回执解析事件做多重集对账——只记 txHash 时回执那边
+  // 「status=1 且事件对不上」无从发现。
+  const scanEventsByTx = new Map<string, ParsedTradeEvent[]>()
   for (const lg of logs) {
     try {
       const parsed = settleIface.parseLog({ topics: [...lg.topics], data: lg.data })
       if (
         parsed &&
         (parsed.name === 'TradeSettled' || parsed.name === 'TradeSettledWithGasReimburse') &&
-        (ours.has(lc(String(parsed.args.maker))) || ours.has(lc(String(parsed.args.taker)))) &&
-        !seenTx.has(lc(lg.transactionHash))
+        (ours.has(lc(String(parsed.args.maker))) || ours.has(lc(String(parsed.args.taker))))
       ) {
-        seenTx.add(lc(lg.transactionHash))
-        lateTxHashes.push(lg.transactionHash)
+        const key = lc(lg.transactionHash)
+        if (!seenTx.has(key)) {
+          seenTx.add(key)
+          lateTxHashes.push(lg.transactionHash)
+        }
+        const ev: ParsedTradeEvent = {
+          maker: String(parsed.args.maker),
+          taker: String(parsed.args.taker),
+          amountIn: BigInt(parsed.args.amountIn).toString(),
+          amountOut: BigInt(parsed.args.amountOut).toString(),
+        }
+        const arr = scanEventsByTx.get(key)
+        if (arr) arr.push(ev)
+        else scanEventsByTx.set(key, [ev])
       }
     } catch {
       // 非 Settlement 成交事件，忽略（与 parseTradeEvents 同口径）
@@ -1534,6 +1678,23 @@ export async function reconcileAfterTimeout(
       continue
     }
     const events = parseTradeEvents(receipt, ctx.chainCfg.contracts.settlement)
+    // 第 52 轮 B1：status=1 只说明交易成功，不等于扫描发现的成交
+    // 已在回执里验真——回执解析为空、或解析事件与扫描发现的事件
+    // 多重集对不上（RPC 两次读取不一致/链重组），都按未验真处理：
+    // 留痕并进 unverifiedLate（下方 incomplete 抛错保隔离），不计数。
+    const scanEvents = scanEventsByTx.get(lc(txHash)) ?? []
+    if (events.length === 0 || !tradeEventsCover(events, scanEvents)) {
+      ledger.line({
+        kind: 'reconcile',
+        ts: Date.now(),
+        chainId: ctx.chainId,
+        txHash,
+        result: 'late-tx-unverified',
+        detail: `迟到成交回执 status=1 但事件对账不通过（回执解析 ${events.length} 笔、扫描发现 ${scanEvents.length} 笔，多重集未覆盖扫描发现），只留痕不计数`,
+      })
+      unverifiedLate.push(txHash)
+      continue
+    }
     ledger.counts[ctx.chainId].settlements += 1
     ledger.counts[ctx.chainId].legs += events.length
     lateRecovered += 1
