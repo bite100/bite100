@@ -39,7 +39,7 @@
  * - digest 重算：dualread/digest 的 buildSignedOrderData +
  *   computeOrderDigest（与节点/中继/双读三方同口径）；
  * - 发交易/等回执：ethers Contract + 既有 getSigner() 钱包签名者 +
- *   tx.wait()（与 AssetsPage 存取、MakerVaultPage 同一写法）；
+ *   tx.wait()（与 AssetsPage 存取同一写法）；
  * - 合约接口：services/vaultAbi.ts 的 VAULT_LOCK_ABI（自动生成子集，
  *   含 orderLocks / lockTombstones / cancelledOrders / releaseOrderLock）；
  * - 累计成交读取：dualread/chainState.ts 的 SETTLEMENT_READ_ABI

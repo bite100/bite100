@@ -173,11 +173,12 @@ export interface IndexerTradesOutcome {
   /** 本轮索引取数失败（界面须明示不可用，而非「暂无成交」） */
   failed: boolean
   /**
-   * 索引滞后标注（第 52 轮 A3）：该链索引未就绪（isReady=false）或
-   * 落后链头超过 INDEXER_STALE_LAG_BLOCKS 块时为 true。口径（Ren
-   * 定版）：索引只是展示缓存——滞后只标注、绝不阻断、不影响
-   * failed；滞后判不出（_meta 查询失败）时为 false，不拿不确定
-   * 当滞后喊。
+   * 索引滞后标注（第 52 轮 A3）：该链索引未就绪（isReady 明确为
+   * false）或落后链头超过 INDEXER_STALE_LAG_BLOCKS 块时为 true。
+   * 口径（Ren 定版）：索引只是展示缓存——滞后只标注、绝不阻断、
+   * 不影响 failed；滞后判不出（_meta 查询失败）时为 false，不拿
+   * 不确定当滞后喊。第 53 轮补：isReady 字段缺失同属「判不出」，
+   * 不得据此标 stale（只有明确 false 才算未就绪）。
    */
   stale: boolean
 }
@@ -199,14 +200,21 @@ query Bit100IndexerMeta {
 export interface IndexerChainProgress {
   /** 落后链头的块数（sourceBlock − progressBlock，下限 0） */
   lagBlocks: number
-  isReady: boolean
+  /**
+   * 索引就绪三态（第 53 轮，修第 52 轮复审 P2）：true / false 只认
+   * _meta 行里明确的布尔值；字段缺失或非布尔 → null（无证据）。
+   * 此前 `row.isReady === true` 把「缺失」压成 false，stale 公式
+   * 再据此误标滞后——与本文件「标注只凭实证」口径自相矛盾。
+   */
+  isReady: boolean | null
 }
 
 /**
  * 查 Envio 某链的索引进度（第 52 轮 A3）：骑与成交查询同一条
- * fetch 路径，不引入第二套 GraphQL 客户端。任何失败/字段缺失/
- * 找不到该链的行 → 返回 null（滞后判不出），由调用方按
- * 「不标 stale」处理——标注只凭实证，不凭猜测。
+ * fetch 路径，不引入第二套 GraphQL 客户端。任何失败/进度字段
+ * 缺失/找不到该链的行 → 返回 null（滞后判不出），由调用方按
+ * 「不标 stale」处理——标注只凭实证，不凭猜测。第 53 轮起
+ * isReady 单独三态：缺失只让 isReady=null，不拖垮块差证据。
  */
 export async function fetchIndexerChainProgress(
   chainId: number,
@@ -238,7 +246,7 @@ export async function fetchIndexerChainProgress(
     if (!Number.isFinite(progressBlock) || !Number.isFinite(sourceBlock)) return null
     return {
       lagBlocks: Math.max(0, sourceBlock - progressBlock),
-      isReady: row.isReady === true,
+      isReady: typeof row.isReady === 'boolean' ? row.isReady : null,
     }
   } catch {
     return null
@@ -281,7 +289,7 @@ export async function loadIndexerTrades(
     )
     const stale =
       progress !== null &&
-      (!progress.isReady || progress.lagBlocks > INDEXER_STALE_LAG_BLOCKS)
+      (progress.isReady === false || progress.lagBlocks > INDEXER_STALE_LAG_BLOCKS)
     return {
       trades: rows.map((t) => indexerTradeToDisplay(t, tokens.base)),
       failed: false,

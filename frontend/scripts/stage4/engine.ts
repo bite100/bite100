@@ -388,44 +388,81 @@ export class PendingLedgerCorruptError extends Error {
   }
 }
 
-/** 构建备注：第 52 轮定版（叠加第 50/48/45 轮），随状态文件与 window-start 行落盘 */
-export const BUILD_NOTE = '第 52 轮审查条件项修复（基线第 50 轮）：迟到成交回执事件须与扫描发现多重集对账（空/不符按未验真保隔离）；恢复账本 fsync 持久化序（写 tmp→同步文件→rename→同步父目录）+ 语义校验（链白名单/交易对白名单/哈希与摘要格式/腿数 ≥1/量为十进制整数串）。第 50 轮审查条件项修复（基线第 48 轮）：隔离对账遇未验真迟到成交不报 complete、抛错保隔离（失败关闭）；恢复账本主文件缺失时读遗留 .tmp 兜底首次创建崩溃窗；恢复账本全字段 schema 校验 + 同 txHash 异内容冲突失败关闭；跨进程幂等判重补 metrics 落盘 probe 记录，重启不重复确认。第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
+/** 构建备注：第 53 轮定版（叠加第 52/50/48/45 轮），随状态文件与 window-start 行落盘 */
+export const BUILD_NOTE = '第 53 轮复审 P2 顺带项：落盘 fsync 错误分类（仅平台不支持类错误码 EINVAL/ENOTSUP/EOPNOTSUPP/EBADF 降级跳过，EIO 等真实 I/O 错误向上抛、失败关闭，不再全吞）。第 52 轮审查条件项修复（基线第 50 轮）：迟到成交回执事件须与扫描发现多重集对账（空/不符按未验真保隔离）；恢复账本 fsync 持久化序（写 tmp→同步文件→rename→同步父目录）+ 语义校验（链白名单/交易对白名单/哈希与摘要格式/腿数 ≥1/量为十进制整数串）。第 50 轮审查条件项修复（基线第 48 轮）：隔离对账遇未验真迟到成交不报 complete、抛错保隔离（失败关闭）；恢复账本主文件缺失时读遗留 .tmp 兜底首次创建崩溃窗；恢复账本全字段 schema 校验 + 同 txHash 异内容冲突失败关闭；跨进程幂等判重补 metrics 落盘 probe 记录，重启不重复确认。第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
 
 /**
- * 原子写 + 掉电持久化（第 52 轮 B2）：写 `.tmp` → fsync 文件 →
- * rename → fsync 父目录。rename 本身只保证进程崩溃/被杀时读者
- * 要么见旧文件、要么见新文件（原子替换）；数据真落盘要靠
- * fsync——没有它，掉电/系统崩溃时已 rename 的文件内容仍可能
- * 随页缓存一起丢。fsync 在个别平台/文件系统上可能不支持（尤
- * 其目录 fsync）：本助手降级为尽力而为——同步失败只跳过该步、
- * 不拦写入；保证范围以 fsync 语义为限，README「运行约束」有
- * 明文（进程崩溃恒保、掉电以 fsync 成功为限）。
+ * fsync 降级白名单（第 53 轮，修第 52 轮复审 P2）：只有「平台/
+ * 文件系统不支持同步」类错误码才允许降级跳过——EINVAL（部分
+ * 平台对目录句柄 fsync 的回应）、ENOTSUP / EOPNOTSUPP（同义两
+ * 种拼写）、EBADF（个别平台上目录句柄 fsync 的回应）。其余
+ * 错误（EIO、ENOSPC 等真实 I/O 故障）必须向上抛：第 52 轮的
+ * catch 全吞写法会让真实故障静默通过，「已持久化」在出事时
+ * 无声失效——失败关闭口径下，宁可抛错停机也不能假装落盘。
  */
-function writeFileAtomicDurable(path: string, data: string): void {
+const FSYNC_DOWNGRADE_CODES: ReadonlySet<string> = new Set([
+  'EINVAL',
+  'ENOTSUP',
+  'EOPNOTSUPP',
+  'EBADF',
+])
+
+export function isFsyncDowngradeError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null)?.code
+  return typeof code === 'string' && FSYNC_DOWNGRADE_CODES.has(code)
+}
+
+/** fsync 一步：不支持类错误降级跳过，其余向上抛（第 53 轮） */
+function fsyncOrDowngrade(fd: number, sync: (fd: number) => void): void {
+  try {
+    sync(fd)
+  } catch (e) {
+    if (!isFsyncDowngradeError(e)) throw e
+    // 降级：本平台该句柄 fsync 不可用时跳过（见上方白名单）
+  }
+}
+
+/**
+ * 原子写 + 掉电持久化（第 52 轮 B2；第 53 轮补错误分类）：写
+ * `.tmp` → fsync 文件 → rename → fsync 父目录。rename 本身只
+ * 保证进程崩溃/被杀时读者要么见旧文件、要么见新文件（原子替
+ * 换）；数据真落盘要靠 fsync——没有它，掉电/系统崩溃时已
+ * rename 的文件内容仍可能随页缓存一起丢。fsync 在个别平台/
+ * 文件系统上可能不支持（尤其目录 fsync）：仅不支持类错误码
+ * 降级跳过该步（第 53 轮白名单），真实 I/O 错误向上抛、由调用
+ * 方失败关闭；保证范围以 fsync 语义为限，README「运行约束」
+ * 有明文（进程崩溃恒保、掉电以 fsync 成功为限）。
+ *
+ * 第三参数 sync 仅供故障注入测试替换 fsync（faults.test.mjs
+ * F9），生产调用恒用默认 fsyncSync。
+ */
+export function writeFileAtomicDurable(
+  path: string,
+  data: string,
+  sync: (fd: number) => void = fsyncSync,
+): void {
   const tmp = `${path}.tmp`
   const fd = openSync(tmp, 'w')
   try {
     writeFileSync(fd, data)
-    try {
-      fsyncSync(fd)
-    } catch {
-      // 降级：本平台文件 fsync 不可用时跳过（见函数头）
-    }
+    fsyncOrDowngrade(fd, sync)
   } finally {
     closeSync(fd)
   }
   renameSync(tmp, path)
+  let dfd: number | null = null
   try {
-    const dfd = openSync(dirname(path), 'r')
+    dfd = openSync(dirname(path), 'r')
+  } catch (e) {
+    if (!isFsyncDowngradeError(e)) throw e
+    // 降级：父目录句柄以不支持类错误打不开 → 跳过目录同步
+  }
+  if (dfd !== null) {
     try {
-      fsyncSync(dfd)
-    } catch {
-      // 降级：目录 fsync 不被支持时跳过（见函数头）
+      fsyncOrDowngrade(dfd, sync)
     } finally {
       closeSync(dfd)
     }
-  } catch {
-    // 父目录句柄打不开：跳过目录同步，不拦业务
   }
 }
 

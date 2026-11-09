@@ -311,6 +311,35 @@ describe('第 52 轮 A3：索引响应诚实性（缺失 data + 滞后标注）'
     expect(outcome.stale).toBe(false)
   })
 
+  it('第 53 轮：isReady 字段缺失 → 不据此标 stale（无证据不标）；块差证据仍独立成立', async () => {
+    // isReady 缺失 + 已追平 → stale=false（修复前会被压成 false 而误标）
+    const caughtUp = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn: dispatchFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: 1000, sourceBlock: 1000 }] },
+      }),
+    })
+    expect(caughtUp.failed).toBe(false)
+    expect(caughtUp.stale).toBe(false)
+    // isReady 缺失 + 落后 >50 块 → stale=true（凭块差实证，与 isReady 无关）
+    const lagging = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn: dispatchFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: 900, sourceBlock: 1000 }] },
+      }),
+    })
+    expect(lagging.failed).toBe(false)
+    expect(lagging.stale).toBe(true)
+    // isReady 非布尔（字符串）同样按缺失处理
+    const weird = await loadIndexerTrades(11155111, 'BTC/USDT', 50, {
+      endpoint: 'https://idx.example/graphql',
+      fetchFn: dispatchFetch({
+        data: { _meta: [{ chainId: 11155111, progressBlock: 1000, sourceBlock: 1000, isReady: 'yes' }] },
+      }),
+    })
+    expect(weird.stale).toBe(false)
+  })
+
   it('进度查询失败 → stale=false（判不出不乱标），成交照常返回', async () => {
     const btcRow = { ...idx(), tokenIn: BTC, tokenOut: USDT }
     const fetchFn = async (_url: string, init: { body: string }) => {

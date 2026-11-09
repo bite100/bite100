@@ -10,5 +10,7 @@ export {
   PendingLedgerCorruptError,
   recoverPendingSettlements,
   reconcileAfterTimeout,
+  writeFileAtomicDurable,
+  isFsyncDowngradeError,
 } from './engine'
 export { SETTLEMENT_ABI } from '../../src/services/settlementAbi'
