@@ -22,6 +22,11 @@
 //           按账本损坏失败关闭；双链合法条目放行
 //   F8      第 52 轮 B2：fsync 序落盘后新实例读回完整、无 .tmp
 //           残留（fsync 本身进程内不可观测，钉布局与内容）
+//   F9      第 53 轮：fsync 错误分类——注入 EIO 等真实 I/O 错误
+//           必须上抛（文件同步失败则不 rename、目标不出现；目录
+//           同步失败在 rename 后上抛）；EINVAL 等平台不支持类
+//           错误码降级跳过、写入照常完成（经 writeFileAtomicDurable
+//           的 sync 注入缝驱动，不碰真盘 fsync 行为）
 //   F4-slow 场景③变体：回执始终取不到（null）——与 F4 走同一
 //           `!receipt || status !== 1` 分支，但须等满生产宽限
 //           120s 才返回，默认跳过；S4_FAULTS_INCLUDE_SLOW=1 时跑。
@@ -58,6 +63,8 @@ const {
   PendingLedgerCorruptError,
   recoverPendingSettlements,
   reconcileAfterTimeout,
+  writeFileAtomicDurable,
+  isFsyncDowngradeError,
   SETTLEMENT_ABI,
 } = await import(bundlePath)
 
@@ -414,6 +421,47 @@ await check('F8 第52轮B2：persistPending 经 fsync 序落盘 → 新实例读
   assert.equal(rows[0].txHash, entry.txHash)
   assert.equal(rows[0].legs, entry.legs)
   assert.equal(rows[0].takerAmountIn, entry.takerAmountIn)
+})
+
+// ------------------------------------------------------------  F9 第 53 轮 fsync 错误分类
+
+await check('F9 第53轮：fsync 真实 I/O 错误（EIO）上抛、不支持类错误码（EINVAL）降级', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 's4-f9-'))
+  const target = join(dir, 'ledger.json')
+  const errWith = (code) => Object.assign(new Error(`injected ${code}`), { code })
+
+  // 分类器本身：白名单内外分明，无 code 的普通错误不降级
+  assert.equal(isFsyncDowngradeError(errWith('EINVAL')), true)
+  assert.equal(isFsyncDowngradeError(errWith('ENOTSUP')), true)
+  assert.equal(isFsyncDowngradeError(errWith('EOPNOTSUPP')), true)
+  assert.equal(isFsyncDowngradeError(errWith('EBADF')), true)
+  assert.equal(isFsyncDowngradeError(errWith('EIO')), false)
+  assert.equal(isFsyncDowngradeError(errWith('ENOSPC')), false)
+  assert.equal(isFsyncDowngradeError(new Error('plain')), false)
+
+  // 文件 fsync 抛 EIO → 整体上抛，rename 未发生、目标文件不出现
+  assert.throws(
+    () => writeFileAtomicDurable(target, '{"v":1}', () => { throw errWith('EIO') }),
+    /injected EIO/,
+  )
+  assert.equal(existsSync(target), false, '文件同步失败时目标不应被 rename 出来')
+
+  // 两步 fsync 都抛 EINVAL（平台不支持）→ 降级跳过，写入照常完成、无 .tmp 残留
+  writeFileAtomicDurable(target, '{"v":2}', () => { throw errWith('EINVAL') })
+  assert.equal(readFileSync(target, 'utf8'), '{"v":2}')
+  assert.equal(existsSync(`${target}.tmp`), false)
+
+  // 文件 fsync 正常、目录 fsync 抛 EIO → rename 已发生但错误仍上抛（不假装已持久化）
+  let calls = 0
+  assert.throws(
+    () =>
+      writeFileAtomicDurable(target, '{"v":3}', () => {
+        calls += 1
+        if (calls === 2) throw errWith('EIO')
+      }),
+    /injected EIO/,
+  )
+  assert.equal(readFileSync(target, 'utf8'), '{"v":3}', 'rename 已生效，但耐久性未确认——靠上抛让调用方失败关闭')
 })
 
 if (process.env.S4_FAULTS_INCLUDE_SLOW === '1') {
