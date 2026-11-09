@@ -14,7 +14,7 @@
  * 配置全走环境变量（见 README）：S4_KEYS_DIR / S4_RELAY_URL /
  * S4_INDEXER_URL / S4_NODE_URL_<chainId> / S4_DIR / S4_INTERVAL_SEC /
  * S4_MAX_HOURS / S4_TARGET_PER_CHAIN / S4_SUBMIT_GAP_MS /
- * S4_INDEXER_GRACE_SEC。密钥只经 engine 从 S4_KEYS_DIR 读取，
+ * S4_INDEXER_GRACE_SEC / S4_CHAINS / S4_PAIRS。密钥只经 engine 从 S4_KEYS_DIR 读取，
  * 本文件不接触密钥材料。
  */
 import { loadConfig, runCheck, runStage4, log } from './engine'
