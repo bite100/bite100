@@ -7,6 +7,9 @@ import { matchTaker, deriveQuoteAmount, type MatcherOrder } from './matcher'
 import { makerRemainingToken0 } from './fromEvaluated'
 import { simulateAndPrune, capLegs, MAX_BATCH_LEGS } from './prune'
 import { buildLegFill } from './fills'
+import { executeFrontendMatch, type FrontendMatchRequest } from './execute'
+import type { BookAdapter } from '../dualread/adapters'
+import type { ChainStateReader } from '../dualread/chainState'
 import type { EvaluatedOrder } from '../dualread/types'
 import type { OrderData } from '../orderSigningTypes'
 import { getPairTokens } from '../../config/pairs'
@@ -281,5 +284,117 @@ describe('fills（与节点 TradeToFill 同口径）', () => {
       },
     )
     expect(fill).toBeNull()
+  })
+})
+
+describe('executeFrontendMatch 数据源故障区分（第 52 轮 A5）', () => {
+  const CHAIN = 11155111
+  const PAIR = 'ETH/USDT'
+  const taker: OrderData = {
+    orderId: 't-a5',
+    userAddress: T,
+    tokenIn: A,
+    tokenOut: B,
+    amountIn: (10n * E18).toString(),
+    amountOut: (20n * E18).toString(),
+    price: (2n * E18).toString(),
+    timestamp: 1700000000,
+    expiresAt: 1700086400,
+    nonce: 0,
+    side: 0,
+  }
+  const req = {
+    chainId: CHAIN,
+    pair: PAIR,
+    takerData: taker,
+    takerSignature: '0x',
+    signer: {} as FrontendMatchRequest['signer'],
+  }
+
+  const emptyBookAdapter: BookAdapter = {
+    async fetchBook(chainId, pair) {
+      return {
+        source: 'relay',
+        chainId,
+        pair,
+        bids: [],
+        asks: [],
+        complete: true,
+        fetchedAt: Date.now(),
+      }
+    },
+  }
+  const failingBookAdapter: BookAdapter = {
+    async fetchBook() {
+      throw new Error('relay down')
+    },
+  }
+  const healthyChain: ChainStateReader = {
+    async snapshot(chainId) {
+      return {
+        chainId,
+        blockNumber: 1000n,
+        blockTimestamp: 1700000000,
+        stale: false,
+        states: new Map(),
+        missing: new Set(),
+      }
+    },
+  }
+  const failingChain: ChainStateReader = {
+    async snapshot() {
+      throw new Error('rpc down')
+    },
+  }
+  const staleChain: ChainStateReader = {
+    async snapshot(chainId) {
+      return {
+        chainId,
+        blockNumber: 1000n,
+        blockTimestamp: 1700000000,
+        stale: true,
+        states: new Map(),
+        missing: new Set(),
+      }
+    },
+  }
+
+  it('中继簿拉取失败 → aborted + 数据源不可用文案（不误报暂无可成交）', async () => {
+    const out = await executeFrontendMatch(req, {
+      relayAdapter: failingBookAdapter,
+      chainReader: healthyChain,
+    })
+    expect(out.status).toBe('aborted')
+    expect(out.message).toContain('暂不可用')
+    expect(out.message).toContain('未撮合')
+    expect(out.message).not.toContain('暂无可成交订单')
+  })
+
+  it('链上快照读取失败 → aborted + 数据源不可用文案', async () => {
+    const out = await executeFrontendMatch(req, {
+      relayAdapter: emptyBookAdapter,
+      chainReader: failingChain,
+    })
+    expect(out.status).toBe('aborted')
+    expect(out.message).toContain('暂不可用')
+    expect(out.message).not.toContain('暂无可成交订单')
+  })
+
+  it('链上快照过旧（chainOk=false）→ aborted + 数据源不可用文案', async () => {
+    const out = await executeFrontendMatch(req, {
+      relayAdapter: emptyBookAdapter,
+      chainReader: staleChain,
+    })
+    expect(out.status).toBe('aborted')
+    expect(out.message).toContain('暂不可用')
+  })
+
+  it('簿与链都健康、簿为空 → 仍是 no-match（干净空簿不被误报成故障）', async () => {
+    const out = await executeFrontendMatch(req, {
+      relayAdapter: emptyBookAdapter,
+      chainReader: healthyChain,
+    })
+    expect(out.status).toBe('no-match')
+    expect(out.message).toBe('当前对手盘暂无可成交订单，订单已留簿。')
   })
 })

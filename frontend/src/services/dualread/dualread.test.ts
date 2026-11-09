@@ -602,6 +602,105 @@ describe('第 51 轮块 3 根因修复：中继适配器缺省 fetch 显式超�
   })
 })
 
+describe('第 52 轮 A1：中继适配器交易对隔离', () => {
+  const row = (orderId: string, pair: string, side: 'buy' | 'sell') => ({
+    orderId,
+    trader: TRADER,
+    pair,
+    side,
+    price: '1000000000000000000',
+    amount: '1000000000000000000',
+    filled: '0',
+    status: 'open',
+    nonce: 0,
+    createdAt: 1700000000,
+    expiresAt: 1700086400,
+    signature: '0xabc',
+  })
+
+  it('混入他对行 → 丢弃且 pairMismatchRows 单独计数，本对行保留', async () => {
+    const adapter = createRelayBookAdapter('https://relay.example', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        pair: PAIR,
+        bids: [row('mine', PAIR, 'buy'), row('foreign-bid', 'ETH/USDT', 'buy')],
+        asks: [row('foreign-ask', 'TKA/TKB', 'sell')],
+      }),
+    }))
+    const book = await adapter.fetchBook(CHAIN, PAIR)
+    expect(book.bids.map((o) => o.orderId)).toEqual(['mine'])
+    expect(book.asks).toEqual([])
+    expect(book.pairMismatchRows).toBe(2)
+    // 与规范化丢弃分开计数：本例三行字段都完整，droppedRows 必须为 0
+    expect(book.droppedRows).toBe(0)
+    expect(book.rawRows).toBe(3)
+  })
+
+  it('全部行属本对 → pairMismatchRows=0，簿面不受影响', async () => {
+    const adapter = createRelayBookAdapter('https://relay.example', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        pair: PAIR,
+        bids: [row('b1', PAIR, 'buy')],
+        asks: [row('a1', PAIR, 'sell')],
+      }),
+    }))
+    const book = await adapter.fetchBook(CHAIN, PAIR)
+    expect(book.pairMismatchRows).toBe(0)
+    expect(book.bids.length).toBe(1)
+    expect(book.asks.length).toBe(1)
+  })
+})
+
+describe('第 52 轮 A2：缺省 fetch 超时覆盖响应体', () => {
+  it('响应头立即返回但响应体永不结束 → 在截止期内失败', async () => {
+    const originalFetch = globalThis.fetch
+    // 头（ok/status）立即 resolve；body 读取（json）只在 abort 时才 reject
+    globalThis.fetch = ((_url: unknown, init?: { signal?: AbortSignal }) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted', 'AbortError')),
+            )
+          }),
+      })) as unknown as typeof fetch
+    try {
+      const adapter = createRelayBookAdapter('https://relay.example', undefined, {
+        timeoutMs: 50,
+      })
+      const started = Date.now()
+      await expect(adapter.fetchBook(CHAIN, PAIR)).rejects.toThrow()
+      expect(Date.now() - started).toBeLessThan(5000)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('响应头与响应体都正常 → 计时不影响正常读取', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ pair: PAIR, bids: [], asks: [] }),
+    })) as unknown as typeof fetch
+    try {
+      const adapter = createRelayBookAdapter('https://relay.example', undefined, {
+        timeoutMs: 5000,
+      })
+      const book = await adapter.fetchBook(CHAIN, PAIR)
+      expect(book.bids).toEqual([])
+      expect(book.complete).toBe(true)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
 describe('第 38 轮：节点定点小数 amount 解析与丢弃计数', () => {
   const nodeRow = {
     orderId: 'soak_1',

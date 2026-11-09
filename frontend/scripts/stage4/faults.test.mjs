@@ -15,6 +15,13 @@
 //           认回并计数、对账报 complete
 //   F4      场景③ 对账时回执不可验真（status=0）→ 对账不报
 //           complete、抛错保隔离、不计数
+//   F5/F6   第 52 轮 B1：回执 status=1 但事件解析为空 / 与扫描
+//           发现多重集对不上 → 同样按未验真保隔离、不计数
+//   F7      第 52 轮 B3：账本行字段齐全但语义不合法（链/交易对
+//           白名单、哈希格式、腿数下限、量格式、时间为正）逐项
+//           按账本损坏失败关闭；双链合法条目放行
+//   F8      第 52 轮 B2：fsync 序落盘后新实例读回完整、无 .tmp
+//           残留（fsync 本身进程内不可观测，钉布局与内容）
 //   F4-slow 场景③变体：回执始终取不到（null）——与 F4 走同一
 //           `!receipt || status !== 1` 分支，但须等满生产宽限
 //           120s 才返回，默认跳过；S4_FAULTS_INCLUDE_SLOW=1 时跑。
@@ -308,6 +315,105 @@ await check('F4 场景③：迟到成交回执 status=0 不可验真 → 抛错�
     0,
     '未验真时绝不得出现 complete 行（调用方据此删隔离）',
   )
+})
+
+// ------------------------------------------------------------  F5/F6 第 52 轮 B1 事件对账
+
+function tradeLogWith(txHash, amountIn, amountOut) {
+  const { topics, data } = settleIface.encodeEventLog('TradeSettled', [
+    MAKER,
+    TAKER,
+    TOKEN_IN,
+    TOKEN_OUT,
+    amountIn,
+    amountOut,
+    1n,
+  ])
+  return { address: SETTLEMENT, topics, data, transactionHash: txHash, blockNumber: 950, index: 0 }
+}
+
+await check('F5 第52轮B1：回执 status=1 但无成交事件（解析为空）→ 按未验真保隔离、不计数', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 's4-f5-'))
+  const { ledger, metricsPath } = makeLedger(dir)
+  const lateTx = TX(0xf5)
+  const { ctx } = fakeCtx({
+    logs: [tradeLog(lateTx)],
+    receipts: new Map([[lateTx.toLowerCase(), { status: 1, logs: [] }]]),
+  })
+  await assert.rejects(() => reconcileAfterTimeout(ledger, {}, ctx, 900), /对账未完成/)
+  assert.equal(ledger.counts[CHAIN].settlements, 0)
+  assert.equal(ledger.counts[CHAIN].legs, 0)
+  const rows = readMetrics(metricsPath)
+  assert.equal(rows.filter((r) => r.result === 'late-tx-unverified').length, 1)
+  assert.equal(rows.filter((r) => r.result === 'incomplete-unverified-late-tx').length, 1)
+  assert.equal(rows.filter((r) => r.kind === 'reconcile' && r.result === 'complete').length, 0)
+})
+
+await check('F6 第52轮B1：回执事件与扫描发现金额不符（多重集对不上）→ 按未验真保隔离', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 's4-f6-'))
+  const { ledger, metricsPath } = makeLedger(dir)
+  const lateTx = TX(0xf6)
+  const { ctx } = fakeCtx({
+    logs: [tradeLog(lateTx)], // 扫描发现 amountIn=100 / amountOut=200
+    receipts: new Map([
+      [lateTx.toLowerCase(), { status: 1, logs: [tradeLogWith(lateTx, 100n, 999n)] }],
+    ]),
+  })
+  await assert.rejects(() => reconcileAfterTimeout(ledger, {}, ctx, 900), /对账未完成/)
+  assert.equal(ledger.counts[CHAIN].settlements, 0)
+  const rows = readMetrics(metricsPath)
+  assert.equal(rows.filter((r) => r.result === 'late-tx-unverified').length, 1)
+  assert.equal(rows.filter((r) => r.result === 'late-settlement-recovered').length, 0)
+  assert.equal(rows.filter((r) => r.kind === 'reconcile' && r.result === 'complete').length, 0)
+})
+
+// ------------------------------------------------------------  F7 第 52 轮 B3 语义校验
+
+await check('F7 第52轮B3：字段齐全但语义不合法 → 逐项按账本损坏失败关闭', async () => {
+  const cases = [
+    ['chainId 主网（不在白名单）', { chainId: 1 }],
+    ['chainId 非整数', { chainId: 11155111.5 }],
+    ['legs 为 0（创建点恒 ≥1）', { legs: 0 }],
+    ['legs 为负数', { legs: -1 }],
+    ['legs 为小数', { legs: 1.5 }],
+    ['txHash 格式不对', { txHash: '0x1234' }],
+    ['takerDigest 非 hex', { takerDigest: '0x' + 'zz'.repeat(32) }],
+    ['pair 不在已知交易对集合', { pair: 'XXX/YYY' }],
+    ['takerAmountIn 含小数', { takerAmountIn: '10.5' }],
+    ['takerAmountIn 空串', { takerAmountIn: '' }],
+    ['notedAt 为 0', { notedAt: 0 }],
+    ['notedAt 为负数', { notedAt: -5 }],
+  ]
+  for (const [name, over] of cases) {
+    const dir = mkdtempSync(join(tmpdir(), 's4-f7-'))
+    const { ledger, pendingPath } = makeLedger(dir)
+    writeFileSync(pendingPath, JSON.stringify([pendingEntry(TX(0xf7), over)]))
+    assert.throws(() => ledger.loadPending(), PendingLedgerCorruptError, name)
+  }
+  // 对照：Base Sepolia 链的合法条目应放行（白名单含双链）
+  const dir = mkdtempSync(join(tmpdir(), 's4-f7ok-'))
+  const { ledger, pendingPath } = makeLedger(dir)
+  writeFileSync(pendingPath, JSON.stringify([pendingEntry(TX(0xf7), { chainId: 84532 })]))
+  assert.equal(ledger.loadPending().length, 1)
+})
+
+// ------------------------------------------------------------  F8 第 52 轮 B2 落盘往返
+
+await check('F8 第52轮B2：persistPending 经 fsync 序落盘 → 新实例读回完整、无 .tmp 残留', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 's4-f8-'))
+  const a = makeLedger(dir)
+  const entry = pendingEntry(TX(0xf8))
+  a.ledger.notePending(entry)
+  assert.equal(existsSync(a.pendingPath), true, '主文件应存在')
+  assert.equal(existsSync(`${a.pendingPath}.tmp`), false, 'rename 后 .tmp 不应残留')
+  // 「重启」：全新账本实例读同一盘面（fsync 本身在进程内不可观测，
+  // 此处钉住的是落盘布局与内容完整性——掉电保证靠 fsync 语义，见 README）
+  const b = makeLedger(dir)
+  const rows = b.ledger.loadPending()
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].txHash, entry.txHash)
+  assert.equal(rows[0].legs, entry.legs)
+  assert.equal(rows[0].takerAmountIn, entry.takerAmountIn)
 })
 
 if (process.env.S4_FAULTS_INCLUDE_SLOW === '1') {

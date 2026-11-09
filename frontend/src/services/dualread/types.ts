@@ -58,6 +58,13 @@ export interface SourceBook {
    * 层 validity 口径，不计入本字段；勿把本字段读成「全部无效订单数」。
    */
   droppedRows?: number
+  /**
+   * 交易对不符丢弃数（第 52 轮 A1）：规范化通过、但行自称 pair 与本
+   * 次请求的 pair 不一致而被适配器丢弃的行数。与 droppedRows 分开
+   * 计数：droppedRows 是「行本身残缺」，本字段是「行不属于这个交易
+   * 对」（中继过滤失效/串对的信号），处置与告警口径不同，勿合并。
+   */
+  pairMismatchRows?: number
 }
 
 /** 订单统一身份 */

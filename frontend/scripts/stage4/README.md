@@ -98,6 +98,47 @@
   provider 驱动账本/恢复/对账四场景；回执始终不可见的变体须
   等满 120s 宽限，默认跳过，`S4_FAULTS_INCLUDE_SLOW=1` 启用）。
 
+第 52 轮（第 50 轮推送后 ChatGPT 复审条件项修复，口径变更）：
+
+- **迟到成交认回须过事件对账**：回执 status=1 不再直接计数——
+  回执解析出的成交事件（`parseTradeEvents` 本已保证只取目标
+  Settlement 合约的日志）必须**非空**，且其多重集（maker/
+  taker/amountIn/amountOut 逐笔计数）必须**覆盖事件扫描的发现**
+  （扫描侧同步留存每笔事件参数）。对不上 = RPC 两次读取不一
+  致或链重组，按未验真处理（`late-tx-unverified` 留痕 + 进
+  `incomplete-unverified-late-tx` 抛错保隔离），不计数。
+  对账能做到的程度如实说明：扫描与回执是同一批链上事件的两
+  种读法，多重集覆盖即证明两者一致；回执里多出的同 tx 他方
+  事件（批量结算混入）不影响覆盖判定，也不计入本运行器账目。
+- **恢复账本 fsync 持久化序**：`persistPending` 改走
+  `writeFileAtomicDurable`（写 `.tmp` → fsync 文件 → rename →
+  fsync 父目录），保证范围见下「运行约束」。
+- **恢复账本语义校验**：全字段校验在类型之上补语义——txHash/
+  takerDigest 为 0x+64 位 hex、chainId ∈ {11155111, 84532}、
+  pair ∈ `TRADE_PAIRS`、legs 为整数且 ≥1（创建点 =
+  已提交结算的保留腿数，恒 ≥1）、takerAmountIn 为十进制整数
+  串或 null、notedAt 为正数；每条都与创建点（`probeSettlement`
+  的 `notePending` 入参）实际取值对齐，不误杀自产条目。
+
+## 运行约束（第 52 轮 B4 写明）
+
+- **单写者**：同一 `S4_DIR`（同一套 metrics/state/pending
+  文件）**同时只允许一个运行器进程**。落盘判重（第 50 轮
+  `hasProbeRecord`）保证的是**串行重启**幂等——进程死了再启
+  不重复确认/记账；它**不保证两个进程并发**共用同一目录时
+  的幂等（两进程可能同时判「无记录」而双记）。需要并行跑时
+  每进程用独立 `S4_DIR`。
+- **持久化保证范围**：恢复账本（pending 文件）的落盘顺序为
+  写 `.tmp` → fsync 文件 → rename → fsync 父目录。因此：
+  **进程崩溃/被杀**（含 SIGKILL）下，已 `notePending` 的条目
+  不丢（rename 原子性 + `.tmp` 遗留兜底，第 50 轮）；**掉电/
+  系统崩溃**下同样不丢，**以 fsync 语义为限**——个别平台/文
+  件系统不支持 fsync（尤其目录 fsync）时该步降级跳过（代码
+  注释有记），此时掉电保证退化为「尽力而为」。metrics JSONL
+  为逐行 append 的记账流、state 文件为可重建的汇总快照，不
+  在本保证范围内（口径与第 50 轮一致：判重读 metrics 只防
+  重复，账本损坏判定只看 pending 文件）。
+
 ## 骑乘对照表（不重复造轮子）
 
 | 本运行器的件 | 骑乘的既有件 |
@@ -110,7 +151,7 @@
 | 回执事件解析 | 产品 `SETTLEMENT_ABI`（indexer association 同一 ABI） |
 | 已成交量/释锁/归责入口 | 最小 ABI 片段（与 generator 的最小 ABI 模式同构；产品 ABI 子集未覆盖 orderFilledIn/releaseOrderLock/chargeFailedSettlement） |
 | 打包 | 仓库既有 esbuild（与 soak 的 build.mjs 同法） |
-| 自有代码 | 中继单发、场景轮转、探针编排、JSONL/状态记账、CLI、第 45 轮的调用打点（traceCall）/失败关闭/恢复账本（落盘骑 saveState 同款 tmp+rename 原子写法，不新造框架） |
+| 自有代码 | 中继单发、场景轮转、探针编排、JSONL/状态记账、CLI、第 45 轮的调用打点（traceCall）/失败关闭/恢复账本（落盘骑 saveState 同款 tmp+rename 原子写法，第 52 轮在其上补 fsync 持久化序，不新造框架） |
 
 ## 构建与运行
 
