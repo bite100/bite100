@@ -342,7 +342,9 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
           ? broadcast.nodeError
           : new Error('订单广播失败：节点与中继通道均未接单，请稍后重试')
       }
-      if (!broadcast.viaNode) {
+      // 第 45 轮 A1 后广播是竞速返回：viaNode=false 可能只是节点比中继
+      // 慢、尚未落定；只有 nodeError 在场才是确知节点失败/超时，才出此提示。
+      if (!broadcast.viaNode && broadcast.nodeError !== undefined) {
         setMatchNote('节点通道不可用，已由中继通道广播')
       }
       await p2pOrderBroadcast.publishOrder(order)
