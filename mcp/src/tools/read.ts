@@ -94,6 +94,8 @@ export const readTools: ToolDef[] = [
         addr = loadSignerForRole(ctx.agent.role).address
       }
       const summary = chainSummary(chainId)
+      // 逐代币顺序读（单代币内三读并行）：公共测试网 RPC 按并发限流，
+      // 全并行齐发会被整批打回（实测）——顺序读是刻意的节流。
       const tokens: Record<string, unknown> = {}
       for (const [symbol, token] of Object.entries(summary.tokens)) {
         const [wallet, vault, available] = await Promise.all([

@@ -29,4 +29,9 @@ await build({
   entryPoints: [join(here, 'src/index.ts')],
   outfile: join(here, 'dist/bit100-mcp.mjs'),
 })
+await build({
+  ...common,
+  entryPoints: [join(here, 'src/e2e.ts')],
+  outfile: join(here, 'dist/bit100-mcp-e2e.mjs'),
+})
 console.log('mcp bundles written to dist/')

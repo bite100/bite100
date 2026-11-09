@@ -77,9 +77,8 @@ describe('只读工具（mock 中继 + mock 链读）', () => {
     const { ctx, chain } = makeCtx()
     chain.filled = 250000000000000000n
     chain.lock = {
-      owner: MAKER_ADDR,
-      token: '0x93a4af54d7cD8AF7c9aEF50D3Dd3977bA1Dde28E',
-      amount: '500000000000000000',
+      user: MAKER_ADDR,
+      token: '0x93a4af54d7cd8af7c9aef50d3dd3977ba1dde28e',
       remaining: '250000000000000000',
       expiresAt: 1700003600,
     }

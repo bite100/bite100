@@ -11,15 +11,14 @@ const ERC20_ABI = ['function balanceOf(address) view returns (uint256)']
 const VAULT_READ_ABI = [
   'function availableBalance(address,address) view returns (uint256)',
   'function balanceOf(address,address) view returns (uint256)',
-  'function orderLocks(bytes32) view returns (address owner, address token, uint256 amount, uint256 remaining, uint256 expiresAt)',
+  'function orderLocks(bytes32) view returns (address user, address token, uint256 remaining, uint256 expiresAt)',
   'function cancelledOrders(bytes32) view returns (bool)',
 ]
 const SETTLEMENT_READ_ABI = ['function orderFilledIn(bytes32) view returns (uint256)']
 
 export interface LockInfo {
-  owner: string
+  user: string
   token: string
-  amount: string
   remaining: string
   expiresAt: number
 }
@@ -62,7 +61,9 @@ export class EthersChainReader implements ChainReader {
 
   async vaultBalance(chainId: number, token: string, address: string): Promise<bigint> {
     const v = chainConfig(chainId).contracts.vault
-    return this.contract(chainId, v, VAULT_READ_ABI).balanceOf(address, token)
+    // 注意：Vault.balanceOf 的参数序是 (token, user)，与 availableBalance
+    // 的 (user, token) 相反（Vault.sol:314 vs :166，前端同法调用）。
+    return this.contract(chainId, v, VAULT_READ_ABI).balanceOf(token, address)
   }
 
   async vaultAvailable(chainId: number, token: string, address: string): Promise<bigint> {
@@ -78,15 +79,14 @@ export class EthersChainReader implements ChainReader {
   async orderLock(chainId: number, digest: string): Promise<LockInfo | null> {
     const v = chainConfig(chainId).contracts.vault
     const lock = await this.contract(chainId, v, VAULT_READ_ABI).orderLocks(digest)
-    const remaining = BigInt(lock.remaining ?? lock[3] ?? 0n)
-    const owner = String(lock.owner ?? lock[0] ?? ethers.ZeroAddress)
-    if (remaining <= 0n || owner === ethers.ZeroAddress) return null
+    const remaining = BigInt(lock.remaining ?? lock[2] ?? 0n)
+    const user = String(lock.user ?? lock[0] ?? ethers.ZeroAddress)
+    if (remaining <= 0n || user === ethers.ZeroAddress) return null
     return {
-      owner,
+      user,
       token: String(lock.token ?? lock[1]),
-      amount: BigInt(lock.amount ?? lock[2] ?? 0n).toString(),
       remaining: remaining.toString(),
-      expiresAt: Number(lock.expiresAt ?? lock[4] ?? 0n),
+      expiresAt: Number(lock.expiresAt ?? lock[3] ?? 0n),
     }
   }
 

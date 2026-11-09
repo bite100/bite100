@@ -12,11 +12,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { errResult, okResult, ToolError } from './errors'
 import { readTools } from './tools/read'
 import { writeTools } from './tools/write'
+import { matchTools } from './tools/match'
 import type { ToolContext, ToolDef } from './tools/common'
 
 export function buildServer(ctx: ToolContext): McpServer {
   const server = new McpServer({ name: 'bit100-mcp', version: '0.49.0' })
-  const tools: ToolDef[] = [...readTools, ...writeTools]
+  const tools: ToolDef[] = [...readTools, ...writeTools, ...matchTools]
   for (const tool of tools) {
     server.registerTool(
       tool.name,
