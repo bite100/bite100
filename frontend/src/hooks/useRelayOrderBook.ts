@@ -1,34 +1,33 @@
 /**
- * 节点订单簿数据 hook（第 31 轮）：与 OrderBookWidget 完全相同的数据口径
- * （节点 /api/orderbook、定点→人类单位换算、5 秒轮询），供移动交易页的
- * 紧凑盘口与深度图共用同一份快照。桌面端仍由 OrderBookWidget 自带取数，行为不变。
- * （与既有 hooks/useOrderBook 的 P2P 事件版区分，故名 Node 版。）
+ * 中继订单簿数据 hook：第 31 轮建立时读节点 /api/orderbook，第 51 轮
+ * （阶段 5 节点退役）改读订单中继簿（createRelayBookAdapter，自带
+ * 10 秒超时），供移动交易页的紧凑盘口与深度图共用同一份快照。桌面端
+ * 由 OrderBookWidget 走同一适配器取数，口径一致（定点→人类单位换算、
+ * 5 秒轮询）。原名 useNodeOrderBook 随节点退役更名。
  */
 import { useEffect, useState } from 'react'
-import { nodeGet } from '../nodeClient'
+import { CHAIN_ID } from '../config'
+import { createRelayBookAdapter } from '../services/dualread/adapters'
 import { fromScaled, toPlain } from '../components/dashboard/tradeFormat'
 import type { OrderBookRow } from '../components/dashboard/OrderBookWidget'
 
-export interface NodeOrderBookState {
+export interface RelayOrderBookState {
   bids: OrderBookRow[]
   asks: OrderBookRow[]
   loading: boolean
   failed: boolean
 }
 
-export function useNodeOrderBook(pair: string): NodeOrderBookState {
-  const [state, setState] = useState<NodeOrderBookState>({ bids: [], asks: [], loading: true, failed: false })
+export function useRelayOrderBook(pair: string): RelayOrderBookState {
+  const [state, setState] = useState<RelayOrderBookState>({ bids: [], asks: [], loading: true, failed: false })
 
   useEffect(() => {
     let cancelled = false
     setState((s) => ({ ...s, loading: true }))
+    const adapter = createRelayBookAdapter()
     const fetchBook = async () => {
       try {
-        const { data } = await nodeGet<{
-          pair: string
-          bids: Array<{ price: string; amount: string }>
-          asks: Array<{ price: string; amount: string }>
-        }>('/api/orderbook', { pair })
+        const book = await adapter.fetchBook(CHAIN_ID, pair)
         if (cancelled) return
         const toRow = (o: { price: string; amount: string }, side: 'buy' | 'sell'): OrderBookRow => ({
           price: toPlain(fromScaled(o.price)),
@@ -36,8 +35,8 @@ export function useNodeOrderBook(pair: string): NodeOrderBookState {
           side,
         })
         setState({
-          bids: (data.bids ?? []).slice(0, 15).map((o) => toRow(o, 'buy')),
-          asks: (data.asks ?? []).slice(0, 15).map((o) => toRow(o, 'sell')),
+          bids: book.bids.slice(0, 15).map((o) => toRow(o, 'buy')),
+          asks: book.asks.slice(0, 15).map((o) => toRow(o, 'sell')),
           loading: false,
           failed: false,
         })

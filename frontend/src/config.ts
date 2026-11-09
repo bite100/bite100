@@ -1,12 +1,8 @@
 import { DEFAULT_CHAIN_ID, getChainConfig } from './config/chains'
 
-/** 节点 API 根地址（单节点时使用）；多节点时取第一个，实际请求由 nodeClient 按列表依次尝试 */
-const _raw = (import.meta.env.VITE_NODE_API_URL ?? '').trim()
-export const NODE_API_URL = _raw.split(',')[0]?.replace(/\/$/, '') ?? ''
-/** 节点 API 列表（P2P 多节点：逗号分隔多个 URL，请求时依次尝试直至成功） */
-export const NODE_API_URLS: string[] = _raw
-  ? _raw.split(',').map((u: string) => u.trim().replace(/\/$/, '')).filter(Boolean)
-  : []
+// 节点 API 配置（VITE_NODE_API_URL / NODE_API_URL / NODE_API_URLS）已于
+// 第 51 轮（阶段 5 节点退役）删除：前端不再直连任何 P2P 节点，订单通道
+// 只剩订单中继（config/relay.ts 的 RELAY_URL）与链上索引（config/indexer.ts）。
 
 // P2P 配置（路径 2：浏览器 + 公共 relay，支持多 relay fallback）
 const _wsRaw = (import.meta.env.VITE_P2P_WS_URLS ?? import.meta.env.VITE_P2P_WS_URL ?? '').trim()

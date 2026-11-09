@@ -1,18 +1,20 @@
 /**
- * 第 34 轮（无节点阶段 2）双读基础设施 — 类型定义。
+ * 第 34 轮（无节点阶段 2）双读基础设施 — 类型定义；
+ * 第 51 轮（阶段 5 节点退役）改为中继单源，目录名 dualread 沿用以保持
+ * import 路径稳定（scripts/stage4 等已关闭的验收工具仍按此路径引用）。
  *
- * 口径（轮次文档 docs/round34-nodeless-stage2-2026-11-08.md 为准）：
+ * 口径（轮次文档 docs/round51-stage5-node-retirement-2026-11-09.md 为准）：
  * - 统一订单身份 = (chainId, settlementAddress, digest)；digest 一律由前端
- *   既有 EIP-712 工具本地重算，不信任任一数据源返回的 digest 字段。
+ *   既有 EIP-712 工具本地重算，不信任数据源返回的 digest 字段。
  * - 每单归入 VALID / UNKNOWN / INVALID（状态机见 evaluate.ts）；
- *   UNKNOWN 与 CONFLICT 都不进可成交集合，只进诊断数据（fail-closed）。
+ *   UNKNOWN 不进可成交集合，只进诊断数据（fail-closed）。
  */
 
-/** 数据源标识：节点订单簿 / 公告栏中继 */
-export type BookSource = 'node' | 'relay'
+/** 数据源标识：第 51 轮起仅剩公告栏中继（节点源已退役） */
+export type BookSource = 'relay'
 
 /**
- * 两源统一后的原始订单行。字段口径与节点/中继的现行 API 合同一致：
+ * 中继簿的原始订单行。字段口径与中继 API 合同一致：
  * price/amount/filled 为 1e18 定点 wei 整数字符串（amount = amountIn 总量，
  * filled = 数据源自报的已成交 amountIn，仅作诊断，不作权威剩余量）。
  */
@@ -125,7 +127,7 @@ export interface EvaluatedOrder {
   /** 链上状态确实读到（非缺失/非过旧）——指标分母口径用 */
   chainKnown: boolean
   lifecycle: OrderLifecycle
-  /** 同 digest 两源未签名业务字段（side/pair/execType）不一致 */
+  /** 同 digest 两源未签名业务字段不一致（第 51 轮起单源恒 false，保留兼容输出形状） */
   conflict: boolean
   /** 机器可读判定原因码（诊断用） */
   reasons: string[]

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Text } from '@mantine/core'
-import { nodeGet } from '../../nodeClient'
+import { CHAIN_ID } from '../../config'
 import { DEFAULT_PAIR } from '../../config/pairs'
+import { createRelayBookAdapter } from '../../services/dualread/adapters'
 import { fromScaled, toPlain, fmtPrice, fmtAmount, fmtTotal } from './tradeFormat'
 
 /** 右栏盘口每侧展示档位数（对标 HY 右栏密度） */
@@ -39,33 +40,33 @@ function withTotals(rows: OrderBookRow[]): BookLevel[] {
 /**
  * 订单簿（第 28 轮视觉重做，排版基准见 docs/round28-chart-orderbook-ui-2026-11-08.md）：
  * 卖盘倒序、价差居中行、深度条按累计量比例（浅底淡色）、价格涨跌语义色、
- * 等宽数字右对齐。节点返回的定点/wei 在此换算为人类单位（展示层换算，
- * 数据口径不变）；本组件对外（onBookUpdate/onPriceClick）一律人类单位，
- * 与 marketOrder.ts 的既有约定一致。
+ * 等宽数字右对齐。数据第 51 轮（阶段 5 节点退役）改读订单中继簿
+ * （createRelayBookAdapter，自带 10 秒超时）；中继返回的定点/wei 在此
+ * 换算为人类单位（展示层换算，数据口径不变）；本组件对外
+ * （onBookUpdate/onPriceClick）一律人类单位，与 marketOrder.ts 的既有
+ * 约定一致。
  */
 export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClick }: OrderBookWidgetProps = {}) {
   const [bids, setBids] = useState<OrderBookRow[]>([])
   const [asks, setAsks] = useState<OrderBookRow[]>([])
   const [loading, setLoading] = useState(true)
-  /** 节点不可达/未配置时为 true，用于把「无盘口」与「节点未连接」两种空态区分开 */
+  /** 中继不可达/未配置时为 true，用于把「无盘口」与「中继未连接」两种空态区分开 */
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
+    const adapter = createRelayBookAdapter()
     const fetchBook = async () => {
       try {
-        const { data } = await nodeGet<{ pair: string; bids: Array<{ price: string; amount: string }>; asks: Array<{ price: string; amount: string }> }>(
-          '/api/orderbook',
-          { pair }
-        )
+        const book = await adapter.fetchBook(CHAIN_ID, pair)
         if (cancelled) return
         const toRow = (o: { price: string; amount: string }, side: 'buy' | 'sell'): OrderBookRow => ({
           price: toPlain(fromScaled(o.price)),
           amount: toPlain(fromScaled(o.amount)),
           side,
         })
-        const newBids = (data.bids ?? []).slice(0, 15).map((o) => toRow(o, 'buy'))
-        const newAsks = (data.asks ?? []).slice(0, 15).map((o) => toRow(o, 'sell'))
+        const newBids = book.bids.slice(0, 15).map((o) => toRow(o, 'buy'))
+        const newAsks = book.asks.slice(0, 15).map((o) => toRow(o, 'sell'))
         setBids(newBids)
         setAsks(newAsks)
         setFailed(false)
@@ -145,7 +146,7 @@ export function OrderBookWidget({ pair = DEFAULT_PAIR, onBookUpdate, onPriceClic
         <Text size="xs" c="dimmed" py="sm">加载中…</Text>
       ) : failed && bids.length === 0 && asks.length === 0 ? (
         <Text size="xs" c="dimmed" py="sm">
-          节点服务暂时不可用，盘口无法加载（资产与跨链不受影响）
+          中继服务暂时不可用，盘口无法加载（资产与跨链不受影响）
         </Text>
       ) : (
         <>

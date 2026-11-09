@@ -1,8 +1,10 @@
 /**
- * 第 34 轮双读隔离测试：三源（节点/公告栏/RPC）全部 mock，
- * 订单用真实私钥签名（Hardhat 测试账户 #0），验签走生产代码路径。
- * 覆盖：状态冲突、RPC 故障→UNKNOWN、分页截断、部分成交剩余量、
- * 链上时间过期、软撤单（单源消失不推断撤销）、故障恢复、指标口径。
+ * 第 34 轮建立的隔离测试（原双读：节点/公告栏/RPC 三源 mock）；
+ * 第 51 轮（阶段 5 节点退役）按单源改写：订单源只剩公告栏中继，
+ * RPC 仍 mock。订单用真实私钥签名（Hardhat 测试账户 #0），验签走
+ * 生产代码路径。覆盖：RPC 故障→UNKNOWN、分页截断、部分成交剩余量、
+ * 链上时间过期、故障恢复、逐单方向证明、中继簿内同单去重。
+ * 逐条改写登记见 docs/round51-stage5-node-retirement-2026-11-09.md。
  */
 import { describe, it, expect } from 'vitest'
 import { ethers } from 'ethers'
@@ -13,7 +15,7 @@ import {
   type OrderData,
 } from '../orderSigningTypes'
 import { buildSignedOrderData, computeOrderDigest, hashOrderWithDomain } from './digest'
-import { createNodeBookAdapter, createRelayBookAdapter, normalizeBookRows, toRawOrder } from './adapters'
+import { createRelayBookAdapter, normalizeBookRows, toRawOrder } from './adapters'
 import {
   assembleChainState,
   createChainStateReader,
@@ -25,8 +27,7 @@ import {
   mergeBooks,
   prepareCandidates,
 } from './evaluate'
-import { ShadowObserver, computeShadowMetrics } from './metrics'
-import { runDualReadRound, type DualReadDeps } from './index'
+import { runBookRound, type BookReadDeps } from './index'
 import { orderSideProof } from './sideProof'
 import { toMatcherOrders } from '../matching/fromEvaluated'
 import { matchTaker } from '../matching/matcher'
@@ -93,9 +94,9 @@ async function signedRaw(over: Partial<RawOrder> = {}, signer = wallet0): Promis
   return raw
 }
 
-function book(source: 'node' | 'relay', rows: RawOrder[], complete = true): SourceBook {
+function book(rows: RawOrder[], complete = true): SourceBook {
   return {
-    source,
+    source: 'relay',
     chainId: CHAIN,
     pair: PAIR,
     bids: rows.filter((r) => r.side === 'buy'),
@@ -144,11 +145,8 @@ function snapshot(
   }
 }
 
-async function prepareOne(raws: { node?: RawOrder; relay?: RawOrder }) {
-  const books: SourceBook[] = []
-  if (raws.node) books.push(book('node', [raws.node]))
-  if (raws.relay) books.push(book('relay', [raws.relay]))
-  const prepared = await prepareCandidates(CHAIN, books)
+async function prepareOne(raw: RawOrder) {
+  const prepared = await prepareCandidates(CHAIN, [book([raw])])
   expect(prepared.candidates.length).toBe(1)
   return prepared.candidates[0]
 }
@@ -232,7 +230,7 @@ describe('digest 重算（规范向量与公式）', () => {
 describe('状态机（mock 链上快照）', () => {
   it('有效开放单 → VALID/OPEN，剩余量为全额', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(cand, snapshot(new Map([[digestOf(raw), state()]])))
     expect(ev.validity).toBe('VALID')
     expect(ev.lifecycle).toBe('OPEN')
@@ -242,7 +240,7 @@ describe('状态机（mock 链上快照）', () => {
 
   it('部分成交 → VALID/PARTIAL，剩余量按链上累计成交（规范口径）', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state({ filledIn: 30n * E18, filledOut: 60n * E18 })]])),
@@ -255,7 +253,7 @@ describe('状态机（mock 链上快照）', () => {
 
   it('链上时间过期 → INVALID/EXPIRED（只看区块 timestamp）', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state()]]), { blockTimestamp: 1700086401 }),
@@ -266,7 +264,7 @@ describe('状态机（mock 链上快照）', () => {
 
   it('全成交 → FILLED 终局，不进可成交集', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const snap = snapshot(new Map([[digestOf(raw), state({ filledIn: 100n * E18, filledOut: 200n * E18 })]]))
     const ev = evaluateCandidate(cand, snap)
     expect(ev.lifecycle).toBe('FILLED')
@@ -276,7 +274,7 @@ describe('状态机（mock 链上快照）', () => {
 
   it('nonce 被占用且本单无成交 → INVALID/NONCE_CONSUMED', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state({ nonceUsed: true })]])),
@@ -287,7 +285,7 @@ describe('状态机（mock 链上快照）', () => {
 
   it('墓碑 + 无活跃锁 → INVALID/LOCK_RELEASED（撤单/释放）', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state({ lock: null })]])),
@@ -303,7 +301,7 @@ describe('状态机（mock 链上快照）', () => {
     // side 进签名后：本单签名方向（sell）经重构+验签证明成立，
     // tradableBlockers 为空——无锁不再影响认证（落锁与认证本就无关）。
     const raw = await signedRaw()
-    const cand = await prepareOne({ relay: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state({ lock: null, tombstone: null })]])),
@@ -316,7 +314,7 @@ describe('状态机（mock 链上快照）', () => {
 
   it('单源 + 锁仓义务方向与自报一致 → VALID；认证来自签名证明而非锁（第 36 轮 N1 结论保留）', async () => {
     const raw = await signedRaw() // side=sell，夹具锁 tokenIn(base) → 派生 sell
-    const cand = await prepareOne({ relay: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state()]])),
@@ -330,7 +328,7 @@ describe('状态机（mock 链上快照）', () => {
 
   it('签名伪造（他人私钥冒签）且链上验签未过 → INVALID/BAD_SIGNATURE', async () => {
     const raw = await signedRaw({}, wallet1)
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     expect(cand.anyLocalValid).toBe(false)
     const ev = evaluateCandidate(
       cand,
@@ -343,7 +341,7 @@ describe('状态机（mock 链上快照）', () => {
   it('本地验签未过但链上 ERC-1271 验签通过 → 按有效继续判定', async () => {
     const raw = await signedRaw()
     raw.signature = '0x1234' // 合约签名者本地 ecrecover 必然失败
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     expect(cand.anyLocalValid).toBe(false)
     const ev = evaluateCandidate(
       cand,
@@ -354,7 +352,7 @@ describe('状态机（mock 链上快照）', () => {
 
   it('RPC 故障（无快照）→ UNKNOWN；区块过旧 → UNKNOWN；状态缺失 → UNKNOWN', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     expect(evaluateCandidate(cand, null).reasons).toContain('CHAIN_UNAVAILABLE')
     // 第 42 轮：链上未证 ⇒ tradableBlockers 恒含 CHAIN_UNPROVEN（字段本身 fail-closed）
     const noChain = evaluateCandidate(cand, null)
@@ -379,8 +377,8 @@ describe('状态机（mock 链上快照）', () => {
     const nodeRaw = await signedRaw({ side: 'sell' })
     const relayRaw = { ...nodeRaw, side: 'buy' as const }
     const prepared = await prepareCandidates(CHAIN, [
-      book('node', [nodeRaw]),
-      book('relay', [relayRaw]),
+      book([nodeRaw]),
+      book([relayRaw]),
     ])
     expect(prepared.candidates.length).toBe(2)
     const snap = snapshot(new Map([[digestOf(nodeRaw), state()]]))
@@ -396,12 +394,12 @@ describe('状态机（mock 链上快照）', () => {
     expect(view.tradeable[0].orderId).toBe(nodeRaw.orderId)
   })
 
-  it('软撤单：订单只在一源消失不推断撤销——仍按链上状态判 VALID', async () => {
+  it('单源在场即按链上状态判 VALID；sources 只记中继（原「软撤单不推断撤销」口径的单源形态）', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw }) // relay 侧已消失
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(cand, snapshot(new Map([[digestOf(raw), state()]])))
     expect(ev.validity).toBe('VALID')
-    expect(ev.sources).toEqual(['node'])
+    expect(ev.sources).toEqual(['relay'])
   })
 })
 
@@ -415,50 +413,19 @@ describe('第 35 轮 D1：分页完整度进入状态机', () => {
     return { ev, view }
   }
 
-  it('仅节点且节点分页不完整 → UNKNOWN/SOURCE_INCOMPLETE，不进可成交集', async () => {
+  it('公告栏分页不完整 → UNKNOWN/SOURCE_INCOMPLETE，不进可成交集', async () => {
     const raw = await signedRaw()
-    const { ev, view } = await evalWithBooks([book('node', [raw], false)], raw)
+    const { ev, view } = await evalWithBooks([book([raw], false)], raw)
     expect(ev.validity).toBe('UNKNOWN')
     expect(ev.reasons).toContain('SOURCE_INCOMPLETE')
     expect(view.tradeable.length).toBe(0)
-  })
-
-  it('仅公告栏且公告栏分页不完整 → UNKNOWN/SOURCE_INCOMPLETE', async () => {
-    const raw = await signedRaw()
-    const { ev, view } = await evalWithBooks([book('relay', [raw], false)], raw)
-    expect(ev.validity).toBe('UNKNOWN')
-    expect(ev.reasons).toContain('SOURCE_INCOMPLETE')
-    expect(view.tradeable.length).toBe(0)
-  })
-
-  it('两源都在但两源都不完整 → UNKNOWN/SOURCE_INCOMPLETE', async () => {
-    const raw = await signedRaw()
-    const { ev } = await evalWithBooks(
-      [book('node', [raw], false), book('relay', [raw], false)],
-      raw,
-    )
-    expect(ev.validity).toBe('UNKNOWN')
-    expect(ev.reasons).toContain('SOURCE_INCOMPLETE')
-  })
-
-  it('一源不完整、另一源完整 → 按完整来源判定，仍可 VALID', async () => {
-    const raw = await signedRaw()
-    const { ev } = await evalWithBooks(
-      [book('node', [raw], false), book('relay', [raw], true)],
-      raw,
-    )
-    expect(ev.validity).toBe('VALID')
-    expect(ev.reasons).not.toContain('SOURCE_INCOMPLETE')
   })
 
   it('下一轮分页恢复完整 → 同单回到 VALID（恢复性）', async () => {
     const raw = await signedRaw()
-    const first = await evalWithBooks([book('node', [raw], false)], raw)
+    const first = await evalWithBooks([book([raw], false)], raw)
     expect(first.ev.validity).toBe('UNKNOWN')
-    const second = await evalWithBooks(
-      [book('node', [raw], true), book('relay', [raw], true)],
-      raw,
-    )
+    const second = await evalWithBooks([book([raw], true)], raw)
     expect(second.ev.validity).toBe('VALID')
   })
 })
@@ -471,10 +438,10 @@ describe('阶段 3：方向进签名后的 N1/N3 场景（篡改必露馅、证�
     const raw = await signedRaw({ side: 'sell' })
     const flipped = { ...raw, side: 'buy' as const }
     const prepared = await prepareCandidates(CHAIN, [
-      book('node', [flipped]),
-      book('relay', [flipped]),
+      book([flipped]),
+      book([flipped]),
     ])
-    expect(prepared.candidates.length).toBe(1) // 两份改写副本彼此一致、同 digest
+    expect(prepared.candidates.length).toBe(1) // 改写副本彼此一致、同 digest（同源去重后一份）
     expect(prepared.candidates[0].anyLocalValid).toBe(false)
     const snap = snapshot(
       new Map([[digestOf(flipped), state({ lock: null, tombstone: null })]]),
@@ -493,8 +460,8 @@ describe('阶段 3：方向进签名后的 N1/N3 场景（篡改必露馅、证�
     const raw = await signedRaw({ side: 'sell' })
     const flipped = { ...raw, side: 'buy' as const }
     const prepared = await prepareCandidates(CHAIN, [
-      book('node', [flipped]),
-      book('relay', [flipped]),
+      book([flipped]),
+      book([flipped]),
     ])
     const buyObligationLock = { ...LOCK, token: PAIR_TOKENS.quote }
     const snap = snapshot(
@@ -507,12 +474,12 @@ describe('阶段 3：方向进签名后的 N1/N3 场景（篡改必露馅、证�
     expect(mergeBooks(CHAIN, PAIR, prepared, snap).tradeable.length).toBe(0)
   })
 
-  it('(c) 两源一致的正常单（含共同声称 market）→ 观察全 VALID，逐单证明放行进可成交集', async () => {
+  it('(c) 中继簿内正常单（含声称 market）→ 观察全 VALID，逐单证明放行进可成交集', async () => {
     const plain = await signedRaw({ orderId: 'r36plain' })
     const mkt = await signedRaw({ orderId: 'r36mkt', execType: 'market' })
     const prepared = await prepareCandidates(CHAIN, [
-      book('node', [plain, mkt]),
-      book('relay', [plain, mkt]),
+      book([plain, mkt]),
+      book([plain, mkt]),
     ])
     const snap = snapshot(
       new Map([
@@ -531,7 +498,7 @@ describe('阶段 3：方向进签名后的 N1/N3 场景（篡改必露馅、证�
     // 来自链上快照过期或簿数据不一致；夹具直接构造不一致快照验证
     // 旗标语义不变：只记观察信号，不降级、不阻断（认证只认签名证明）。
     const raw = await signedRaw({ side: 'sell' }) // 签名 sell → 付款侧 tokenIn(base)
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const snap = snapshot(
       new Map([[digestOf(raw), state({ lock: { ...LOCK, token: PAIR_TOKENS.quote } })]]),
     )
@@ -542,36 +509,9 @@ describe('阶段 3：方向进签名后的 N1/N3 场景（篡改必露馅、证�
     expect(mergeBooks(CHAIN, PAIR, { candidates: [cand], unbuildable: [] }, snap).tradeable.length).toBe(1)
   })
 
-  it('(d) 公告栏单源 + 落锁不符 → 同样只记观察旗标', async () => {
-    const raw = await signedRaw({ side: 'sell' })
-    const cand = await prepareOne({ relay: raw })
-    const snap = snapshot(
-      new Map([[digestOf(raw), state({ lock: { ...LOCK, token: PAIR_TOKENS.quote } })]]),
-    )
-    const ev = evaluateCandidate(cand, snap)
-    expect(ev.validity).toBe('VALID')
-    expect(ev.reasons).toContain('SIDE_LOCK_MISMATCH')
-  })
-
-  it('(d) 两源同单 + 落锁不符 → 旗标出现且 conflict=false（冲突检查与旗标各管一摊）', async () => {
-    const raw = await signedRaw({ side: 'sell' })
-    const prepared = await prepareCandidates(CHAIN, [
-      book('node', [raw]),
-      book('relay', [raw]),
-    ])
-    expect(prepared.candidates.length).toBe(1)
-    const ev = evaluateCandidate(
-      prepared.candidates[0],
-      snapshot(new Map([[digestOf(raw), state({ lock: { ...LOCK, token: PAIR_TOKENS.quote } })]])),
-    )
-    expect(ev.conflict).toBe(false)
-    expect(ev.validity).toBe('VALID')
-    expect(ev.reasons).toContain('SIDE_LOCK_MISMATCH')
-  })
-
   it('单源声称市价单（execType=market）→ 观察 VALID（第 36 轮起不再 EXEC_TYPE_UNPROVEN 降级）', async () => {
     const raw = await signedRaw({ execType: 'market' })
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state()]])),
@@ -581,13 +521,14 @@ describe('阶段 3：方向进签名后的 N1/N3 场景（篡改必露馅、证�
     expect(ev.tradableBlockers).toEqual([]) // 阶段 3：方向证明成立
   })
 
-  it('execType 一源写 limit、一源不写 → 同为缺省语义，不算冲突', async () => {
+  it('同单在中继簿内重复出现（副本 execType 写法不同）→ 同源去重只留先到一份，仍 VALID', async () => {
+    // 原双源断言「两源 execType 写法不同不算冲突」随冲突判定一并退役；
+    // 单源等价行为是 prepareCandidates 的同源同 digest 去重：第二份
+    // 副本被忽略，候选只有一份、按先到副本评估（第 51 轮登记改写）。
     const raw = await signedRaw()
     const withLimit = { ...raw, execType: 'limit' }
-    const prepared = await prepareCandidates(CHAIN, [
-      book('node', [withLimit]),
-      book('relay', [raw]),
-    ])
+    const prepared = await prepareCandidates(CHAIN, [book([raw, withLimit])])
+    expect(prepared.candidates.length).toBe(1)
     const ev = evaluateCandidate(
       prepared.candidates[0],
       snapshot(new Map([[digestOf(raw), state()]])),
@@ -627,6 +568,40 @@ describe('公告栏适配器分页完整度', () => {
   })
 })
 
+describe('第 51 轮块 3 根因修复：中继适配器缺省 fetch 显式超时', () => {
+  it('对端永不响应 → 在截止期内失败（不再无界等待）', async () => {
+    const originalFetch = globalThis.fetch
+    // 对端永不返回响应，只在 abort 信号到达时才 reject（真实 fetch 的语义）
+    globalThis.fetch = ((_url: unknown, init?: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('The operation was aborted', 'AbortError')),
+        )
+      })) as typeof fetch
+    try {
+      const adapter = createRelayBookAdapter('https://relay.example', undefined, {
+        timeoutMs: 50,
+      })
+      const started = Date.now()
+      await expect(adapter.fetchBook(CHAIN, PAIR)).rejects.toThrow()
+      expect(Date.now() - started).toBeLessThan(5000)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('注入 fetchFn 的路径不受缺省超时影响（调用方自带超时纪律）', async () => {
+    const adapter = createRelayBookAdapter('https://relay.example', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ bids: [], asks: [] }),
+    }))
+    const res = await adapter.fetchBook(CHAIN, PAIR)
+    expect(res.bids).toEqual([])
+    expect(res.complete).toBe(true)
+  })
+})
+
 describe('第 38 轮：节点定点小数 amount 解析与丢弃计数', () => {
   const nodeRow = {
     orderId: 'soak_1',
@@ -662,15 +637,16 @@ describe('第 38 轮：节点定点小数 amount 解析与丢弃计数', () => {
     expect(o!.amount).toBe('1000000000000000000')
   })
 
-  it('normalizeBookRows 计数丢弃；节点适配器 SourceBook 带 rawRows/droppedRows', async () => {
+  it('normalizeBookRows 计数丢弃；中继适配器 SourceBook 带 rawRows/droppedRows（原节点适配器用例的等价改写）', async () => {
     const bad = { ...nodeRow, orderId: 'bad', amount: '1.5' }
     const { orders, droppedRows } = normalizeBookRows([nodeRow, bad])
     expect(orders.length).toBe(1)
     expect(droppedRows).toBe(1)
 
-    const adapter = createNodeBookAdapter(async () => ({
-      data: { pair: PAIR, bids: [nodeRow, bad], asks: [] },
-      baseUrl: 'http://node.example',
+    const adapter = createRelayBookAdapter('https://relay.example', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ pair: PAIR, bids: [nodeRow, bad], asks: [] }),
     }))
     const book = await adapter.fetchBook(CHAIN, PAIR)
     expect(book.bids.length).toBe(1)
@@ -719,11 +695,12 @@ describe('第 40 轮：asIntString 边界口径（第 38 轮复审 F1/F2，经 t
   })
 })
 
-describe('第 40 轮：节点适配器响应形态校验（第 38 轮复审 F3）', () => {
+describe('第 40 轮：响应形态校验（第 38 轮复审 F3；第 51 轮改由中继适配器承载，requireBookSides 口径不变）', () => {
   const adapterWith = (data: unknown) =>
-    createNodeBookAdapter(async () => ({
-      data: data as { pair: string; bids: unknown[]; asks: unknown[] },
-      baseUrl: 'http://node.example',
+    createRelayBookAdapter('https://relay.example', async () => ({
+      ok: true,
+      status: 200,
+      json: async () => data,
     }))
 
   it('bids 存在但不是数组 → 抛错（按源错误处理），不静默当空簿', async () => {
@@ -826,101 +803,16 @@ describe('链上读取器（mock transport）', () => {
   })
 })
 
-describe('影子指标口径', () => {
-  it('冲突率/一致率/误判率/独有率/簿差异按定义计算', async () => {
-    // A: 两源共同、链上部分成交 30，源自报 filled 与链上一致（node）/不一致场景分开验
-    const a = await signedRaw({ orderId: 'mA' })
-    const aRelay = { ...a, filled: (30n * E18).toString(), status: 'partial' }
-    const aNode = { ...a, filled: (30n * E18).toString(), status: 'partial' }
-    // B: 仅节点有，源自报 open 但链上已全成交 → 朴素误判
-    const b = await signedRaw({ orderId: 'mB' })
-    // C: 两源共同但未签名字段冲突。阶段 3 起 side 已进签名（改写 side
-    // 会自成候选、不再同单冲突），冲突场景改由 execType 承载——语义
-    // 不变：同 digest、两源对未签名字段说法不一 → CONFLICT。
-    const c = await signedRaw({ orderId: 'mC', side: 'sell' })
-    const cRelay = { ...c, execType: 'market' }
-    const prepared = await prepareCandidates(CHAIN, [
-      book('node', [aNode, b, c]),
-      book('relay', [aRelay, cRelay]),
-    ])
-    const states = new Map<string, ChainOrderState>([
-      [digestOf(a), state({ filledIn: 30n * E18, filledOut: 60n * E18 })],
-      [digestOf(b), state({ filledIn: 100n * E18, filledOut: 200n * E18 })],
-      [digestOf(c), state()],
-    ])
-    const snap = snapshot(states)
-    const view = mergeBooks(CHAIN, PAIR, prepared, snap)
-    const observer = new ShadowObserver()
-    observer.recordAvailability('node', true)
-    observer.recordAvailability('relay', true)
-    observer.recordAvailability('rpc', true)
-    observer.observeOrders(view.all, 1700002000_000)
-    const m = computeShadowMetrics(
-      {
-        views: [view],
-        books: [{ pair: PAIR, node: book('node', [aNode, b, c]), relay: book('relay', [aRelay, cRelay]) }],
-        chainOk: true,
-        nowMs: 1700002000_000,
-      },
-      observer,
-    )
-    expect(m.totals).toEqual({ orders: 3, common: 2, nodeOnly: 1, relayOnly: 0 })
-    expect(m.conflictRateAmongCommon).toEqual({ num: 1, den: 2, rate: 0.5 })
-    // 一致率分母 = 有链上判定的共同单 = A、C 两单；C 冲突 → 不一致；A 一致
-    expect(m.stateConsistencyRate).toEqual({ num: 1, den: 2, rate: 0.5 })
-    expect(m.singleSourceRatio.rate).toBeCloseTo(1 / 3)
-    // 朴素集：A(open/partial)、B(open)、C(open) = 3；链上 INVALID 只有 B
-    expect(m.falseTradeableRate).toEqual({ num: 1, den: 3, rate: 1 / 3 })
-    expect(m.chainInvalidRatio).toEqual({ num: 1, den: 2, rate: 0.5 })
-    expect(m.availability.node).toEqual({ num: 1, den: 1, rate: 1 })
-    expect(m.paginationComplete).toEqual({ node: true, relay: true })
-    const sellDiff = m.bookDiffByPairSide.find((d) => d.side === 'sell')!
-    expect(sellDiff.onlyNode).toBe(1) // B 仅节点
-    expect(sellDiff.trustworthy).toBe(true)
-    // 发现延迟样本：A/B/C 均被观察到（nowMs - createdAt*1000 = 2000 秒）
-    expect(m.discoveryLatencyMs.node.samples).toBe(3)
-    expect(m.discoveryLatencyMs.node.median).toBe(2000_000)
-  })
-
-  it('分页截断时簿差异条目标 trustworthy=false', async () => {
-    const a = await signedRaw({ orderId: 'mT' })
-    const prepared = await prepareCandidates(CHAIN, [book('node', [a]), book('relay', [a], false)])
-    const view = mergeBooks(
-      CHAIN,
-      PAIR,
-      prepared,
-      snapshot(new Map([[digestOf(a), state()]])),
-    )
-    const observer = new ShadowObserver()
-    const m = computeShadowMetrics(
-      {
-        views: [view],
-        books: [{ pair: PAIR, node: book('node', [a]), relay: book('relay', [a], false) }],
-        chainOk: true,
-        nowMs: Date.now(),
-      },
-      observer,
-    )
-    expect(m.paginationComplete.relay).toBe(false)
-    expect(m.bookDiffByPairSide.every((d) => d.trustworthy === false)).toBe(true)
-  })
-})
-
-describe('编排与故障恢复', () => {
+describe('编排与故障恢复（第 51 轮：中继单源 runBookRound）', () => {
   function depsWith(opts: {
     relayFails?: boolean
     rpcFails?: boolean
     rows: RawOrder[]
-  }): DualReadDeps {
-    const nodeAdapter: BookAdapter = {
-      async fetchBook(chainId, pair) {
-        return { ...book('node', opts.rows), chainId, pair }
-      },
-    }
+  }): BookReadDeps {
     const relayAdapter: BookAdapter = {
       async fetchBook(chainId, pair) {
         if (opts.relayFails) throw new Error('relay down')
-        return { ...book('relay', opts.rows), chainId, pair }
+        return { ...book(opts.rows), chainId, pair }
       },
     }
     const states = new Map<string, ChainOrderState>()
@@ -931,42 +823,31 @@ describe('编排与故障恢复', () => {
         return snapshot(states, { chainId })
       },
     }
-    return { mode: 'shadow', nodeAdapter, relayAdapter, chainReader, observer: new ShadowObserver() }
+    return { relayAdapter, chainReader }
   }
 
-  it('disabled 模式不拉任何源', async () => {
-    const round = await runDualReadRound({ mode: 'disabled' }, CHAIN, [PAIR])
-    expect(round.views.length).toBe(0)
-    expect(round.metrics).toBeNull()
-  })
-
-  it('公告栏故障轮次指标降级、下一轮恢复（可用率分开统计）', async () => {
+  it('中继故障 → 该轮簿为空 + errors.relay 记录；下一轮恢复后同单 VALID 进可成交集', async () => {
     const raw = await signedRaw({ orderId: 'fr1' })
-    const observer = new ShadowObserver()
-    const base = depsWith({ rows: [raw], relayFails: true })
-    base.observer = observer
-    const r1 = await runDualReadRound(base, CHAIN, [PAIR])
+    const r1 = await runBookRound(depsWith({ rows: [raw], relayFails: true }), CHAIN, [PAIR])
     expect(r1.errors.relay).toContain('relay down')
-    expect(r1.metrics?.availability.relay).toEqual({ num: 0, den: 1, rate: 0 })
-    // 节点单观察评估照常 VALID；阶段 3 起逐单证明成立即进可成交集
-    // （公告栏故障不影响已证明订单的认证）
-    expect(r1.views[0].all[0].validity).toBe('VALID')
-    expect(r1.views[0].tradeable.length).toBe(1)
+    expect(r1.books[0].relay).toBeNull()
+    expect(r1.views[0].all).toEqual([])
+    expect(r1.views[0].tradeable).toEqual([])
 
-    const base2 = depsWith({ rows: [raw] })
-    base2.observer = observer
-    const r2 = await runDualReadRound(base2, CHAIN, [PAIR])
-    expect(r2.metrics?.availability.relay).toEqual({ num: 1, den: 2, rate: 0.5 })
-    expect(r2.views[0].all[0].sources).toEqual(['node', 'relay'])
+    const r2 = await runBookRound(depsWith({ rows: [raw] }), CHAIN, [PAIR])
+    expect(r2.errors.relay).toBeUndefined()
+    expect(r2.views[0].all[0].validity).toBe('VALID')
+    expect(r2.views[0].all[0].sources).toEqual(['relay'])
+    expect(r2.views[0].tradeable.length).toBe(1)
   })
 
-  it('RPC 故障 → 全部 UNKNOWN、不进可成交集', async () => {
+  it('RPC 故障 → 全部 UNKNOWN、不进可成交集、errors.rpc 记录', async () => {
     const raw = await signedRaw({ orderId: 'fr2' })
-    const round = await runDualReadRound(depsWith({ rows: [raw], rpcFails: true }), CHAIN, [PAIR])
+    const round = await runBookRound(depsWith({ rows: [raw], rpcFails: true }), CHAIN, [PAIR])
     expect(round.chainOk).toBe(false)
+    expect(round.errors.rpc).toContain('rpc down')
     expect(round.views[0].all[0].validity).toBe('UNKNOWN')
     expect(round.views[0].tradeable.length).toBe(0)
-    expect(round.metrics?.unknownRatio.rate).toBe(1)
   })
 })
 
@@ -988,8 +869,8 @@ describe('逐单方向证明门禁（第 37 轮建立，阶段 3 定版）', () 
     // 端到端：强制能力为 true 但注入旧类型集证明输入 → 仍阻断
     const raw = await signedRaw({ orderId: 'r37a' })
     const prepared = await prepareCandidates(CHAIN, [
-      book('node', [raw]),
-      book('relay', [raw]),
+      book([raw]),
+      book([raw]),
     ])
     const snap = snapshot(new Map([[digestOf(raw), state()]]))
     const ev = evaluateCandidate(prepared.candidates[0], snap, {
@@ -1032,7 +913,7 @@ describe('逐单方向证明门禁（第 37 轮建立，阶段 3 定版）', () 
 
   it('(d) 能力声明被关（opts 强制 false）→ 证明成立也仍阻断（双条件缺一不可）', async () => {
     const raw = await signedRaw({ orderId: 'r37d' })
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const snap = snapshot(new Map([[digestOf(raw), state()]]))
     const ev = evaluateCandidate(cand, snap, { sideProofAvailable: false })
     expect(ev.validity).toBe('VALID')
@@ -1042,8 +923,8 @@ describe('逐单方向证明门禁（第 37 轮建立，阶段 3 定版）', () 
   it('(e) 缺省路径（生产常量）：签名订单逐单证明成立 → 无阻断、进可成交集', async () => {
     const raw = await signedRaw({ orderId: 'r37e' })
     const prepared = await prepareCandidates(CHAIN, [
-      book('node', [raw]),
-      book('relay', [raw]),
+      book([raw]),
+      book([raw]),
     ])
     const snap = snapshot(new Map([[digestOf(raw), state()]]))
     const view = mergeBooks(CHAIN, PAIR, prepared, snap)
@@ -1079,12 +960,7 @@ describe('第 40 轮复审骑乘（阶段 3 并入）：负零口径与顶层数
     expect(toRawOrder({ ...baseRow, amount: '-0.5' })).toBeNull()
   })
 
-  it('顶层数组响应 → 节点/中继适配器均抛错按源错误处理（不静默当空簿）', async () => {
-    const nodeAdapter = createNodeBookAdapter(async () => ({
-      data: [] as never,
-      baseUrl: 'http://node.example',
-    }))
-    await expect(nodeAdapter.fetchBook(CHAIN, PAIR)).rejects.toThrow(/top-level array/)
+  it('顶层数组响应 → 中继适配器抛错按源错误处理（不静默当空簿）', async () => {
     const relayAdapter = createRelayBookAdapter('https://relay.example', async () => ({
       ok: true,
       status: 200,
@@ -1098,7 +974,7 @@ describe('第 42 轮：chain-unknown 阻断口径（窗口 1 遗留裁定）', (
   it('不可重构订单恒带 CHAIN_UNPROVEN 阻断、永不进可成交集', async () => {
     const raw = await signedRaw()
     raw.pair = 'XXX/USDT' // 未知交易对 → buildSignedOrderData 失败 → unbuildable
-    const prepared = await prepareCandidates(CHAIN, [book('node', [raw])])
+    const prepared = await prepareCandidates(CHAIN, [book([raw])])
     expect(prepared.candidates).toEqual([])
     expect(prepared.unbuildable).toHaveLength(1)
     const u = prepared.unbuildable[0]
@@ -1109,7 +985,7 @@ describe('第 42 轮：chain-unknown 阻断口径（窗口 1 遗留裁定）', (
 
   it('链上已证的 VALID 单不带 CHAIN_UNPROVEN（口径不误伤正常放行）', async () => {
     const raw = await signedRaw()
-    const cand = await prepareOne({ node: raw })
+    const cand = await prepareOne(raw)
     const ev = evaluateCandidate(
       cand,
       snapshot(new Map([[digestOf(raw), state()]])),
@@ -1119,15 +995,13 @@ describe('第 42 轮：chain-unknown 阻断口径（窗口 1 遗留裁定）', (
   })
 })
 
-describe('第 46 轮 P1：双源同单（同 digest）合并+撮合只消费一次', () => {
-  it('同一签名订单同时在节点簿与中继簿 → 候选/可成交/撮合输入各只有一份，撮合只成交一次', async () => {
-    // 同一张真签名卖单（100 Token0 @ 2）原文同时出现在两源
+describe('第 46 轮 P1（第 51 轮单源改写）：同单在中继簿内重复出现 → 合并+撮合只消费一次', () => {
+  it('同一签名订单在中继簿里出现两行（同 digest）→ 候选/可成交/撮合输入各只有一份，撮合只成交一次', async () => {
+    // 原双源形态（同单同时在节点簿与中继簿）随节点退役消失；单源下
+    // 同一风险的等价形态是中继簿内部重复行（重广播/镜像回灌都可能
+    // 造成）——prepareCandidates 的同源同 digest 去重是唯一防线。
     const raw = await signedRaw()
-    const prepared = await prepareCandidates(CHAIN, [
-      book('node', [raw]),
-      book('relay', [raw]),
-    ])
-    // 合并层按 digest 只认一个订单身份，来源记双源
+    const prepared = await prepareCandidates(CHAIN, [book([raw, { ...raw }])])
     expect(prepared.candidates.length).toBe(1)
     const view = mergeBooks(
       CHAIN,
@@ -1136,12 +1010,12 @@ describe('第 46 轮 P1：双源同单（同 digest）合并+撮合只消费一�
       snapshot(new Map([[digestOf(raw), state()]])),
     )
     expect(view.tradeable.length).toBe(1)
-    expect(view.tradeable[0].sources).toEqual(expect.arrayContaining(['node', 'relay']))
+    expect(view.tradeable[0].sources).toEqual(['relay'])
     // 撮合输入层同样只有一份
     const makers = toMatcherOrders(view.tradeable)
     expect(makers.length).toBe(1)
     // 撮合消费：买方 taker 想吃 150 Token0（超过该单余量 100）——若同单
-    // 被双源复制成两份，会成交两腿共 150；只消费一次则一腿封顶 100。
+    // 被复制成两份，会成交两腿共 150；只消费一次则一腿封顶 100。
     const result = matchTaker(
       {
         trader: wallet1.address,
@@ -1163,10 +1037,7 @@ describe('第 46 轮 P1：双源同单（同 digest）合并+撮合只消费一�
     // orderId 去重（它只按输入数组逐份消费），所以把合并层的输出
     // 人为复制一份再喂进去，就精确模拟了「合并层去重失效」。
     const raw = await signedRaw()
-    const prepared = await prepareCandidates(CHAIN, [
-      book('node', [raw]),
-      book('relay', [raw]),
-    ])
+    const prepared = await prepareCandidates(CHAIN, [book([raw])])
     const view = mergeBooks(
       CHAIN,
       PAIR,

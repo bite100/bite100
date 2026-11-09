@@ -14,7 +14,7 @@ import { OrderBookWidget } from './OrderBookWidget'
 import { RecentTradesWidget } from './RecentTradesWidget'
 import { TradeTabsPanel } from './TradeTabsPanel'
 import { MarketsList } from '../markets/MarketsList'
-import { useNodeOrderBook } from '../../hooks/useNodeOrderBook'
+import { useRelayOrderBook } from '../../hooks/useRelayOrderBook'
 import { useReferencePrice } from '../../hooks/useReferencePrice'
 import type { PairStats } from '../../hooks/usePairStats'
 import { CHAIN_ID } from '../../config'
@@ -40,7 +40,7 @@ export function MobileTradeView({ pair, setPair, stats, account, getSigner, onSh
   const [chartTab, setChartTab] = useState<'kline' | 'depth'>('kline')
   const [miniTab, setMiniTab] = useState<'book' | 'trades'>('book')
 
-  const bookState = useNodeOrderBook(pair)
+  const bookState = useRelayOrderBook(pair)
   const book = useMemo(
     () => ({ bids: bookState.bids, asks: bookState.asks }),
     [bookState.bids, bookState.asks],

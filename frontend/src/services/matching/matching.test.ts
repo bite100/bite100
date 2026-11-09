@@ -224,7 +224,8 @@ describe('fills（与节点 TradeToFill 同口径）', () => {
     const makerEv = {
       orderId: 'mSell',
       raw: {
-        node: {
+        // 第 51 轮：单源后 fills 只读中继副本（原夹具挂在 node 键下）
+        relay: {
           orderId: 'mSell',
           trader: B,
           pair: 'BTC/USDT',
