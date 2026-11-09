@@ -15,9 +15,11 @@ import { writeTools } from './tools/write'
 import { matchTools } from './tools/match'
 import type { ToolContext, ToolDef } from './tools/common'
 
-export function buildServer(ctx: ToolContext): McpServer {
-  const server = new McpServer({ name: 'bit100-mcp', version: '0.49.0' })
-  const tools: ToolDef[] = [...readTools, ...writeTools, ...matchTools]
+export function buildServer(
+  ctx: ToolContext,
+  tools: ToolDef[] = [...readTools, ...writeTools, ...matchTools],
+): McpServer {
+  const server = new McpServer({ name: 'bit100-mcp', version: '0.57.0' })
   for (const tool of tools) {
     server.registerTool(
       tool.name,

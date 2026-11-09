@@ -36,7 +36,11 @@ export class RelayClient {
   private base: string
   private fetchFn: FetchFn
 
-  constructor(baseUrl: string, fetchFn: FetchFn = fetch) {
+  // 缺省 fetch 必须用箭头函数转一手：原生 fetch 以对象方法形式调用
+  // （this.fetchFn(...)）在浏览器/Workers 里会抛 Illegal invocation
+  // （this 绑定不对）；Node 的 undici 恰好容忍，所以 stdio 版没暴露。
+  // 第 57 轮 Workers 移植实测抓到，修在根上（任何宿主都受益）。
+  constructor(baseUrl: string, fetchFn: FetchFn = (url, init) => fetch(url, init)) {
     this.base = baseUrl.replace(/\/+$/, '')
     this.fetchFn = fetchFn
   }

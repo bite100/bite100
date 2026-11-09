@@ -1,5 +1,6 @@
 node_modules/
 dist/
+worker-dist/
 audit/
 /agents.json
 kill-switch

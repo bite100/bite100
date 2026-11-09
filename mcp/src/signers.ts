@@ -71,9 +71,30 @@ const KEYFILE_ENV: Record<AgentRole, string> = {
 
 const signerCache = new Map<AgentRole, AgentSigner>()
 
+/**
+ * 无文件系统运行时（如 Cloudflare Workers）的钥注入钩子：宿主在装配时
+ * 注入「按角色返回私钥十六进制文本」的提供者，loadSignerForRole 优先
+ * 走它；Node/stdio 路径不注入，行为与原来逐字一致（单测覆盖原路径）。
+ */
+let keyTextProvider: ((role: AgentRole) => string | null) | null = null
+
+export function _setKeyTextProvider(fn: ((role: AgentRole) => string | null) | null): void {
+  keyTextProvider = fn
+  signerCache.clear()
+}
+
 export function loadSignerForRole(role: AgentRole): AgentSigner {
   const cached = signerCache.get(role)
   if (cached) return cached
+  if (keyTextProvider) {
+    const key = keyTextProvider(role)
+    if (!key) {
+      throw new ToolError('signer_not_configured', `角色 ${role} 的签名器未配置：运行时未提供测试钥`)
+    }
+    const injected = new TestWalletSigner(new ethers.Wallet(key))
+    signerCache.set(role, injected)
+    return injected
+  }
   const envName = KEYFILE_ENV[role]
   const path = process.env[envName]
   if (!path) {
