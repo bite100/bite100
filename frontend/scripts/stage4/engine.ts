@@ -307,6 +307,17 @@ export interface ChainCounts {
   scenarios: Record<string, number>
 }
 
+/** B5 恢复账本条目：已提交但未探针确认的结算（落盘 stage4-pending-settlements.json） */
+export interface PendingSettlement {
+  txHash: string
+  chainId: number
+  pair: string
+  takerDigest: string
+  legs: number
+  takerAmountIn: string | null
+  notedAt: number
+}
+
 export class ZeroToleranceError extends Error {}
 
 /** 构建备注：第 45 轮（阶段 4 后修复轮）定版，随状态文件与 window-start 行落盘 */
@@ -327,9 +338,12 @@ export class Stage4Ledger {
   }
   cycles = 0
 
+  private pending = new Map<string, PendingSettlement>()
+
   constructor(
     private readonly metricsPath: string,
     private readonly statePath: string,
+    private readonly pendingPath: string,
     readonly windowStart: number,
     readonly windowEndPlanned: number,
   ) {
@@ -374,6 +388,35 @@ export class Stage4Ledger {
     this.line({ ...item, kind: 'zerotolerance', failureKind: item.kind })
     this.saveState('zero-tolerance-triggered')
     throw new ZeroToleranceError(`${kind}: ${detail}`)
+  }
+
+  /** B5：登记一笔待确认结算并立即落盘（tmp+rename，与 saveState 同法） */
+  notePending(entry: PendingSettlement): void {
+    this.pending.set(entry.txHash.toLowerCase(), entry)
+    this.persistPending()
+  }
+
+  /** B5：结算已按链上口径确认完毕 → 从恢复账本清除 */
+  confirmPending(txHash: string): void {
+    if (this.pending.delete(txHash.toLowerCase())) this.persistPending()
+  }
+
+  /** B5：读盘上遗留的待确认结算（文件缺失/损坏按空账本处理，不阻断启动） */
+  loadPending(): PendingSettlement[] {
+    try {
+      if (!existsSync(this.pendingPath)) return []
+      const rows = JSON.parse(readFileSync(this.pendingPath, 'utf8')) as PendingSettlement[]
+      this.pending = new Map(rows.map((r) => [r.txHash.toLowerCase(), r]))
+      return rows
+    } catch {
+      return []
+    }
+  }
+
+  private persistPending(): void {
+    const tmp = `${this.pendingPath}.tmp`
+    writeFileSync(tmp, JSON.stringify([...this.pending.values()], null, 2))
+    renameSync(tmp, this.pendingPath)
   }
 
   saveState(status: string): void {
@@ -902,6 +945,19 @@ async function probeSettlement(
     probe: { receipt: 'pending', eventsMatch: 'pending', indexer: 'pending' },
   }
   ledger.settlements.push(rec)
+  const takerData = buildSignedOrderData(asRaw(takerGen), ctx.chainId)
+  // B5：拿到 txHash 先落恢复账本再往下核——进程若在确认完成前死掉
+  // （VM 重启/被杀），下次启动先复查这笔（recoverPendingSettlements），
+  // 不让已提交结算从记账里凭空消失。全部核完才在下方 confirmPending 清除。
+  ledger.notePending({
+    txHash,
+    chainId: ctx.chainId,
+    pair,
+    takerDigest: takerGen.digest.toLowerCase(),
+    legs: attempt.legsKept,
+    takerAmountIn: takerData ? takerData.amountIn : null,
+    notedAt: Date.now(),
+  })
   if (!receipt) {
     rec.probe.receipt = 'fail'
     ledger.trip(
@@ -947,7 +1003,6 @@ async function probeSettlement(
       { chainId: ctx.chainId, txHash, digest: takerGen.digest },
     )
   }
-  const takerData = buildSignedOrderData(asRaw(takerGen), ctx.chainId)
   if (takerData && filledIn > BigInt(takerData.amountIn)) {
     ledger.trip(
       'invalidSettle',
@@ -955,7 +1010,91 @@ async function probeSettlement(
       { chainId: ctx.chainId, txHash, digest: takerGen.digest },
     )
   }
+  ledger.confirmPending(txHash)
   ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
+}
+
+/**
+ * B5 启动恢复：进新周期前先复查上次进程遗留的待确认结算，全部
+ * 确认完才开跑。复查口径与 probeSettlement 完全一致（回执
+ * status=1、成交事件数 == 腿数、taker 已成交量不超签名量，均以
+ * 链上为准）；任一笔状态未知或不符 → 按 B4 失败关闭 trip 停机，
+ * 宁可不开跑也不丢账。确认的结算并入本轮 settlements/计数并从
+ * 恢复账本清除，索引器探针按 pending 在后续周期照常复查。
+ */
+export async function recoverPendingSettlements(
+  ledger: Stage4Ledger,
+  ctxs: Map<number, ChainCtx>,
+): Promise<void> {
+  const pending = ledger.loadPending()
+  if (pending.length === 0) return
+  log(`启动恢复：复查 ${pending.length} 笔遗留待确认结算（B5 恢复账本）`)
+  for (const entry of pending) {
+    const ctx = ctxs.get(entry.chainId)
+    if (!ctx) {
+      ledger.trip('invalidSettle', `恢复账本含未知链结算（B4 失败关闭）tx=${entry.txHash} chainId=${entry.chainId}`, {
+        chainId: entry.chainId,
+        txHash: entry.txHash,
+      })
+    }
+    const receipt = await fetchReceiptWithGrace(ctx!, entry.txHash)
+    if (!receipt) {
+      ledger.trip(
+        'invalidSettle',
+        `恢复复查：结算状态未知，宽限 ${RECEIPT_GRACE_MS / 1000}s 内未取得回执（B4 失败关闭）tx=${entry.txHash}`,
+        { chainId: entry.chainId, txHash: entry.txHash },
+      )
+    }
+    if (receipt!.status !== 1) {
+      ledger.trip('invalidSettle', `恢复复查：结算 tx 回执 status=${receipt!.status} tx=${entry.txHash}`, {
+        chainId: entry.chainId,
+        txHash: entry.txHash,
+      })
+    }
+    const events = parseTradeEvents(receipt!, ctx!.chainCfg.contracts.settlement)
+    if (events.length !== entry.legs) {
+      ledger.trip(
+        'invalidSettle',
+        `恢复复查：成交事件数 ${events.length} != 撮合腿数 ${entry.legs} tx=${entry.txHash}`,
+        { chainId: entry.chainId, txHash: entry.txHash },
+      )
+    }
+    if (entry.takerAmountIn) {
+      const filledIn = (await traceCall('rpc.orderFilledIn', entry.chainId, () =>
+        ctx!.settlementRead.orderFilledIn(entry.takerDigest),
+      )) as bigint
+      if (filledIn > BigInt(entry.takerAmountIn)) {
+        ledger.trip(
+          'invalidSettle',
+          `恢复复查：taker 已成交量 ${filledIn} 超签名量 ${entry.takerAmountIn} tx=${entry.txHash}`,
+          { chainId: entry.chainId, txHash: entry.txHash, digest: entry.takerDigest },
+        )
+      }
+    }
+    const rec: SettlementRecord = {
+      txHash: entry.txHash,
+      chainId: entry.chainId,
+      pair: entry.pair,
+      takerDigest: entry.takerDigest,
+      legs: entry.legs,
+      settledAt: entry.notedAt,
+      events,
+      probe: { receipt: 'ok', eventsMatch: 'ok', indexer: 'pending' },
+    }
+    ledger.settlements.push(rec)
+    ledger.counts[entry.chainId].settlements += 1
+    ledger.counts[entry.chainId].legs += entry.legs
+    ledger.confirmPending(entry.txHash)
+    ledger.line({
+      kind: 'recovery',
+      ts: Date.now(),
+      chainId: entry.chainId,
+      txHash: entry.txHash,
+      result: 'confirmed',
+    })
+    ledger.line({ kind: 'probe', ts: Date.now(), ...rec })
+    log(`恢复确认结算 tx=${entry.txHash}（chain ${entry.chainId}，${entry.legs} 腿）`)
+  }
 }
 
 /**
@@ -1763,10 +1902,12 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
   }
   const metricsPath = join(cfg.outDir, 'stage4-metrics.jsonl')
   const statePath = join(cfg.outDir, 'stage4-state.json')
+  const pendingPath = join(cfg.outDir, 'stage4-pending-settlements.json')
   const windowStart = Date.now()
   const ledger = new Stage4Ledger(
     metricsPath,
     statePath,
+    pendingPath,
     windowStart,
     windowStart + cfg.maxHours * 3600_000,
   )
@@ -1792,6 +1933,17 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
       `间隔 ${cfg.intervalSec}s，目标每链 ≥${cfg.targetPerChain} 单`,
   )
   log(BUILD_NOTE)
+  // B5：先复查遗留待确认结算，确认完才进新周期（失败关闭在此拦截）
+  try {
+    await recoverPendingSettlements(ledger, ctxs)
+  } catch (e) {
+    if (e instanceof ZeroToleranceError) {
+      log(`启动恢复触发失败关闭，停跑保全证据：${e.message}`)
+      ledger.saveState('zero-tolerance-triggered')
+      return 3
+    }
+    throw e
+  }
   let stopping = false
   const onSig = () => {
     stopping = true
