@@ -17,8 +17,11 @@
    指向已停机的本地节点地址，其失败被双读按源降级——这正是要验
    的行为）→ 本地撮合 → 预检剔腿 → `settleTradesBatch` 自提；
 4. 结算探针：回执 status、TradeSettled 事件数 == 腿数、taker
-   已成交量不超签名量；Envio 索引器成交与回执事件多重集比对
-   （宽限期默认 900s，期内反复复查，超时不符/缺失即零容忍）。
+   已成交量不超签名量（回执读取带 120s 宽限轮询，宽限内查不到
+   = 结算状态未知、按失败关闭停跑——第 45 轮 B4）；Envio 索引器
+   成交与回执事件多重集比对（宽限期默认 900s，期内反复复查）——
+   第 45 轮起按 Ren 口径只记观察项：索引器只是展示缓存、不是
+   账本，滞后/不符不停机（见下「零容忍线」）。
 
 低频剧本（按周期号轮转，与 soak 的低频对抗样本同模式）：
 
@@ -33,7 +36,19 @@
 
 零容忍线（任一触发立即停跑、保全证据、状态文件标
 `zero-tolerance-triggered`、退出码 3）：**订单丢失 0、无效成交
-上链 0、篡改单被接受 0、中继簿与索引器成交不一致 0**。
+上链 0、篡改单被接受 0、结算状态未知 0**（第 45 轮 B4 新增：
+已提交结算在宽限内查不到回执或关键读数重试后仍失败 = 失败
+关闭）。索引器不一致**不在**线内（Ren 2026-11-09 口径：链是
+唯一账本，索引器只是展示缓存）：滞后记 `lagging`、字段不符记
+`mismatch-observed`，均只记观察项、继续复查。
+
+第 45 轮另加：**卡点隔离埋点**——周期路径每个网络调用在 metrics
+里落 `call-start`/`call-end` 对（调用名见 engine.ts 的 traceCall
+包裹点，如 `book.relay`、`match.execute`、`rpc.getTransactionReceipt`）；
+运行若卡死，最后一个未配对的 `call-start` 即卡住的调用。
+**B5 恢复账本** `stage4-pending-settlements.json`：已提交未确认的
+结算先落盘，启动时先复查确认（口径同结算探针）才进新周期，
+确认后清除。
 
 ## 骑乘对照表（不重复造轮子）
 
@@ -47,7 +62,7 @@
 | 回执事件解析 | 产品 `SETTLEMENT_ABI`（indexer association 同一 ABI） |
 | 已成交量/释锁/归责入口 | 最小 ABI 片段（与 generator 的最小 ABI 模式同构；产品 ABI 子集未覆盖 orderFilledIn/releaseOrderLock/chargeFailedSettlement） |
 | 打包 | 仓库既有 esbuild（与 soak 的 build.mjs 同法） |
-| 自有代码 | 中继单发、场景轮转、探针编排、JSONL/状态记账、CLI |
+| 自有代码 | 中继单发、场景轮转、探针编排、JSONL/状态记账、CLI、第 45 轮的调用打点（traceCall）/失败关闭/恢复账本（落盘骑 saveState 同款 tmp+rename 原子写法，不新造框架） |
 
 ## 构建与运行
 
@@ -65,9 +80,11 @@ S4_INTERVAL_SEC=180 S4_MAX_HOURS=17 \
 ```
 
 产物落 `~/workspace/bite100-stage4/`：`stage4-metrics.jsonl`
-（逐事件记账）、`stage4-state.json`（随时可读的汇总状态：窗口、
-双链计数、零容忍状态、失败清单尾部）。run 模式拒绝在
-`S4_INDEXER_URL` 未设置时启动（索引器探针是零容忍线的一部分）。
+（逐事件记账，含 call-start/call-end 打点）、`stage4-state.json`
+（随时可读的汇总状态：窗口、双链计数、零容忍状态、失败清单
+尾部）、`stage4-pending-settlements.json`（B5 恢复账本，正常
+确认为空）。run 模式拒绝在 `S4_INDEXER_URL` 未设置时启动
+（索引器是展示一致性观察项的数据源）。
 
 ## 环境变量
 
