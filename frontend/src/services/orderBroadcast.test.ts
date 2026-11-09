@@ -185,6 +185,38 @@ describe('broadcastOrderDualChannel（第 45 轮 A1/A2）', () => {
     expect(traces.some((s: string) => s.includes('迟到接单'))).toBe(true)
   })
 
+  it('P2-4 失败路径（第 48 轮）：签后篡改订单字段 → 生产验签必须为 false', async () => {
+    // 正路径（上一条）证明真签名验得过；本条补失败路径：签名后
+    // 把 amount 改掉，签名覆盖的数据变了，验签必须失败——证明
+    // A2 的验签断言不是恒真。
+    const tampered: Record<string, unknown> = {
+      ...ORDER_BODY,
+      amount: '2000000000000000000',
+    }
+    const data = buildSignedOrderData(tampered as unknown as RawOrder, CHAIN_ID)
+    expect(data).not.toBeNull()
+    expect(
+      await verifyOrderSignatureSignedData(data!, tampered.signature as string, {
+        chainId: CHAIN_ID,
+        checkExpiry: false,
+      }),
+    ).toBe(false)
+    // 拿另一份数据的真签名来验本数据同样必须失败（签名与数据绑定；
+    // 注意同数据同钱包的签名是确定性的，所以必须换 nonce 另签一份）
+    const otherData = buildSignedOrderData(
+      { ...ORDER_BASE, nonce: 8, signature: '' } as unknown as RawOrder,
+      CHAIN_ID,
+    )!
+    const otherSig = await signOrder(otherData, TEST_WALLET, CHAIN_ID)
+    const dataOrig = buildSignedOrderData(ORDER_BODY as unknown as RawOrder, CHAIN_ID)!
+    expect(
+      await verifyOrderSignatureSignedData(dataOrig, otherSig, {
+        chainId: CHAIN_ID,
+        checkExpiry: false,
+      }),
+    ).toBe(false)
+  })
+
   it('双通道都失败 → 返回失败结果，nodeError 带节点侧原始错误', async () => {
     nodePostMock.mockRejectedValue(new Error('node down'))
     fetchMock.mockRejectedValue(new Error('relay down'))

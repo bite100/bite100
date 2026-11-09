@@ -64,7 +64,9 @@ forge script script/DeployStage3.s.sol \
 
 - [ ] 向双链新 Vault 各转入 1000 测试 USDT（部署者转出，沿用阶段 3 手段）。
 - 通过标准：`cast call <新Vault> "balanceOf(address)(uint256)" <USDT>`…
-  以 Vault 实际口径读回其 USDT 托管余额 ≥ 1000×10^6（按 USDT 6 位精度核）。
+  以 Vault 实际口径读回其 USDT 托管余额 ≥ 1000×10^18（按测试 USDT
+  实测 18 位精度核；第 48 轮文档纠正：原稿误写 6 位，测试 USDT
+  双链 decimals 实测均为 18）。
 
 ## 4. E2E（双链各一轮）
 
@@ -209,3 +211,45 @@ Base Sepolia 56357193（已回填 indexer/config.yaml）。
   后仍未回填，本机探针因本机出口代理 wss 不通无法复现 Worker 出口，
   根因未隔离（疑公共中继侧可达性/策略）；镜像按设计为 best-effort，
   D1 为主账，不阻塞切换。后续轮次可加日志可见性再查。
+
+## 附录 B：部署交易清单（第 48 轮从广播文件转录补登）
+
+来源：执行机本地 `contracts/broadcast/DeployStage3.s.sol/{11155111,84532}/run-latest.json`
+（该 broadcast 目录被 `contracts/.gitignore` 忽略、不在仓库内，故此前文档无此清单；
+哈希逐字转录自文件，未做任何改写）。两链各 **12 笔**（3 笔 CREATE + 9 笔配置 CALL），
+共 24 笔。注：Sepolia 同目录的 `run-latest.1794193126214.json` 是第一次
+因默认 gas 定价失败的尝试（只落了孤儿 Vault 0x2dc7…adf，永不使用），不在本清单内。
+
+### Sepolia（chainId 11155111，共 12 笔）
+
+| # | 类型 | 目标/新建合约 | 函数 | 交易哈希 |
+|---|---|---|---|---|
+| 1 | CREATE | Vault | — | `0xe19e827b0f109bce9fa9b1088b05d1fd9c04da76f6b2cac6ff4f2f2b2dd961e7` |
+| 2 | CREATE | Settlement | — | `0xbd3556e5c56d8bb57bb4d7196d8e708ba434fc1a1f77904467bb3705fba6d249` |
+| 3 | CALL | Settlement | setGovernance(…) | `0xf80cf86abb9cc8cfad28d9e1f3188896ed7e8eaba72669fec3e5673a27d52b6c` |
+| 4 | CALL | Settlement | setChainConfig(…) | `0x72d6ef1d4c8bb99d3e02d37d5ebdb0b5c1012e13d5ae1447826395ee0410adbc` |
+| 5 | CALL | Settlement | setFeeBps(…) | `0x8b8b06f3f8c74f38c3ed41d21926367affe28b84ee46df7531844a9b717146bf` |
+| 6 | CALL | Settlement | setMeterKeepBps(…) | `0xfed30db795085cbd490b4af541671f763ddac38389e934a0b64e887477e4cfa4` |
+| 7 | CALL | Settlement | setGasDeductCapBps(…) | `0x885e81e07454807c382708e3ddfb878abd5c978bc4fbc83c67c1947e672b8d50` |
+| 8 | CALL | Settlement | setMaxFailureGasChargeQuote(…) | `0xd1a922fb0b0749297f6150293733f19cc02a637ddfc04e35e15f4c6aa9301258` |
+| 9 | CALL | Vault | setSettlement(…) | `0xdc5bb9991d56fe9e364880f653a6a334fbbe9a28f9532c0fda8a9cb5715d7385` |
+| 10 | CALL | Vault | setLocker(…) | `0x7c9559dd4afcf566ef5ebb8fcfcc33c4b1157ad950bca970c0bedf5f7184080a` |
+| 11 | CREATE | MakerVault | — | `0x0db47b0d0453519eb064b75fbed2fcc41e1085ef395d10e0528e28e1ff13950f` |
+| 12 | CALL | MakerVault | setSigner(…) | `0x3d59e377f055897322806311797c8bfdac1497a81158fd896aeac8e6503b1263` |
+
+### Base Sepolia（chainId 84532，共 12 笔）
+
+| # | 类型 | 目标/新建合约 | 函数 | 交易哈希 |
+|---|---|---|---|---|
+| 1 | CREATE | Vault | — | `0x905d01e918f5e57a9e232744aefa6fa66172dbf2e3b3db93433aff6cdec60f33` |
+| 2 | CREATE | Settlement | — | `0x4dcbd91be8829457ead8e6f3b27f195e2f0156d8bb098dc5fb3b79fc9ff971ed` |
+| 3 | CALL | Settlement | setGovernance(…) | `0x6b1b22fe7fbd5da33b48593770c530cb8e5ff6328f3530de5690b2f0c86eaed5` |
+| 4 | CALL | Settlement | setChainConfig(…) | `0x7932dc6585a5ca72b06cfb8fa62278e8a2c8dbdc93c726e85095fe9469498c9b` |
+| 5 | CALL | Settlement | setFeeBps(…) | `0x50e36da793f48ba0edcf9fb17872290b651195f5ec82b7fc86672876cd944d33` |
+| 6 | CALL | Settlement | setMeterKeepBps(…) | `0x165fd6f5ed60c46d63cef90e788da26f55e29e6883a568c12e304cdfbd36d5fe` |
+| 7 | CALL | Settlement | setGasDeductCapBps(…) | `0xeb9896a6cb31857a691c6f23eac2ae102f0234403037321868c688299567b36e` |
+| 8 | CALL | Settlement | setMaxFailureGasChargeQuote(…) | `0x2c9eaf58b15396461b789258d3f268bb3c5b81b9fc0cc1fc3c80d6fb27a78303` |
+| 9 | CALL | Vault | setSettlement(…) | `0xc8aaf9edc72cbf3fad7af3768b0c85f6237d2c5602f54aff9f52afac363824e7` |
+| 10 | CALL | Vault | setLocker(…) | `0x2fe5051a2f81a02ae4bb304609cfb1b73a878487f417fb5d773b092756ceaa1d` |
+| 11 | CREATE | MakerVault | — | `0xadc2de0a544c283d3f54535a0e48d20f59964382908210370f3ba1f6833c8e21` |
+| 12 | CALL | MakerVault | setSigner(…) | `0xa01538bbe3da791f8743f9ed223d5abbc635c34acdb193736632b5b73e8c9584` |

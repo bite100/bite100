@@ -166,6 +166,14 @@ export function HardCancelAction({ order, account, getSigner, summary, onSettled
                 : '订单簿记录会随到期自动清理。'}
             </Text>
           )}
+          {phase.kind === 'done' && phase.result.status === 'unknown' && (
+            <Text size="sm" c="orange.8" role="alert">
+              状态待确认：{phase.result.reason}
+              {phase.bookRemoval === 'done'
+                ? '节点簿记录已移除；中继簿记录仍待过期清理。'
+                : '订单簿记录会随到期自动清理。'}
+            </Text>
+          )}
           <Group grow>
             <Button
               variant="default"

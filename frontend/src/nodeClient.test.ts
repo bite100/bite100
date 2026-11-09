@@ -2,7 +2,7 @@
  * nodeClient 单元测试：tryNodes 多节点回退、nodeGet/nodePost（mock config + fetch）
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { tryNodes, nodeGet, nodePost, NODE_POST_TIMEOUT_MS } from './nodeClient'
+import { tryNodes, nodeGet, nodePost, NODE_POST_TIMEOUT_MS, isTimeoutError } from './nodeClient'
 
 vi.mock('./config', () => ({
   NODE_API_URLS: ['http://node1', 'http://node2', 'http://node3'],
@@ -179,10 +179,13 @@ describe('nodePost', () => {
     })
   })
 
-  it('第 46 轮：节点请求挂死时按 NODE_POST_TIMEOUT_MS 超时失败，不无限等', async () => {
+  it('第 46/48 轮：节点请求挂死时在共享截止期超时失败，不无限等，且分类为 TimeoutError', async () => {
     // AbortSignal.timeout 的内部计时不受 vitest 假计时器控制，故把
-    // 真实超时压缩到 10ms 验证：nodePost 必须以 NODE_POST_TIMEOUT_MS
-    // 申请超时信号，且信号 abort 后请求按失败走完所有节点并抛错。
+    // 真实超时压缩到 10ms 验证：第 48 轮起 NODE_POST_TIMEOUT_MS 是
+    // 整轮共享截止期（只申请一次信号）——到点后不再试后续节点，
+    // 抛出的错误命名 TimeoutError（isTimeoutError 可分类），区别于
+    // 一般节点错误；第 46 轮的旧口径（逐节点各一份信号、最长
+    // ~45s、抛原始 abort 错误）已被取代。
     const realTimeout = AbortSignal.timeout.bind(AbortSignal)
     const spy = vi
       .spyOn(AbortSignal, 'timeout')
@@ -196,7 +199,31 @@ describe('nodePost', () => {
             )
           }),
       )
-      await expect(nodePost('/api/order', {})).rejects.toThrow('aborted')
+      const err = await nodePost('/api/order', {}).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(Error)
+      expect((err as Error).name).toBe('TimeoutError')
+      expect(isTimeoutError(err)).toBe(true)
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(spy).toHaveBeenCalledWith(NODE_POST_TIMEOUT_MS)
+      // 截止期到点即收尾：只打了第一个节点，不再空转后续节点
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('第 48 轮：共享截止期只申请一次信号——三节点全失败时也只调一次 AbortSignal.timeout', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    try {
+      ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: false,
+        status: 502,
+        statusText: 'Bad Gateway',
+        text: () => Promise.resolve(''),
+      })
+      await expect(nodePost('/api/order', {})).rejects.toThrow()
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3)
+      expect(spy).toHaveBeenCalledTimes(1)
       expect(spy).toHaveBeenCalledWith(NODE_POST_TIMEOUT_MS)
     } finally {
       spy.mockRestore()
@@ -210,5 +237,53 @@ describe('nodePost', () => {
       statusText: 'Bad Request',
     })
     await expect(nodePost('/api/order', {})).rejects.toThrow()
+  })
+})
+
+describe('isTimeoutError 超时错误分类（第 48 轮）', () => {
+  it('TimeoutError / AbortError 命名错误归超时', () => {
+    const t = new Error('timed out')
+    t.name = 'TimeoutError'
+    expect(isTimeoutError(t)).toBe(true)
+    const a = new Error('aborted')
+    a.name = 'AbortError'
+    expect(isTimeoutError(a)).toBe(true)
+  })
+
+  it('消息含 timeout/timed out 的错误归超时', () => {
+    expect(isTimeoutError(new Error('request timeout after 15000ms'))).toBe(true)
+    expect(isTimeoutError(new Error('The operation timed out'))).toBe(true)
+  })
+
+  it('一般节点错误不归超时（含非 Error 值）', () => {
+    expect(isTimeoutError(new Error('node down'))).toBe(false)
+    expect(isTimeoutError(new Error('Bad Gateway'))).toBe(false)
+    expect(isTimeoutError('timeout')).toBe(false)
+    expect(isTimeoutError(null)).toBe(false)
+  })
+})
+
+describe('tryNodes 共享截止期（第 48 轮）', () => {
+  it('deadlineMs 内首节点成功 → 正常返回，信号透传给 request', async () => {
+    let seenSignal: AbortSignal | undefined
+    const res = await tryNodes(
+      async (_baseUrl, signal) => {
+        seenSignal = signal
+        return { ok: true }
+      },
+      { deadlineMs: 60_000 },
+    )
+    expect(res.data).toEqual({ ok: true })
+    expect(seenSignal).toBeInstanceOf(AbortSignal)
+    expect(seenSignal!.aborted).toBe(false)
+  })
+
+  it('无 deadlineMs 时 request 收到的信号为 undefined（旧行为不变）', async () => {
+    let seenSignal: AbortSignal | undefined = AbortSignal.timeout(60_000)
+    await tryNodes(async (_baseUrl, signal) => {
+      seenSignal = signal
+      return 1
+    })
+    expect(seenSignal).toBeUndefined()
   })
 })
