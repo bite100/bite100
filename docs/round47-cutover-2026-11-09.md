@@ -193,3 +193,19 @@ Base Sepolia 56357193（已回填 indexer/config.yaml）。
   publicnode gas 计量放大，结算 gasLimit 须 ≥15M（实测计量 1.70M，
   1.5M 上限会执行中途耗尽）；③Base 单笔 gasLimit 上限受区块限约束，
   25M 被 RPC 拒收（"gas limit too high"），用 3M。
+
+### 中继重部署（第 6 步，主聊天 2026-11-09 执行）
+
+- 清表前 D1 全量导出备份：150 行存于 Muse 工作区
+  `bite100-r47-d1-backup-2026-11-09.json`（仓外）；随后 DELETE 清空。
+- Worker 以新 config.ts 重新打包经 API 上传（deployment a44e2c30…），
+  cron `*/15` 保留。**邮差密钥被迫轮换**：脚本上传接口要求 secret 必须
+  带明文（报错 10021），旧值只写不可读——改用仓库自带 gen-postman.mjs
+  生成新邮差密钥并经 secrets 接口注入（新 npub1nvzn80d…）。旧镜像事件
+  仍在公共中继上（best-effort 副本），D1 主账不受影响。
+- 生产烟测 demo 8/9：health/真实签名订单入库/去重/查回/订单簿/过期拒/
+  坏签名拒全过（真实签名按新 Settlement 域验签通过＝新配置已生效）；
+  **Nostr 镜像 event id 未回填（已知观察项）**：两次 demo + 换标准密钥
+  后仍未回填，本机探针因本机出口代理 wss 不通无法复现 Worker 出口，
+  根因未隔离（疑公共中继侧可达性/策略）；镜像按设计为 best-effort，
+  D1 为主账，不阻塞切换。后续轮次可加日志可见性再查。
