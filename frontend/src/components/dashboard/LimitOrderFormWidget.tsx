@@ -29,7 +29,6 @@ import {
 import { useReferencePrice } from '../../hooks/useReferencePrice'
 import { useResolvedPair } from '../../hooks/useResolvedPair'
 import { isListedPairKey } from '../../services/pairRegistry'
-import { evaluateMinOrder, minOrderErrorMessage } from '../../services/minOrder'
 import { buildOrderDeliveryEstimate } from '../../services/defaultBridge/estimate'
 import { getDisclosure } from '../../services/defaultBridge/disclosures'
 import { loadSettings, pushTempOverride } from '../../services/defaultBridge/settings'
@@ -280,20 +279,6 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
       setError(orderType === 'market' ? '保护价计算失败，请刷新盘口后重试' : '请输入有效的价格')
       return
     }
-    // 第六十轮：最低交易额 $1（Ren 拍板）——美元等值不足直接拦下不签名；
-    // 估算锚口径见 services/minOrder.ts（有美元参考价按参考价、无则稳定币
-    // 计价按本单价、再无则按计价币面值），市价单按保护价估算。
-    const minCheck = evaluateMinOrder({
-      amount: a,
-      orderPrice: p,
-      quoteSymbol,
-      refPrice: refOk?.price ?? null,
-      refUsdDenominated: refOk?.usdDenominated === true,
-    })
-    if (!minCheck.pass) {
-      setError(minOrderErrorMessage(minCheck))
-      return
-    }
     setError(null)
     setLoading(true)
     setTopUpStep(null)
@@ -440,17 +425,6 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
       : !Number.isNaN(priceNum) && !Number.isNaN(amountNum) && priceNum > 0 && amountNum > 0
         ? priceNum * amountNum
         : null
-  /** 最低交易额 $1 的实时提示（提交时还会再硬性校验一次，口径同 evaluateMinOrder） */
-  const liveMinCheck =
-    !Number.isNaN(amountNum) && amountNum > 0 && !Number.isNaN(priceNum) && priceNum > 0
-      ? evaluateMinOrder({
-          amount: amountNum,
-          orderPrice: priceNum,
-          quoteSymbol,
-          refPrice: refOk?.price ?? null,
-          refUsdDenominated: refOk?.usdDenominated === true,
-        })
-      : null
   const spendDecimals = side === 'sell' ? baseDecimals : quoteDecimals
   const spendSymbol = side === 'sell' ? baseSymbol : quoteSymbol
   // 下单票（ticket）键值行派生值：可买（买入按可用计价余额 ÷ 有效价）/ 预计可得（卖出）/ 预估手续费
@@ -759,13 +733,6 @@ export function LimitOrderFormWidget({ pair = DEFAULT_PAIR, account, getSigner, 
               {trimNum(total)} {quoteSymbol}
             </span>
           </div>
-        )}
-        {liveMinCheck && !liveMinCheck.pass && (
-          <Text size="xs" c="orange">
-            {liveMinCheck.basis === 'quoteFace'
-              ? '本单低于最低交易额：该交易对暂无美元参考价，按计价币面值需达到 1 以上。'
-              : `本单低于最低交易额 $1（当前约 $${(liveMinCheck.usdValue ?? 0).toFixed(2)}），提交时会被拦下，请加大数量或价格。`}
-          </Text>
         )}
         {ticket && (
           <div className="kv ticket-fee-row">

@@ -19,7 +19,7 @@ import { usePairStats } from '../../hooks/usePairStats'
 import { useReferencePrice } from '../../hooks/useReferencePrice'
 import { useListedPairs } from '../../hooks/useListedPairs'
 import { useResolvedPair } from '../../hooks/useResolvedPair'
-import { isUsdStableSymbol } from '../../services/minOrder'
+import { isUsdStableSymbol } from '../../services/referencePrice'
 import { CHAIN_ID } from '../../config'
 import {
   filterMarketRows,

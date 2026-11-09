@@ -36,6 +36,13 @@ export const MIN_STALE_AFTER_SEC = 3600
 /** 填写价格偏离参考价超过该百分比时给出醒目警告（只警告，不拦截下单） */
 export const DEVIATION_WARN_PCT = 10
 
+/** 美元稳定币符号（判断参考价/计价是否可按美元口径展示用） */
+export const USD_STABLE_SYMBOLS = ['USDT', 'USDC', 'DAI', 'TUSD'] as const
+
+export function isUsdStableSymbol(symbol: string): boolean {
+  return (USD_STABLE_SYMBOLS as readonly string[]).includes(symbol.toUpperCase())
+}
+
 export type ReferencePriceSource = 'chainlink' | 'dexscreener' | 'lastTrade' | 'bookMid'
 
 export interface ReferencePrice {
@@ -47,7 +54,7 @@ export interface ReferencePrice {
   /**
    * 参考价是否以美元计价（第六十轮加，仅在为 true 时出现）：Chainlink 喂价
    * 均为美元计价、DexScreener 推导价天然美元计价 → true；本所最近成交 /
-   * 盘口中间价以计价币计价 → 不设（undefined）。最低交易额 $1 校验据此选锚。
+   * 盘口中间价以计价币计价 → 不设（undefined）。行情页据此判断参考价能否按美元口径展示。
    */
   usdDenominated?: boolean
 }

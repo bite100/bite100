@@ -13,7 +13,6 @@ import { useCurrentPair } from './hooks/useCurrentPair'
 import { useListedPairs } from './hooks/useListedPairs'
 import { useResolvedPair } from './hooks/useResolvedPair'
 import { isListedPairKey } from './services/pairRegistry'
-import { evaluateMinOrder, minOrderErrorMessage } from './services/minOrder'
 import { formatError, formatTokenAmount, getProvider, withTimeout, BALANCE_READ_TIMEOUT_MS } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
@@ -423,24 +422,6 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         setError(`可用余额不足。当前可用：${balance}，需要：${amount}（挂单锁定的部分不计入可用）`)
         return
       }
-    }
-    // 第六十轮：最低交易额 $1（口径同下单表单）。本页的美元参考仅对种子对
-    // 使用（CoinGecko 按符号查价，自助对符号可重名/冒充，不作锚——自助对走
-    // 稳定币计价或计价币面值口径，见 services/minOrder.ts）。
-    const refUsd =
-      !listedPair && basePrice && quotePrice && quotePrice.usd > 0
-        ? basePrice.usd / quotePrice.usd
-        : null
-    const minCheck = evaluateMinOrder({
-      amount: a,
-      orderPrice: p,
-      quoteSymbol,
-      refPrice: refUsd,
-      refUsdDenominated: refUsd !== null,
-    })
-    if (!minCheck.pass) {
-      setError(minOrderErrorMessage(minCheck))
-      return
     }
     setError(null)
     setPlaceLoading(true)
