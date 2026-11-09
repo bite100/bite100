@@ -27,9 +27,10 @@
  * - expired-released：无锁、有落锁墓碑、无撤单墓碑——锁定已随过期
  *   释放路径清掉（releaseExpiredOrderLock 不置撤单墓碑），订单已过期。
  * 旧栈（第 47 轮切换前）没有 cancelledOrders 读口。第 48 轮起读
- * 容错分三态（第 47 轮复审骑乘项）：**方法不存在**（老栈，链上调
- * 用以 CALL_EXCEPTION/missing revert data 失败）才降级为第 46 轮
- * 口径；**传输/读取失败**（网络、节点异常）与前者严格分开——无
+ * 容错分三态（第 47 轮复审骑乘项）：**方法不存在**（老栈，须有
+ * missing revert data 等 selector 缺失证据；第 50 轮起裸
+ * CALL_EXCEPTION 不算证据——它是 ethers 通用 revert 码）才降级
+ * 为第 46 轮口径；**传输/读取失败**（网络、节点异常）与前者严格分开——无
  * 锁分支返回 unknown「状态待确认」不下结论，已成交量读取失败同
  * 样返回 unknown（旧实现默认 0n 会把已成交误报成已撤单），释放
  * 后墓碑回读失败也归 unknown（锁定已释放的事实另行成立）。
@@ -142,16 +143,24 @@ function normalizeTombstone(
 }
 
 /**
- * 「方法不存在」分类（第 48 轮）：旧栈 Vault 没有 cancelledOrders
- * 方法，链上 eth_call 会以 CALL_EXCEPTION（missing revert data：
- * 合约无此函数、无 fallback 可走）失败；部分客户端报 function
- * selector was not recognized。只有这类错误代表「老栈没读口」；
- * 其余（网络中断、节点 5xx、超时）都是读数没拿到，不得混为一谈。
+ * 「方法不存在」分类（第 48 轮立、第 50 轮收紧）：旧栈 Vault 没有
+ * cancelledOrders 方法，链上 eth_call 失败；只有能证明 selector
+ * 缺失的证据（消息文本类信号）才代表「老栈没读口」；其余（网络
+ * 中断、节点 5xx、超时）都是读数没拿到，不得混为一谈。
+ *
+ * 第 50 轮收紧：第 48 轮把裸 `code === 'CALL_EXCEPTION'` 也算作
+ * 没读口——但 CALL_EXCEPTION 是 ethers v6 对 eth_call 失败的通用
+ * 错误码，方法存在但合约真 revert（带业务原因）同样是它。真
+ * revert 被误判没读口会降级成 never-locked，绕过第 48 轮的
+ * unknown 保护。现只保留消息类证据：旧栈无此方法时 ethers 的
+ * 报错带 'missing revert data'（data=null，无 revert 数据可解），
+ * 部分客户端报 'function selector was not recognized' /
+ * 'method not found'——三者都能证明 selector 不被识别；裸
+ * CALL_EXCEPTION（哪怕伴随 execution reverted 业务原因）一律
+ * 归读失败 → unknown 路径，宁可待确认、不可误下「从未落锁」。
  */
 export function isMethodMissingError(e: unknown): boolean {
   if (!(e instanceof Error)) return false
-  const code = (e as { code?: unknown }).code
-  if (code === 'CALL_EXCEPTION') return true
   const msg = e.message ?? ''
   return (
     msg.includes('missing revert data') ||
