@@ -388,14 +388,14 @@ export function TradeTabsPanel({ pair = DEFAULT_PAIR, account, getSigner, refres
           )}
           {ordersFromRelay && account && (
             <Text size="xs" c="dimmed" pb="xs">
-              节点服务暂时不可用，下面挂单来自中继簿（可能不全）。签名撤单不可用，可用「链上撤单」直接在链上释放锁定。
+              节点服务暂时不可用，下面挂单来自中继簿（可能不全）。签名撤单不可用，可用「链上撤单」直接在链上释放锁定、永久作废订单。
             </Text>
           )}
           {renderOrdersTable(openOrders, true)}
           {account && openOrders.length > 0 && (
             <Text size="xs" c="dimmed" pt="xs">
-              撤单只需钱包签名，不上链、不付 gas；已成交部分不受撤单影响。「链上撤单」由钱包直接上链释放这张单锁住的余额（自付少量
-              gas），节点不可用时也能撤，释放后该单无法再成交。
+              「撤单」只需钱包签名，不上链、不付 gas：节点在线时由节点移除订单簿记录并代为释放锁定（释放不成功不阻断撤单，少数情况余额要等订单到期才释放）；已成交部分不受撤单影响。「链上撤单」由你自己的钱包直接上链（自付少量
+              gas）：立即释放锁定并在链上永久作废这张订单，节点不可用时也能撤。
             </Text>
           )}
         </Tabs.Panel>

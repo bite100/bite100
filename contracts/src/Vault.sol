@@ -66,6 +66,19 @@ contract Vault is ReentrancyGuard {
     }
     mapping(bytes32 => LockTombstone) public lockTombstones;
 
+    /// @notice 撤单墓碑（第四十七轮）：订单摘要 => 是否已永久关闭。
+    /// 与 lockTombstones 严格分工：lockTombstones 是「曾落锁」的归属证据
+    /// （落锁时写、永不删，供失败结算归责）；本标记是「不得再落锁」的
+    /// 准入闸门。置位点只有两处：① releaseOrderLock 撤单释放（订单用户
+    /// 本人或 locker 调用）；② consumeOrderLock 把锁定完全消耗（订单已
+    /// 完全成交）。置位后不可清除、无 setter，lockForOrder 遇标记直接
+    /// revert。背景：第三十轮 L2 落锁无权限后，releaseOrderLock 只删活动
+    /// 锁记录，任何人拿公开的签名订单可重新落锁并继续成交——「释放后
+    /// 无法再成交」在第 46 轮前端文案里无法兑现（第 46 轮 ChatGPT 复审
+    /// P1）；本标记使撤单成为链上永久事实。releaseExpiredOrderLock 不
+    /// 置位：订单已过期，lockForOrder 的时效检查本身已挡重锁，无需标记。
+    mapping(bytes32 => bool) public cancelledOrders;
+
     /// @notice 挂单锁定操作员（节点/中继身份）；仅 owner 可增删。
     /// 第三十轮 L2 后落锁已无权限（见 lockForOrder），本角色不再是落锁的准入条件，
     /// 保留仅为向后兼容：releaseOrderLock 仍认 locker 身份（locker 或锁属用户本人
@@ -82,6 +95,7 @@ contract Vault is ReentrancyGuard {
     event OrderLocked(bytes32 indexed digest, address indexed user, address indexed token, uint256 amount);
     event OrderLockConsumed(bytes32 indexed digest, address indexed user, address indexed token, uint256 amount, uint256 remaining);
     event OrderLockReleased(bytes32 indexed digest, address indexed user, address indexed token, uint256 amount);
+    event OrderCancelled(bytes32 indexed digest, address indexed user);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Vault: not owner");
@@ -185,6 +199,9 @@ contract Vault is ReentrancyGuard {
         ISettlementVerifier verifier = ISettlementVerifier(settlement);
         require(verifier.verifyOrderSignature(order, signature), "Vault: invalid order signature");
         digest = verifier.orderDigest(order);
+        // 第四十七轮撤单墓碑：已撤单（或已完全成交）的订单永久禁止再落锁，
+        // 否则任何人拿公开签名单重锁即可让已撤订单继续成交（第 46 轮复审 P1）。
+        require(!cancelledOrders[digest], "Vault: order cancelled");
         require(orderLocks[digest].user == address(0), "Vault: order already locked");
         bool payWithTokenIn = order.side == 1; // SELL 付 tokenIn；BUY 付 tokenOut
         address token = payWithTokenIn ? order.tokenIn : order.tokenOut;
@@ -220,19 +237,39 @@ contract Vault is ReentrancyGuard {
         uint256 remaining = lockRec.remaining;
         if (remaining == 0) {
             delete orderLocks[digest];
+            // 第四十七轮：订单已完全成交，一并置撤单墓碑——该摘要对应的
+            // 签名义务已全部履行，Settlement 累计上限本就使其无法再结超量，
+            // 置位防的是无意义重锁把用户资金困到释放/过期。语义与撤单同为
+            // 「该订单已永久关闭」，见 cancelledOrders 注释。
+            cancelledOrders[digest] = true;
         }
         emit OrderLockConsumed(digest, user, token, amount, remaining);
     }
 
     /// @notice 撤单释放：释放该订单全部剩余锁定（locker 或订单用户本人可调用）
+    /// @dev 第四十七轮起本函数即链上撤单：释放的同时置撤单墓碑
+    /// （cancelledOrders），该订单从此不可再落锁、不可再成交，撤单成为
+    /// 永久事实（此前只删活动锁记录，任何人可拿公开签名单重锁——第 46
+    /// 轮复审 P1）。locker 释放他人锁同样置位：locker 是受信运营角色
+    /// （见 lockers 注释），其释放与用户本人释放同为运营口径的撤单，
+    /// 语义保持一致；信任边界在 docs/round47-permanent-cancel-2026-11-09.md
+    /// 写明。部分成交后释放剩余锁定同样置位：未成交余量永久作废，这
+    /// 正是撤单语义（已成交部分不受影响，成交记录在 Settlement）。
     function releaseOrderLock(bytes32 digest) external {
         OrderLock storage lockRec = orderLocks[digest];
         require(lockRec.user != address(0), "Vault: order not locked");
         require(lockers[msg.sender] || msg.sender == lockRec.user, "Vault: not authorized to release");
+        address user = lockRec.user;
+        cancelledOrders[digest] = true;
+        emit OrderCancelled(digest, user);
         _releaseOrderLock(digest);
     }
 
     /// @notice 过期释放：订单过期后任何人可释放其剩余锁定，防节点掉线永久锁死资金
+    /// @dev 第四十七轮注记：本路径**不**置撤单墓碑（cancelledOrders）。
+    /// 订单已过期，lockForOrder 的时效检查（order expired）本身已永久挡住
+    /// 重锁，墓碑在此冗余；且过期释放是任何人可触发的清理动作，不应由它
+    /// 产生撤单语义（撤单只来自 releaseOrderLock 的授权调用）。
     function releaseExpiredOrderLock(bytes32 digest) external {
         OrderLock storage lockRec = orderLocks[digest];
         require(lockRec.user != address(0), "Vault: order not locked");

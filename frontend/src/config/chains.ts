@@ -77,8 +77,8 @@ const SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0x6b9f8628650118376D14E7a77E8a321F9513c481',
-    settlement: '0xbf2B9635B682Ff30E73028a5b2beEB829873a88f',
+    vault: '0x836cEFF0140aB66D8DD984ECb18765736BA121e9',
+    settlement: '0x5697F7B2178352eB391e29fc2c5681Dea864C1d9',
     token0: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
     token1: '0x1530b74E6d5C2D0e2b78314b5C253E66bfC4ddc2',
     contributorReward: '0x12b8dA1b30771c46025488621bfe3DC665E9C0a8',
@@ -88,7 +88,7 @@ const SEPOLIA: ChainConfig = {
     chainConfig: '0x52De0F096B169f612E55084eE05Efa7D1dEaa0c4',
     crossChainBridge: '0x7a0eCbc2Ffca2F8f7A1505Fa65e7E4759bE33d50',
     wrappedToken: '0x03ED8203236Bb5409caA6330fDCd16559C914b9a',
-    makerVault: '0x47f26952cDB5a3FC5cd693c43819f353D20666C3',
+    makerVault: '0x5473D7c58c56BCd855c6f2048614A10e9645F7f0',
   },
   // 第十九轮 CCIP（见 docs/round19-three-bridges-2026-11-07.md）
   ccip: {
@@ -144,8 +144,8 @@ const BASE_SEPOLIA: ChainConfig = {
     decimals: 18,
   },
   contracts: {
-    vault: '0x2d7a577d403719A9773dEaB3052a9257012401e6',
-    settlement: '0x50aFA0d0a407bdeCcdd6b9b3f6d4a68f837F0305',
+    vault: '0x295F5529F5BfA4cA39290f395b1feF7EA637f5D3',
+    settlement: '0x1021C7116cCE59f9c85683d6f1b5aD2215795949',
     token0: '0xd3f1136Cb3511b4546BDE5dDAC4F0D5a4D5C5D33',
     token1: '0x8492ccCE958803F04772C0f5B51DbbC320A54daF',
     contributorReward: '0xFe066c25a25Fddd6433Fac7f7769d5806392663e',
@@ -154,7 +154,7 @@ const BASE_SEPOLIA: ChainConfig = {
     tokenRegistry: '0x8dC560038D392012C8562185E4C6Bf2Ce636E74D',
     chainConfig: '0x41b12b6620750564a412b294a1a2bBde24a3B9E8',
     crossChainBridge: '0xA7722A0ba7F2DA1d4D67D5191222C5e4c3835dBB',
-    makerVault: '0x2eD907f44F03B1288F8bCF73dB37D35282558753',
+    makerVault: '0x66F43601e4ef88ba38F8AeDDe9D2b0F949427D31',
     // 注意：Base Sepolia 的 wTKA 地址字符串与 Sepolia 的 FeeDistributor 相同，是不同链上的不同合约；
     // Base Sepolia 的 CCIP 池地址字符串又与 Sepolia 的 TKA 相同（CREATE nonce 巧合），引用时务必连链一起看。
     wrappedToken: '0x346DE29B7fEe95F44A5b5385e87182F031E8E1B5',
