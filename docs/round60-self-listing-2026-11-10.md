@@ -7,8 +7,8 @@
 > **主网阶段按链 gas 成本再设**，见 §4.3）；假币/诈骗币风险
 > 按知情选择规则在上架确认前与交易区显著披露；平台只做中介撮合，不下场、不背书。
 >
-> 本轮状态：本地构建 + 本地验证 + Sepolia E2E；**不部署生产**（中继 Worker 与 Pages 的
-> 部署是主聊天复验后的独立步骤）。合约零改动（Vault/Settlement 不碰）。
+> 本轮状态：**已合并 main 并部署生产（2026-11-10，见 §8 执行记录）**。合约零改动
+> （Vault/Settlement 不碰）。
 
 ## 1. 调研结论（先查资料再定方案）
 
@@ -246,12 +246,26 @@ publicnode/Tenderly 握手损坏，Node/curl 正常），本地中继经
 完成验证；生产中继在 Cloudflare 网络内直读 RPC 不受影响。细节见
 `frontend/scripts/round60-e2e/README.md`。
 
-## 8. 部署计划（留给主聊天复验后执行，本轮不做）
+## 8. 部署（2026-11-10 执行完毕，Ren 07:16 拍板「一条龙走完」）
 
-1. 中继：`wrangler d1 migrations apply bit100-relay-orders --remote`（0002_pairs）
-   → `wrangler deploy`（relay/）；
-2. 前端：照常 Pages 构建发布（VITE_RELAY_URL 不变，注册表端点同源于中继）；
-3. 上线后冒烟：生产中继注册一个测试对 → 前端选对可见 → 小额挂单/撤单走通。
+原计划：① 中继 D1 迁移 0002 → 部署；② 前端 Pages 随合并推送发布；③ 上线冒烟。
+执行记录（主聊天亲手执行并逐项验证）：
+
+1. **D1 备份**：迁移前全量导出 orders 表 74 行存仓外
+   `~/workspace/bite100-r60-d1-backup-2026-11-10.json`。
+2. **迁移 0002 已应用**于生产 D1（`pairs` 表 + 两索引，读回确认表清单
+   `_cf_KV/orders/pairs`）。
+3. **中继已部署**：经 Cloudflare API 上传新 bundle（deployment
+   `0b12a1b005f94516a2d861b524e08f89`），cron `*/15 * * * *` 保留；上传不带
+   secret 明文的老问题复现——邮差密钥按第 47 轮先例轮换（gen-postman 生成、
+   secrets 接口注入，私钥未打印未入仓），**新 npub
+   `npub1v3gag2d4d877vu63sf22m3gf4sd02ny0hzrv7eva6hgmg27zd9vst4dv52`**；
+   Nostr 镜像 event id 回填的老观察项不变（best-effort，主账不受影响）。
+4. **生产冒烟通过**：`GET /pairs` 部署前 404 → 部署后 200 `[]`；种子对
+   ETH/USDT 订单簿 200 无回退；生产中继注册 TKX6/USDT 成功（链上复读元数据
+   TKX6/6 位与部署一致）、重复注册幂等、`GET /pairs` 可见该行。
+5. **前端**：随合并提交推送经 GitHub Pages 发布（构建号与线上 bundle 在
+   推送后验证记录里回填）。
 
 ## 9. 遗留项
 
