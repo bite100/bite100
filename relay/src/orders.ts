@@ -174,6 +174,18 @@ export function buildSignedOrder(
 ): SignedOrder | null {
   const tokens = pairTokens(chain, body.pair)
   if (!tokens) return null
+  return buildSignedOrderWithTokens(tokens, body)
+}
+
+/**
+ * 以显式代币对重建签名订单（第六十轮）：自助上架对的代币来自注册表
+ * （pairs.ts 的 resolveOrderTokens），不经 config 的符号表；重建公式与
+ * 种子路径逐字一致（amountOut = amountIn × price / 1e18）。
+ */
+export function buildSignedOrderWithTokens(
+  tokens: { tokenIn: string; tokenOut: string },
+  body: NodeOrderBody,
+): SignedOrder {
   const amountIn = BigInt(body.amount)
   const price = BigInt(body.price)
   const amountOut = (amountIn * price) / SCALE_1E18

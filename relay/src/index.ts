@@ -11,15 +11,25 @@
  *   GET  /orders     ?chain=&pair=&userAddress=(或 trader=)&limit=
  *   GET  /orderbook  ?pair=&chain=
  *   GET  /health
+ *   POST /pairs      自助上架注册（第六十轮）：{chainId, baseToken, quoteToken, creator?}，
+ *                    元数据由中继链上复读、不信任提交方；幂等
+ *   GET  /pairs      ?chain= 列某链的自助上架对（种子 8 对走内置配置、不在此列）
  */
 import { DEFAULT_CHAIN_ID, resolveChains, type ChainRelayConfig } from './config'
 import {
-  buildSignedOrder,
+  buildSignedOrderWithTokens,
   orderDigest,
   validateBody,
   verifyOrder,
   type NodeOrderBody,
 } from './orders'
+import {
+  PairRequestError,
+  listPairs,
+  registerPair,
+  resolveOrderTokens,
+  type PairRow,
+} from './pairs'
 import {
   buildOrderEvent,
   parsePostmanSecret,
@@ -112,6 +122,19 @@ function parseChainParam(url: URL): number | null {
   return Number.isInteger(n) ? n : NaN
 }
 
+/** 解析生效链配置（/orders 与 /pairs 共用）；失败返回 null（调用方回 500） */
+function loadChains(env: Env): Record<number, ChainRelayConfig> | null {
+  try {
+    const rpcOverrides: Record<number, string> = {}
+    if (env.SEPOLIA_RPC_URL) rpcOverrides[11155111] = env.SEPOLIA_RPC_URL
+    if (env.BASE_SEPOLIA_RPC_URL) rpcOverrides[84532] = env.BASE_SEPOLIA_RPC_URL
+    return resolveChains(env.CHAIN_CONFIG_JSON, rpcOverrides)
+  } catch (e) {
+    console.error('[relay] chain config error', e)
+    return null
+  }
+}
+
 async function handlePostOrder(
   request: Request,
   env: Env,
@@ -130,21 +153,15 @@ async function handlePostOrder(
     return textError(e instanceof Error ? e.message : 'invalid order', 400)
   }
   const chainId = body.chainId ?? DEFAULT_CHAIN_ID
-  let chains: Record<number, ChainRelayConfig>
-  try {
-    const rpcOverrides: Record<number, string> = {}
-    if (env.SEPOLIA_RPC_URL) rpcOverrides[11155111] = env.SEPOLIA_RPC_URL
-    if (env.BASE_SEPOLIA_RPC_URL) rpcOverrides[84532] = env.BASE_SEPOLIA_RPC_URL
-    chains = resolveChains(env.CHAIN_CONFIG_JSON, rpcOverrides)
-  } catch (e) {
-    console.error('[relay] chain config error', e)
-    return textError('relay chain config error', 500)
-  }
+  const chains = loadChains(env)
+  if (!chains) return textError('relay chain config error', 500)
   const chain = chains[chainId]
   if (!chain) return textError(`unsupported chain: ${chainId}`, 400)
 
-  const so = buildSignedOrder(chain, body)
-  if (!so) return textError(`unknown pair: ${body.pair}`, 400)
+  // 代币解析：种子符号键走内置表；自助上架的地址型键查注册表（pairs.ts）
+  const tokens = await resolveOrderTokens(env.DB, chain, body.pair)
+  if (!tokens) return textError(`unknown pair: ${body.pair}`, 400)
+  const so = buildSignedOrderWithTokens(tokens, body)
 
   const now = Math.floor(Date.now() / 1000)
   // 过期防护（与节点 OrderExpired 同口径：now > expiresAt 即拒）
@@ -302,6 +319,66 @@ async function handleOrderbook(url: URL, env: Env): Promise<Response> {
   })
 }
 
+function pairRowJson(r: PairRow) {
+  return {
+    chainId: r.chainId,
+    pairKey: r.pairKey,
+    baseToken: r.baseToken,
+    quoteToken: r.quoteToken,
+    baseSymbol: r.baseSymbol,
+    quoteSymbol: r.quoteSymbol,
+    baseName: r.baseName,
+    quoteName: r.quoteName,
+    baseDecimals: r.baseDecimals,
+    quoteDecimals: r.quoteDecimals,
+    creator: r.creator,
+    createdAt: r.createdAt,
+  }
+}
+
+/** 自助上架注册（第六十轮）：元数据链上复读、幂等、基础限流，逻辑在 pairs.ts */
+async function handleRegisterPair(request: Request, env: Env): Promise<Response> {
+  let raw: unknown
+  try {
+    raw = await request.json()
+  } catch {
+    return textError('invalid json', 400)
+  }
+  if (typeof raw !== 'object' || raw === null) return textError('invalid json body', 400)
+  const b = raw as Record<string, unknown>
+  const chainId =
+    b.chainId === undefined ? DEFAULT_CHAIN_ID : Number(b.chainId)
+  if (!Number.isInteger(chainId)) return textError('invalid chainId', 400)
+  const chains = loadChains(env)
+  if (!chains) return textError('relay chain config error', 500)
+  const chain = chains[chainId]
+  if (!chain) return textError(`unsupported chain: ${chainId}`, 400)
+  try {
+    const { row, duplicate } = await registerPair(env.DB, chain, {
+      baseToken: typeof b.baseToken === 'string' ? b.baseToken : '',
+      quoteToken: typeof b.quoteToken === 'string' ? b.quoteToken : '',
+      creator: typeof b.creator === 'string' ? b.creator : null,
+    })
+    return json(
+      { ok: true, pair: pairRowJson(row), ...(duplicate ? { duplicate: true } : {}) },
+      duplicate ? 200 : 201,
+    )
+  } catch (e) {
+    if (e instanceof PairRequestError) return textError(e.message, e.status)
+    console.error('[relay] register pair error', e)
+    return textError('internal server error', 500)
+  }
+}
+
+/** 列某链的自助上架对（种子 8 对不在此列，前端本地合并） */
+async function handleListPairs(url: URL, env: Env): Promise<Response> {
+  const chainParam = parseChainParam(url)
+  if (chainParam !== null && Number.isNaN(chainParam)) return textError('invalid chain', 400)
+  const chainId = chainParam ?? DEFAULT_CHAIN_ID
+  const rows = await listPairs(env.DB, chainId)
+  return json(rows.map(pairRowJson))
+}
+
 async function handleHealth(env: Env): Promise<Response> {
   try {
     await env.DB.prepare('SELECT 1').first()
@@ -324,6 +401,10 @@ export default {
           return await handleGetOrders(url, env)
         case 'GET /orderbook':
           return await handleOrderbook(url, env)
+        case 'POST /pairs':
+          return await handleRegisterPair(request, env)
+        case 'GET /pairs':
+          return await handleListPairs(url, env)
         case 'GET /health':
           return await handleHealth(env)
         default:

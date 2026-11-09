@@ -16,6 +16,8 @@ let counter = 0
 
 export interface MakeOrderOpts {
   pair?: string
+  /** 显式代币对（第六十轮自助上架对用：绕过符号表，按注册表地址签名） */
+  tokens?: { tokenIn: string; tokenOut: string }
   side?: 'buy' | 'sell'
   /** wei 整数字符串 */
   price?: string
@@ -34,7 +36,7 @@ export async function makeSignedOrder(opts: MakeOrderOpts = {}): Promise<NodeOrd
   const chain = BUILTIN_CHAINS[chainId]
   if (!chain) throw new Error(`no builtin chain ${chainId}`)
   const pair = opts.pair ?? 'BTC/USDT'
-  const tokens = pairTokens(chain, pair)
+  const tokens = opts.tokens ?? pairTokens(chain, pair)
   if (!tokens) throw new Error(`unknown pair ${pair}`)
   const amount = opts.amount ?? '1000000000000000000' // 1e18
   const price = opts.price ?? '60000000000000000000000' // 60000e18
