@@ -129,18 +129,22 @@ export interface Stage4Config {
   pairs: string[]
 }
 
-/** 逗号分隔列表解析：去空白、去空项、保序去重；未设置/全空 → null（用缺省） */
-function parseCsvList(raw: string | undefined): string[] | null {
+/**
+ * 逗号分隔列表解析：去空白、保序去重；未设置 → null（用缺省）。
+ * 第 58 轮收紧（第 55 轮 ChatGPT 审查半 B 第 1 条，主聊天亲验成立）：
+ * 显式设置但为空、或列表中混有空项（如 `11155111,,84532`、结尾逗号），
+ * 一律抛错拒绝启动——原实现把空项静默滤掉、全空时回落缺省，等于把
+ * 「只跑一条链」的配置笔误放大成双链执行，与本节失败关闭口径相悖。
+ */
+function parseCsvList(raw: string | undefined, envName: string): string[] | null {
   if (raw === undefined) return null
-  const items = [
-    ...new Set(
-      raw
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0),
-    ),
-  ]
-  return items.length > 0 ? items : null
+  const parts = raw.split(',').map((s) => s.trim())
+  if (parts.some((s) => s.length === 0)) {
+    throw new Error(
+      `${envName} 含空项或整体为空：「${raw}」——显式设置时每一项都必须有值，留空不会回落缺省`,
+    )
+  }
+  return [...new Set(parts)]
 }
 
 /**
@@ -150,7 +154,7 @@ function parseCsvList(raw: string | undefined): string[] | null {
  * 单链补测靠它保证另一条链零动作，解析含糊比不跑更危险。
  */
 function parseChains(raw: string | undefined): number[] {
-  const items = parseCsvList(raw)
+  const items = parseCsvList(raw, 'S4_CHAINS')
   if (!items) return [...CHAINS]
   return items.map((s) => {
     const n = Number(s)
@@ -169,7 +173,7 @@ function parseChains(raw: string | undefined): number[] {
  * 交易对，非法值抛错拒绝启动（同 S4_CHAINS 口径）。
  */
 function parsePairs(raw: string | undefined): string[] {
-  const items = parseCsvList(raw)
+  const items = parseCsvList(raw, 'S4_PAIRS')
   if (!items) return [...TRADE_PAIRS]
   for (const p of items) {
     if (!(TRADE_PAIRS as readonly string[]).includes(p)) {
@@ -2897,6 +2901,10 @@ export async function runCheck(cfg: Stage4Config): Promise<number> {
     hardFail = true
   }
   if (!hardFail) {
+    // 预检探针的交易对跟随本次配置子集（第 58 轮，第 55 轮审查半 B 第 2 条）：
+    // 此前写死 DEFAULT_PAIR，子集不含它时只读探针仍会访问子集外的对——
+    // 与回落对同一规则：子集含 DEFAULT_PAIR 用它，否则用子集首对。
+    const checkPair = cfg.pairs.includes(DEFAULT_PAIR) ? DEFAULT_PAIR : cfg.pairs[0]
     for (const chainId of cfg.chains) {
       const ctx = buildChainCtx(cfg, chainId, wallets, deployer!)
       const info: Record<string, unknown> = {
@@ -2921,7 +2929,7 @@ export async function runCheck(cfg: Stage4Config): Promise<number> {
         }
       }
       info.nativeBalances = balances
-      const tokens = getPairTokens(chainId, DEFAULT_PAIR)
+      const tokens = getPairTokens(chainId, checkPair)
       if (tokens) {
         const avail: Record<string, unknown> = {}
         for (const w of [ctx.maker, ctx.taker]) {
@@ -2930,7 +2938,8 @@ export async function runCheck(cfg: Stage4Config): Promise<number> {
             quote: (await vaultAvailable(chainId, w.address, tokens.quote)).toString(),
           }
         }
-        info.defaultPairVaultAvailable = avail
+        info.checkPair = checkPair
+        info.checkPairVaultAvailable = avail
       }
       try {
         const r = await fetch(`${cfg.nodeUrls[chainId]}/api/health`, {
@@ -2941,14 +2950,14 @@ export async function runCheck(cfg: Stage4Config): Promise<number> {
         info.nodeLocal = `down (${e instanceof Error ? e.message.slice(0, 60) : String(e)})`
       }
       try {
-        const book = await ctx.relayAdapter.fetchBook(chainId, DEFAULT_PAIR)
+        const book = await ctx.relayAdapter.fetchBook(chainId, checkPair)
         info.relayBook = { bids: book.bids.length, asks: book.asks.length, complete: book.complete }
       } catch (e) {
         info.relayBook = { error: e instanceof Error ? e.message : String(e) }
       }
       if (cfg.indexerUrl) {
         try {
-          const rows = await fetchIndexerTrades(chainId, DEFAULT_PAIR, 1, indexerFetchFn, cfg.indexerUrl)
+          const rows = await fetchIndexerTrades(chainId, checkPair, 1, indexerFetchFn, cfg.indexerUrl)
           info.indexer = { ok: true, sampleRows: rows.length }
         } catch (e) {
           info.indexer = { ok: false, error: e instanceof Error ? e.message.slice(0, 120) : String(e) }

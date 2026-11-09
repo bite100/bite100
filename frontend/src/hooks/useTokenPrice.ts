@@ -40,23 +40,41 @@ export function useTokenPrice(
   const [error, setError] = useState<Error | null>(null)
   // 在飞标记（第 54 轮）：30 秒轮询不得叠加未完成的请求——上一笔还
   // 没回来（含卡在超时窗内）时本轮跳过，避免挂死请求越积越多
-  const inFlightRef = useRef(false)
+  const inFlightSeqRef = useRef(0)
+  // 请求序号（第 58 轮，审查骑乘）：每次真正发起请求 +1。切换 token 时
+  // 旧请求可能还没回来，它迟到的结果绝不能写进新 token 的状态——写状态
+  // 前先比对序号，过期请求只准静默退出（第 54 轮的在飞跳过只防同 token
+  // 叠加，防不住跨 token 的迟到写入，ChatGPT 审查半 A 第 1 条指出）
+  const fetchSeqRef = useRef(0)
+  const controllerRef = useRef<AbortController | null>(null)
+
+  // 切换 token：作废在飞请求（序号 +1 让其写入失效、释放在飞槽、
+  // 直接 abort），新 token 的首次请求不再被旧请求挡住
+  useEffect(() => {
+    fetchSeqRef.current++
+    inFlightSeqRef.current = 0
+    controllerRef.current?.abort()
+  }, [tokenId])
 
   const fetchPrice = useCallback(async () => {
     if (!tokenId) {
       setLoading(false)
       return
     }
-    if (inFlightRef.current) return
-    inFlightRef.current = true
+    if (inFlightSeqRef.current !== 0) return
+    const seq = ++fetchSeqRef.current
+    inFlightSeqRef.current = seq
     const controller = new AbortController()
+    controllerRef.current = controller
     const timer = setTimeout(() => controller.abort(), PRICE_FETCH_TIMEOUT_MS)
+    const isCurrent = () => fetchSeqRef.current === seq
     try {
       setLoading(true)
       setError(null)
       const url = `${COINGECKO_API}?ids=${encodeURIComponent(tokenId)}&vs_currencies=usd&include_24hr_change=true`
       const res = await fetch(url, { signal: controller.signal })
       const data = await res.json()
+      if (!isCurrent()) return
       const item = data[tokenId]
       if (item != null) {
         setPrice({
@@ -67,11 +85,13 @@ export function useTokenPrice(
         setError(new Error(`Token ${tokenId} not found`))
       }
     } catch (err) {
-      setError(err instanceof Error ? err : new Error('Failed to fetch price'))
+      if (isCurrent()) {
+        setError(err instanceof Error ? err : new Error('Failed to fetch price'))
+      }
     } finally {
       clearTimeout(timer)
-      inFlightRef.current = false
-      setLoading(false)
+      if (inFlightSeqRef.current === seq) inFlightSeqRef.current = 0
+      if (isCurrent()) setLoading(false)
     }
   }, [tokenId])
 
