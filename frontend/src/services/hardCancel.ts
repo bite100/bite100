@@ -26,9 +26,13 @@
  * - filled：撤单墓碑已置位（耗尽分支）且累计成交已满——已全部成交。
  * - expired-released：无锁、有落锁墓碑、无撤单墓碑——锁定已随过期
  *   释放路径清掉（releaseExpiredOrderLock 不置撤单墓碑），订单已过期。
- * 旧栈（第 47 轮切换前）没有 cancelledOrders 读口：读取失败时本服务
- * 降级为第 46 轮口径（generic 归入 never-locked 的保守呈现），切换
- * 完成后自动走新口径。
+ * 旧栈（第 47 轮切换前）没有 cancelledOrders 读口。第 48 轮起读
+ * 容错分三态（第 47 轮复审骑乘项）：**方法不存在**（老栈，链上调
+ * 用以 CALL_EXCEPTION/missing revert data 失败）才降级为第 46 轮
+ * 口径；**传输/读取失败**（网络、节点异常）与前者严格分开——无
+ * 锁分支返回 unknown「状态待确认」不下结论，已成交量读取失败同
+ * 样返回 unknown（旧实现默认 0n 会把已成交误报成已撤单），释放
+ * 后墓碑回读失败也归 unknown（锁定已释放的事实另行成立）。
  *
  * 骑乘（不另造轮子）：
  * - digest 重算：dualread/digest 的 buildSignedOrderData +
@@ -109,6 +113,12 @@ export type HardCancelResult =
   | { status: 'filled'; digest: string }
   /** 锁定已随过期释放路径清掉（订单已过期） */
   | { status: 'expired-released'; digest: string }
+  /**
+   * 状态待确认（第 48 轮）：关键链上读数因传输/节点故障没读到，
+   * 本服务不下任何结论（区别于「老栈没这个读口」的降级路径）；
+   * UI 须按待确认呈现，提示用户稍后重新确认、不要重复提交。
+   */
+  | { status: 'unknown'; digest: string; reason: string }
 
 /** 以既有 ethers 写法构造 Settlement 累计成交读口（ABI 骑 dualread 片段） */
 export function createSettlementFilledReader(
@@ -131,15 +141,43 @@ function normalizeTombstone(
   return raw
 }
 
-/** 读撤单墓碑；旧栈无此读口（调用失败）时返回 null 表示不可用，调用方降级 */
+/**
+ * 「方法不存在」分类（第 48 轮）：旧栈 Vault 没有 cancelledOrders
+ * 方法，链上 eth_call 会以 CALL_EXCEPTION（missing revert data：
+ * 合约无此函数、无 fallback 可走）失败；部分客户端报 function
+ * selector was not recognized。只有这类错误代表「老栈没读口」；
+ * 其余（网络中断、节点 5xx、超时）都是读数没拿到，不得混为一谈。
+ */
+export function isMethodMissingError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false
+  const code = (e as { code?: unknown }).code
+  if (code === 'CALL_EXCEPTION') return true
+  const msg = e.message ?? ''
+  return (
+    msg.includes('missing revert data') ||
+    msg.includes('function selector was not recognized') ||
+    msg.includes('method not found')
+  )
+}
+
+type CancelledRead =
+  | { kind: 'value'; value: boolean }
+  | { kind: 'method-missing' }
+  | { kind: 'read-failed'; error: string }
+
+/** 读撤单墓碑（三态）：读到值 / 老栈没读口 / 读取失败，严格分开 */
 async function readCancelled(
   vault: VaultLockContractLike,
   digest: string,
-): Promise<boolean | null> {
+): Promise<CancelledRead> {
   try {
-    return await vault.cancelledOrders(digest)
-  } catch {
-    return null
+    return { kind: 'value', value: await vault.cancelledOrders(digest) }
+  } catch (e) {
+    if (isMethodMissingError(e)) return { kind: 'method-missing' }
+    return {
+      kind: 'read-failed',
+      error: e instanceof Error ? e.message : String(e),
+    }
   }
 }
 
@@ -149,7 +187,8 @@ async function readCancelled(
  * → 等回执 → 回读 orderLocks 确认锁已消失（新栈再回读撤单墓碑确认
  * 已置位），才报 released。锁不存在时不发交易，按墓碑/落锁墓碑/
  * 累计成交区分 never-locked / already-cancelled / filled /
- * expired-released 四态返回（见文件头）。
+ * expired-released 四态返回（见文件头）；关键读数因传输故障没读
+ * 到时返回 unknown 状态待确认（第 48 轮），不并入四态下结论。
  * 任一步失败抛错（由 UI 经 formatError 如实呈现），绝不假成功。
  */
 export async function hardCancelOrderOnChain(args: {
@@ -172,19 +211,34 @@ export async function hardCancelOrderOnChain(args: {
   const lock = normalizeLock(await vault.orderLocks(digest))
   if (lock.user === ethers.ZeroAddress) {
     const cancelled = await readCancelled(vault, digest)
-    if (cancelled === null) {
-      // 旧栈降级（第 46 轮口径）：无从区分细分状态，保守归入从未落锁呈现
+    if (cancelled.kind === 'method-missing') {
+      // 旧栈降级（第 46 轮口径）：无此读口才无从区分细分状态，
+      // 保守归入从未落锁呈现
       return { status: 'never-locked', digest }
     }
-    if (cancelled) {
+    if (cancelled.kind === 'read-failed') {
+      // 第 48 轮：读取失败 ≠ 没读口——状态待确认，不下结论
+      return {
+        status: 'unknown',
+        digest,
+        reason: `撤单状态读取失败（网络或节点异常）：${cancelled.error}。本次无法确认这张订单的链上状态，请稍后重新打开确认，不要重复提交。`,
+      }
+    }
+    if (cancelled.value) {
       // 已永久关闭：区分「已全部成交」与「此前已撤单」
-      let filledIn = 0n
+      const settlement =
+        args.settlement ?? createSettlementFilledReader(args.signer)
+      let filledIn: bigint
       try {
-        const settlement =
-          args.settlement ?? createSettlementFilledReader(args.signer)
         filledIn = await settlement.orderFilledIn(digest)
-      } catch {
-        filledIn = 0n
+      } catch (e) {
+        // 第 48 轮：已成交量读取失败不得再默认 0n（会把已全部成交
+        // 误报成已撤单）——状态待确认，不下结论
+        return {
+          status: 'unknown',
+          digest,
+          reason: `已成交量读取失败（网络或节点异常）：${e instanceof Error ? e.message : String(e)}。本次无法区分这张订单是已撤单还是已全部成交，请稍后重新打开确认，不要重复提交。`,
+        }
       }
       return filledIn >= BigInt(data.amountIn)
         ? { status: 'filled', digest }
@@ -208,11 +262,21 @@ export async function hardCancelOrderOnChain(args: {
   if (after.user !== ethers.ZeroAddress) {
     throw new Error('链上撤单已提交，但回读确认锁仍存在，请稍后在列表中确认状态')
   }
-  // 新栈再回读撤单墓碑：释放与置位同事务，墓碑不在则不算完成；
-  // 旧栈无此读口（null）时跳过，与切换前行为一致。
+  // 新栈再回读撤单墓碑：释放与置位同事务，读到「未置位」则不算
+  // 完成（抛错）；旧栈没读口（method-missing）时跳过，与切换前
+  // 行为一致；读取失败（第 48 轮）时锁定已释放是已确认事实、但
+  // 墓碑状态没读到——按 unknown 待确认返回，不报 released 也不
+  // 冒充失败，提示用户稍后重新确认。
   const cancelledAfter = await readCancelled(vault, digest)
-  if (cancelledAfter === false) {
+  if (cancelledAfter.kind === 'value' && !cancelledAfter.value) {
     throw new Error('链上撤单已提交、锁定已释放，但回读未确认永久作废标记，请稍后在列表中确认状态')
+  }
+  if (cancelledAfter.kind === 'read-failed') {
+    return {
+      status: 'unknown',
+      digest,
+      reason: `链上撤单已提交、锁定已确认释放，但永久作废标记回读失败（网络或节点异常）：${cancelledAfter.error}。状态待确认，请稍后重新打开确认，不要重复提交。`,
+    }
   }
   return { status: 'released', digest, txHash: tx.hash }
 }

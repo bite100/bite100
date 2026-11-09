@@ -1156,4 +1156,39 @@ describe('第 46 轮 P1：双源同单（同 digest）合并+撮合只消费一�
     expect(result.filledToken0).toBe(100n * E18)
     expect(result.remainderToken0).toBe(50n * E18)
   })
+
+  it('负控（第 48 轮）：人为让去重失效（同单复制两份喂撮合）→ 两腿吃满 150，证明上一条断言有牙', async () => {
+    // 负控口径：P1 断言若想证明「去重真的在起作用」，必须展示去重
+    // 一旦失效、同样的输入会产生断言禁止的结果。matcher 本身不按
+    // orderId 去重（它只按输入数组逐份消费），所以把合并层的输出
+    // 人为复制一份再喂进去，就精确模拟了「合并层去重失效」。
+    const raw = await signedRaw()
+    const prepared = await prepareCandidates(CHAIN, [
+      book('node', [raw]),
+      book('relay', [raw]),
+    ])
+    const view = mergeBooks(
+      CHAIN,
+      PAIR,
+      prepared,
+      snapshot(new Map([[digestOf(raw), state()]])),
+    )
+    const makers = toMatcherOrders(view.tradeable)
+    expect(makers.length).toBe(1)
+    const doubled = [...makers, ...makers]
+    const result = matchTaker(
+      {
+        trader: wallet1.address,
+        side: 'buy',
+        priceWei: 2n * E18,
+        amountToken0: 150n * E18,
+      },
+      doubled,
+    )
+    // 与 P1 断言正好相反：两腿、吃满 150——P1 的「一腿封顶 100」
+    // 在去重失效时必然变红，断言不是恒真摆设。
+    expect(result.legs.length).toBe(2)
+    expect(result.filledToken0).toBe(150n * E18)
+    expect(result.remainderToken0).toBe(0n)
+  })
 })
