@@ -5,12 +5,12 @@
  * （/api/orderbook、/api/trades、/api/orders、/api/node）与签名撤单
  * 一并退役。WebSocket/P2P 实时增量（浏览器 P2P 通道）保留。
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { ethers, Contract } from 'ethers'
 import { VAULT_ABI, VAULT_ADDRESS, CHAIN_ID } from './config'
 import { TRADE_PAIRS, getPairTokens } from './config/pairs'
 import { useCurrentPair } from './hooks/useCurrentPair'
-import { formatError, formatTokenAmount, getProvider } from './utils'
+import { formatError, formatTokenAmount, getProvider, withTimeout, BALANCE_READ_TIMEOUT_MS } from './utils'
 import { getCached, setCached, CACHE_KEYS_ORDERBOOK } from './dataCache'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
 import { signOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
@@ -135,7 +135,18 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
   const { pair, setPair } = useCurrentPair()
   const pairTokens = getPairTokens(CHAIN_ID, pair)
   const [orderbook, setOrderbook] = useState<OrderbookResponse | null>(null)
-  const [_prevOrderbook, setPrevOrderbook] = useState<OrderbookResponse | null>(null)
+  // 第 54 轮：上一份簿改放 ref——此前它既是 state 又进了 fetchOrderbook 的
+  // 依赖数组，每次拉到新簿就换 fetchOrderbook 身份、数据 effect 跟着重跑、
+  // loading 被重新点亮，形成自触发无限循环（页面永远「加载中」）。
+  // ref 不进依赖，动画比较照常读它。
+  const prevOrderbookRef = useRef<OrderbookResponse | null>(null)
+  // 已展示的簿（含缓存先行展示与 WS 增量）统一同步进 ref，供下次取簿时比较
+  useEffect(() => {
+    if (orderbook) prevOrderbookRef.current = orderbook
+  }, [orderbook])
+  // loading 只服务于「当前交易对的首次加载」：已加载过的 pair 在刷新
+  // （P2P 事件 / 轮询）时静默更新，不再闪加载圈（第 54 轮）
+  const loadedPairRef = useRef<string | null>(null)
   const [trades, setTrades] = useState<Trade[]>([])
   const [myOrders, setMyOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(false)
@@ -159,7 +170,6 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
     const cacheKey = CACHE_KEYS_ORDERBOOK.orderbook(pair)
     const cached = getCached<OrderbookResponse>(cacheKey)
     if (cached) {
-      setPrevOrderbook(orderbook)
       setOrderbook(cached)
       setFromCache((f) => ({ ...f, orderbook: true }))
     }
@@ -174,12 +184,13 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         bids: book.bids.map(rawToOrder),
         asks: book.asks.map(rawToOrder),
       }
-      // 检测价格变化并设置动画
-      if (orderbook && data) {
+      // 检测价格变化并设置动画（与上一份已展示的簿比较，读 ref 不读 state）
+      const prev = prevOrderbookRef.current
+      if (prev && prev.pair === pair) {
         const animMap = new Map<string, 'up' | 'down'>()
         // 检查买盘价格变化
-        if (orderbook.bids.length > 0 && data.bids.length > 0) {
-          const prevBestBid = parseFloat(orderbook.bids[0].price)
+        if (prev.bids.length > 0 && data.bids.length > 0) {
+          const prevBestBid = parseFloat(prev.bids[0].price)
           const newBestBid = parseFloat(data.bids[0].price)
           if (newBestBid > prevBestBid) {
             animMap.set(data.bids[0].orderId, 'up')
@@ -188,8 +199,8 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
           }
         }
         // 检查卖盘价格变化
-        if (orderbook.asks.length > 0 && data.asks.length > 0) {
-          const prevBestAsk = parseFloat(orderbook.asks[0].price)
+        if (prev.asks.length > 0 && data.asks.length > 0) {
+          const prevBestAsk = parseFloat(prev.asks[0].price)
           const newBestAsk = parseFloat(data.asks[0].price)
           if (newBestAsk > prevBestAsk) {
             animMap.set(data.asks[0].orderId, 'up')
@@ -201,7 +212,6 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
         // 动画结束后清除
         setTimeout(() => setPriceAnimations(new Map()), 600)
       }
-      setPrevOrderbook(orderbook)
       setOrderbook(data)
       setCached(cacheKey, data)
       setFromCache((f) => ({ ...f, orderbook: false }))
@@ -209,7 +219,7 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       if (!cached) setOrderbook(null)
       setError((e as Error).message)
     }
-  }, [pair, isOnline, orderbook])
+  }, [pair, isOnline])
 
   const fetchTrades = useCallback(async () => {
     if (!hasRelayApi()) return
@@ -270,11 +280,24 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
 
   useEffect(() => {
     if (!hasRelayApi()) return
-    setLoading(true)
-    Promise.all([fetchOrderbook(), fetchTrades(), account ? fetchMyOrders() : Promise.resolve()]).finally(() =>
+    // 首次进入某交易对才点亮 loading；同 pair 的后续刷新（P2P 事件、
+    // 15 秒轮询、撤单后刷新）只更新数据，不再让整页回到「加载中」
+    const isFirstLoadForPair = loadedPairRef.current !== pair
+    if (isFirstLoadForPair) setLoading(true)
+    Promise.all([fetchOrderbook(), fetchTrades(), account ? fetchMyOrders() : Promise.resolve()]).finally(() => {
+      loadedPairRef.current = pair
       setLoading(false)
-    )
+    })
   }, [pair, account, refreshAt, fetchOrderbook, fetchTrades, fetchMyOrders])
+
+  // 显式轮询保鲜（第 54 轮）：死循环修掉后，簿与成交改由 15 秒轮询 +
+  // P2P/WS 事件保持新鲜；pair 变化不重置计时（取数回调自带当前 pair），
+  // 卸载时清理
+  useEffect(() => {
+    if (!hasRelayApi()) return
+    const t = setInterval(() => setRefreshAt((x) => x + 1), 15000)
+    return () => clearInterval(t)
+  }, [])
 
   // 获取余额
   const fetchBalance = useCallback(async () => {
@@ -292,8 +315,14 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       }
       const tokenAddress = side === 'sell' ? pairTokens.base : pairTokens.quote
       // 可用余额口径与交易面板一致：Vault 可用额（总额 − 挂单锁定）
+      // 第 54 轮：套应用层超时——钱包 RPC 卡住时原调用永不落定，
+      // balanceLoading 会永远 true；超时按读取失败走下方 catch 清空
       const vault = new Contract(VAULT_ADDRESS, VAULT_ABI, provider)
-      const bal = await vault.availableBalance(account, tokenAddress)
+      const bal = await withTimeout(
+        vault.availableBalance(account, tokenAddress) as Promise<bigint>,
+        BALANCE_READ_TIMEOUT_MS,
+        'vault availableBalance',
+      )
       setBalance(formatTokenAmount(bal))
     } catch (e) {
       console.error('获取余额失败:', e)

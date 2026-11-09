@@ -89,6 +89,27 @@ export function getProvider(): BrowserProvider | null {
   return new BrowserProvider(ethereum)
 }
 
+/**
+ * 给任意 Promise 套应用层超时（第 54 轮）：超时按失败 reject，由调用方
+ * 走既有失败路径。专为不支持取消信号的调用（如经钱包 Provider 的
+ * ethers 合约读）兜底——钱包 RPC 卡住时原调用永不落定，界面会永远停在
+ * 「加载中」。tradesDual 的 callWithTimeout 面向 fetch（须把 AbortSignal
+ * 真传进底层请求），合约读没有 signal 可传，故这里只做竞速；超时后底层
+ * 调用仍可能在后台完成，但结果会被丢弃，不会再回写界面。
+ */
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timeout after ${timeoutMs}ms`)), timeoutMs)
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+  })
+}
+
+/** 链上余额读取超时（第 54 轮）：钱包 RPC 正常时为亚秒级，10 秒足够宽放 */
+export const BALANCE_READ_TIMEOUT_MS = 10000
+
 /** 获取 signer 并执行回调，未检测到钱包时抛错 */
 export async function withSigner<T>(fn: (signer: Signer) => Promise<T>): Promise<T> {
   const provider = getProvider()
