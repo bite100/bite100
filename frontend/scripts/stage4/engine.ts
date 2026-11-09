@@ -123,6 +123,62 @@ export interface Stage4Config {
   submitGapMs: number
   indexerGraceSec: number
   nodeUrls: Record<number, string>
+  /** 本次运行的链集合（S4_CHAINS，缺省 = CHAINS 双链） */
+  chains: number[]
+  /** 本次运行的交易对轮转集合（S4_PAIRS，缺省 = TRADE_PAIRS 全 8 对） */
+  pairs: string[]
+}
+
+/** 逗号分隔列表解析：去空白、去空项、保序去重；未设置/全空 → null（用缺省） */
+function parseCsvList(raw: string | undefined): string[] | null {
+  if (raw === undefined) return null
+  const items = [
+    ...new Set(
+      raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  ]
+  return items.length > 0 ? items : null
+}
+
+/**
+ * S4_CHAINS 解析（第 55 轮，Sepolia 补测 A 前置）：逗号分隔链 id，
+ * 缺省 [11155111, 84532] 双链与既有行为逐字一致。只接受 CHAINS 内
+ * 的测试网，非法值直接抛错拒绝启动（失败关闭，不静默回落）——
+ * 单链补测靠它保证另一条链零动作，解析含糊比不跑更危险。
+ */
+function parseChains(raw: string | undefined): number[] {
+  const items = parseCsvList(raw)
+  if (!items) return [...CHAINS]
+  return items.map((s) => {
+    const n = Number(s)
+    if (!Number.isInteger(n) || !(CHAINS as readonly number[]).includes(n)) {
+      throw new Error(
+        `S4_CHAINS 非法链 id「${s}」：只接受 ${CHAINS.join(' / ')} 的逗号组合`,
+      )
+    }
+    return n
+  })
+}
+
+/**
+ * S4_PAIRS 解析（第 55 轮）：逗号分隔交易对子集，轮转顺序按给定
+ * 顺序；缺省 TRADE_PAIRS 全 8 对与既有行为逐字一致。只接受已登记
+ * 交易对，非法值抛错拒绝启动（同 S4_CHAINS 口径）。
+ */
+function parsePairs(raw: string | undefined): string[] {
+  const items = parseCsvList(raw)
+  if (!items) return [...TRADE_PAIRS]
+  for (const p of items) {
+    if (!(TRADE_PAIRS as readonly string[]).includes(p)) {
+      throw new Error(
+        `S4_PAIRS 非法交易对「${p}」：只接受 ${TRADE_PAIRS.join(' / ')} 的逗号组合`,
+      )
+    }
+  }
+  return items
 }
 
 export function loadConfig(): Stage4Config {
@@ -144,9 +200,12 @@ export function loadConfig(): Stage4Config {
       11155111: process.env.S4_NODE_URL_11155111 ?? 'http://127.0.0.1:8080',
       84532: process.env.S4_NODE_URL_84532 ?? 'http://127.0.0.1:8081',
     },
+    chains: parseChains(process.env.S4_CHAINS),
+    pairs: parsePairs(process.env.S4_PAIRS),
   }
 }
 
+/** 运行器支持的测试网全集；S4_CHAINS 的可选范围与缺省值（第 55 轮起链集合配置驱动，见 loadConfig） */
 export const CHAINS = [11155111, 84532] as const
 const PRICE = '2000' // 合成定价（与 soak 同口径：测状态机保真，不测价格真实性）
 
@@ -389,7 +448,7 @@ export class PendingLedgerCorruptError extends Error {
 }
 
 /** 构建备注：第 54 轮定版（叠加第 53/52/50/48/45 轮），随状态文件与 window-start 行落盘 */
-export const BUILD_NOTE = '第 54 轮顺带项（第 53 轮复审 P2）：落盘 fsync 分类按场景拆分——EBADF 任何场景一律上抛；文件 fsync 仅 ENOTSUP/EOPNOTSUPP 降级；目录步（打开+同步）EINVAL/ENOTSUP/EOPNOTSUPP 降级；faults F9 补 EBADF 反例。第 53 轮复审 P2 顺带项：落盘 fsync 错误分类（仅平台不支持类错误码 EINVAL/ENOTSUP/EOPNOTSUPP/EBADF 降级跳过，EIO 等真实 I/O 错误向上抛、失败关闭，不再全吞）。第 52 轮审查条件项修复（基线第 50 轮）：迟到成交回执事件须与扫描发现多重集对账（空/不符按未验真保隔离）；恢复账本 fsync 持久化序（写 tmp→同步文件→rename→同步父目录）+ 语义校验（链白名单/交易对白名单/哈希与摘要格式/腿数 ≥1/量为十进制整数串）。第 50 轮审查条件项修复（基线第 48 轮）：隔离对账遇未验真迟到成交不报 complete、抛错保隔离（失败关闭）；恢复账本主文件缺失时读遗留 .tmp 兜底首次创建崩溃窗；恢复账本全字段 schema 校验 + 同 txHash 异内容冲突失败关闭；跨进程幂等判重补 metrics 落盘 probe 记录，重启不重复确认。第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
+export const BUILD_NOTE = '第 55 轮（Sepolia 补测 A 前置）：链/交易对选择开关——S4_CHAINS（逗号分隔，限 CHAINS 全集，缺省双链）+ S4_PAIRS（逗号分隔子集，限 TRADE_PAIRS，缺省全 8 对），缺省行为与既有逐字一致，非法值抛错拒绝启动；周期轮转与无单回落均限配置子集内。第 54 轮顺带项（第 53 轮复审 P2）：落盘 fsync 分类按场景拆分——EBADF 任何场景一律上抛；文件 fsync 仅 ENOTSUP/EOPNOTSUPP 降级；目录步（打开+同步）EINVAL/ENOTSUP/EOPNOTSUPP 降级；faults F9 补 EBADF 反例。第 53 轮复审 P2 顺带项：落盘 fsync 错误分类（仅平台不支持类错误码 EINVAL/ENOTSUP/EOPNOTSUPP/EBADF 降级跳过，EIO 等真实 I/O 错误向上抛、失败关闭，不再全吞）。第 52 轮审查条件项修复（基线第 50 轮）：迟到成交回执事件须与扫描发现多重集对账（空/不符按未验真保隔离）；恢复账本 fsync 持久化序（写 tmp→同步文件→rename→同步父目录）+ 语义校验（链白名单/交易对白名单/哈希与摘要格式/腿数 ≥1/量为十进制整数串）。第 50 轮审查条件项修复（基线第 48 轮）：隔离对账遇未验真迟到成交不报 complete、抛错保隔离（失败关闭）；恢复账本主文件缺失时读遗留 .tmp 兜底首次创建崩溃窗；恢复账本全字段 schema 校验 + 同 txHash 异内容冲突失败关闭；跨进程幂等判重补 metrics 落盘 probe 记录，重启不重复确认。第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
 
 /**
  * fsync 降级白名单（第 53 轮建、第 54 轮按场景拆分）：只有「平台/
@@ -2539,12 +2598,12 @@ async function runChainCycle(
 ): Promise<void> {
   // 多腿市价剧本整周期替换标准流（每 8 周期一次）
   if (cycle % 8 === 7) {
-    const pair = TRADE_PAIRS[(cycle - 1) % TRADE_PAIRS.length]
+    const pair = cfg.pairs[(cycle - 1) % cfg.pairs.length]
     await scenarioMultileg(ledger, cfg, ctx, pair)
     ledger.line({ kind: 'cycle', ts: Date.now(), chainId: ctx.chainId, cycle, pair, mode: 'multileg' })
     return
   }
-  const pair = TRADE_PAIRS[(cycle - 1) % TRADE_PAIRS.length]
+  const pair = cfg.pairs[(cycle - 1) % cfg.pairs.length]
   const tryMakers = async (p: string): Promise<GeneratedOrder[]> => {
     const gens: GeneratedOrder[] = []
     for (const side of ['sell', 'buy'] as const) {
@@ -2562,11 +2621,14 @@ async function runChainCycle(
   }
   let usedPair = pair
   let makerGens = await tryMakers(pair)
-  if (makerGens.length === 0 && pair !== DEFAULT_PAIR) {
-    // 该对在该链未登记或钱包无可落锁余额：回落默认对保产出（与 soak 的预检跳过口径一致，差别是阶段 4 有计数目标）
-    log(`chain ${ctx.chainId} cycle ${cycle}: ${pair} 无单可发，回落 ${DEFAULT_PAIR}`)
-    usedPair = DEFAULT_PAIR
-    makerGens = await tryMakers(DEFAULT_PAIR)
+  // 回落对限本次配置子集内：子集含 DEFAULT_PAIR 用它（缺省配置行为
+  // 不变），否则用子集首对——不许发到 S4_PAIRS 之外（第 55 轮）。
+  const fallbackPair = cfg.pairs.includes(DEFAULT_PAIR) ? DEFAULT_PAIR : cfg.pairs[0]
+  if (makerGens.length === 0 && pair !== fallbackPair) {
+    // 该对在该链未登记或钱包无可落锁余额：回落保产出（与 soak 的预检跳过口径一致，差别是阶段 4 有计数目标）
+    log(`chain ${ctx.chainId} cycle ${cycle}: ${pair} 无单可发，回落 ${fallbackPair}`)
+    usedPair = fallbackPair
+    makerGens = await tryMakers(fallbackPair)
   }
   if (makerGens.length > 0) await probePresence(ledger, ctx, usedPair, makerGens)
 
@@ -2599,7 +2661,7 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
   const wallets = loadWallets(cfg.keysDir)
   const deployer = loadDeployer(cfg.keysDir)
   const ctxs = new Map<number, ChainCtx>()
-  for (const chainId of CHAINS) {
+  for (const chainId of cfg.chains) {
     ctxs.set(chainId, buildChainCtx(cfg, chainId, wallets, deployer))
   }
   const metricsPath = join(cfg.outDir, 'stage4-metrics.jsonl')
@@ -2623,16 +2685,18 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
     indexerUrl: cfg.indexerUrl || '(unset)',
     intervalSec: cfg.intervalSec,
     targetPerChain: cfg.targetPerChain,
-    chains: CHAINS.map((c) => ({
+    chains: cfg.chains.map((c) => ({
       chainId: c,
       settlement: getChainConfig(c)?.contracts.settlement,
       vault: getChainConfig(c)?.contracts.vault,
     })),
+    pairs: cfg.pairs,
   })
   ledger.saveState('running')
   log(
     `阶段 4 运行器启动：窗口 ${new Date(windowStart).toISOString()} → ${new Date(ledger.windowEndPlanned).toISOString()}，` +
-      `间隔 ${cfg.intervalSec}s，目标每链 ≥${cfg.targetPerChain} 单`,
+      `间隔 ${cfg.intervalSec}s，目标每链 ≥${cfg.targetPerChain} 单，` +
+      `链 ${cfg.chains.join('/')}，交易对 ${cfg.pairs.join('/')}`,
   )
   log(BUILD_NOTE)
   // B5：先复查遗留待确认结算，确认完才进新周期（失败关闭在此拦截）
@@ -2672,7 +2736,7 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
       const cycle = ledger.cycles
       await processPendingActions(ledger)
       await processExpiryChecks(ledger, ctxs)
-      for (const chainId of CHAINS) {
+      for (const chainId of cfg.chains) {
         const ctx = ctxs.get(chainId)!
         const q = quarantine.get(chainId)
         if (q) {
@@ -2833,7 +2897,7 @@ export async function runCheck(cfg: Stage4Config): Promise<number> {
     hardFail = true
   }
   if (!hardFail) {
-    for (const chainId of CHAINS) {
+    for (const chainId of cfg.chains) {
       const ctx = buildChainCtx(cfg, chainId, wallets, deployer!)
       const info: Record<string, unknown> = {
         contracts: ctx.chainCfg.contracts,
