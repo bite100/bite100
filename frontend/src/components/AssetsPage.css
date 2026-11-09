@@ -1,27 +1,8 @@
-/* 资产页（第 31 轮 v2） */
+/* 资产页（第 31 轮 v2；第 53 轮下线做市金库后为单页总览） */
 .assets-page {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.assets-tabs {
-  display: flex;
-  gap: 22px;
-  padding: 0 2px;
-}
-.assets-tabs button {
-  border: none;
-  background: none;
-  cursor: pointer;
-  font: inherit;
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--b100-text-3);
-  padding: 2px 0;
-}
-.assets-tabs button.on {
-  color: var(--b100-text);
 }
 
 .assets-hero-label {
@@ -122,48 +103,6 @@
   font-size: 16px;
   line-height: 1;
   color: var(--b100-accent);
-}
-
-.assets-vault-card {
-  border: 1.5px solid var(--b100-accent);
-}
-.assets-vault-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  font-size: 15px;
-}
-.assets-vault-desc {
-  font-size: 12.5px;
-  color: var(--b100-text-2);
-  line-height: 1.65;
-  margin: 8px 0 0;
-}
-.assets-vault-nums {
-  display: flex;
-  gap: 10px;
-  margin-top: 12px;
-}
-.assets-vault-nums > div {
-  flex: 1;
-  min-width: 0;
-}
-.assets-vault-nums span {
-  display: block;
-  font-size: 10.5px;
-  color: var(--b100-text-3);
-}
-.assets-vault-nums b {
-  font-size: 14.5px;
-  font-weight: 700;
-  word-break: break-all;
-}
-.assets-vault-btn {
-  width: 100%;
-  margin-top: 14px;
-  background: var(--b100-text);
-  color: #fff;
 }
 
 .assets-distbar {
