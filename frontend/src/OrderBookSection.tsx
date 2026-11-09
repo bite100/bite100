@@ -13,7 +13,7 @@ import { nodeGet, nodePost } from './nodeClient'
 import { usePairMarketPrice } from './hooks/useTokenPrice'
 import { signOrder, signCancelOrder, generateOrderId, fetchOrderNonce } from './services/orderSigning'
 import { sideToSignedValue } from './services/orderSigningTypes'
-import { broadcastOrderDualChannel } from './services/orderService'
+import { broadcastOrderDualChannel, BROADCAST_NODE_UNKNOWN_MESSAGE } from './services/orderService'
 import { verifyOrderSignatureSignedData } from './services/orderVerification'
 import { LoadingSpinner } from './components/LoadingSpinner'
 import { HardCancelAction } from './components/HardCancelAction'
@@ -401,6 +401,9 @@ export function OrderBookSection({ account, getSigner, onBackToDashboard }: Orde
       // 下单成功（节点停机时订单照样进中继簿）；双通道都失败才报错。
       const broadcast = await broadcastOrderDualChannel({ ...order }, CHAIN_ID)
       if (!broadcast.viaNode && !broadcast.viaRelay) {
+        // UNKNOWN 优先于失败断言（第 46 轮 P2-3）：节点超时未定按
+        // 待确认呈现，提示勿重复下单。
+        if (broadcast.nodeUnknown) throw new Error(BROADCAST_NODE_UNKNOWN_MESSAGE)
         throw broadcast.nodeError instanceof Error
           ? broadcast.nodeError
           : new Error('订单广播失败：节点与中继通道均未接单，请稍后重试')

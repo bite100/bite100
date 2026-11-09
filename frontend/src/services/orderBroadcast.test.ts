@@ -135,6 +135,9 @@ describe('broadcastOrderDualChannel（第 45 轮 A1/A2）', () => {
     expect(outcome.viaRelay).toBe(false)
     expect(outcome.nodeError).toBeInstanceOf(Error)
     expect((outcome.nodeError as Error).message).toContain('超时')
+    // 第 46 轮 P2-3：期限到点时节点结果未落定 → nodeUnknown 在场，
+    // 调用方须按「待确认」呈现而非断言未接单
+    expect(outcome.nodeUnknown).toBe(true)
   })
 
   it('A1：落败通道迟到接单 → 广播结果不变，迟到结果留 console 痕迹', async () => {
@@ -161,5 +164,7 @@ describe('broadcastOrderDualChannel（第 45 轮 A1/A2）', () => {
     expect(outcome.viaRelay).toBe(false)
     expect(outcome.nodeError).toBeInstanceOf(Error)
     expect((outcome.nodeError as Error).message).toBe('node down')
+    // 第 46 轮 P2-3：双通道都已落定为失败 → 不是 UNKNOWN，不得标待确认
+    expect(outcome.nodeUnknown).toBeUndefined()
   })
 })

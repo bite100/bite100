@@ -2,7 +2,7 @@
  * nodeClient 单元测试：tryNodes 多节点回退、nodeGet/nodePost（mock config + fetch）
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { tryNodes, nodeGet, nodePost } from './nodeClient'
+import { tryNodes, nodeGet, nodePost, NODE_POST_TIMEOUT_MS } from './nodeClient'
 
 vi.mock('./config', () => ({
   NODE_API_URLS: ['http://node1', 'http://node2', 'http://node3'],
@@ -174,7 +174,33 @@ describe('nodePost', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      // 第 46 轮：nodePost 每次尝试带请求超时信号（此前无超时）
+      signal: expect.any(AbortSignal),
     })
+  })
+
+  it('第 46 轮：节点请求挂死时按 NODE_POST_TIMEOUT_MS 超时失败，不无限等', async () => {
+    // AbortSignal.timeout 的内部计时不受 vitest 假计时器控制，故把
+    // 真实超时压缩到 10ms 验证：nodePost 必须以 NODE_POST_TIMEOUT_MS
+    // 申请超时信号，且信号 abort 后请求按失败走完所有节点并抛错。
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal)
+    const spy = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockImplementation((ms: number) => realTimeout(Math.min(ms, 10)))
+    try {
+      ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (_url: string, init?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new Error('The operation was aborted')),
+            )
+          }),
+      )
+      await expect(nodePost('/api/order', {})).rejects.toThrow('aborted')
+      expect(spy).toHaveBeenCalledWith(NODE_POST_TIMEOUT_MS)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('throws when response is !ok', async () => {

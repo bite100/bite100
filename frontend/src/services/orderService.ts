@@ -14,7 +14,18 @@ export interface OrderBroadcastOutcome {
   viaNode: boolean
   viaRelay: boolean
   nodeError?: unknown
+  /**
+   * 第 46 轮（45 轮复审 P2-3）：广播期限到点时节点通道结果仍未落定
+   * （请求可能已达节点、只是回执没回来）→ 结果是 UNKNOWN，不是失败。
+   * 在场时调用方必须按「待确认」呈现：不得断言未接单，并提示用户
+   * 勿立即重复下单（BROADCAST_NODE_UNKNOWN_MESSAGE）。
+   */
+  nodeUnknown?: boolean
 }
+
+/** 下单结果待确认（UNKNOWN）时的统一用户文案，三处下单路径共用 */
+export const BROADCAST_NODE_UNKNOWN_MESSAGE =
+  '订单结果待确认：节点通道超时、结果未定，订单可能已经入簿。请勿立即重复下单，稍后到「当前挂单」确认这张订单在不在。'
 
 /** 双通道广播期限：任一通道挂死都不得把下单返回拖过这个上限（第 45 轮 A1） */
 export const BROADCAST_CHANNEL_DEADLINE_MS = 20_000
@@ -28,9 +39,10 @@ export const BROADCAST_CHANNEL_DEADLINE_MS = 20_000
  * 结果安全忽略、只 console.debug 留痕（迟到接单的订单照常入簿：
  * 同一签名订单，中继按 EIP-712 digest 去重、节点按 orderId 去重，
  * 下游只认一个订单身份）。双通道都失败才返回失败（nodeError 带
- * 节点侧原始错误）；双通道都挂死时在广播期限处按失败返回（节点侧
- * 记超时错误），下单返回永远有界。本函数不抛错，双失败的抛错口径
- * 由调用方决定（与旧口径一致）。
+ * 节点侧原始错误）；双通道都挂死时在广播期限处返回（节点侧记超时
+ * 错误，并标 nodeUnknown——节点结果未定、可能是已接单只是回执未回，
+ * 第 46 轮 P2-3），下单返回永远有界。本函数不抛错，双失败的抛错口径
+ * 由调用方决定（UNKNOWN 时按待确认文案，见 BROADCAST_NODE_UNKNOWN_MESSAGE）。
  */
 export async function broadcastOrderDualChannel(
   orderBody: Record<string, unknown>,
@@ -42,6 +54,7 @@ export async function broadcastOrderDualChannel(
     let nodeError: unknown
     let nodeSettled = false
     let relaySettled = false
+    let nodeUnknown = false
     let finished = false
     let finishScheduled = false
     let deadline: ReturnType<typeof setTimeout> | undefined
@@ -50,7 +63,11 @@ export async function broadcastOrderDualChannel(
       if (finished) return
       finished = true
       if (deadline) clearTimeout(deadline)
-      resolve(viaNode ? { viaNode, viaRelay } : { viaNode, viaRelay, nodeError })
+      resolve(
+        viaNode
+          ? { viaNode, viaRelay }
+          : { viaNode, viaRelay, nodeError, ...(nodeUnknown ? { nodeUnknown: true } : {}) },
+      )
     }
     // 先接单者触发返回；同一宏任务轮次内落定的另一通道结果一并带上
     //（双通道同时接单时两侧标志都为真），只多等一个 tick，不等挂死通道。
@@ -64,6 +81,9 @@ export async function broadcastOrderDualChannel(
       else if (nodeSettled && relaySettled) finish()
     }
     deadline = setTimeout(() => {
+      // 期限到点且节点结果未落定 → UNKNOWN（第 46 轮 P2-3）：节点可能
+      // 已接单只是回执未回，不得按「未接单」断言。
+      if (!nodeSettled) nodeUnknown = true
       if (!nodeSettled && nodeError === undefined) {
         nodeError = new Error(
           `订单广播节点通道超时（>${BROADCAST_CHANNEL_DEADLINE_MS / 1000}s 未响应）`,
@@ -172,6 +192,9 @@ export async function submitOrder(
   // 抛出节点侧原始错误（保持既有错误面貌）。
   const broadcast = await broadcastOrderDualChannel(orderBody, CHAIN_ID)
   if (!broadcast.viaNode && !broadcast.viaRelay) {
+    // UNKNOWN 优先于失败断言（第 46 轮 P2-3）：节点结果未定时按
+    // 待确认呈现，防用户误以为没下成而重复下单。
+    if (broadcast.nodeUnknown) throw new Error(BROADCAST_NODE_UNKNOWN_MESSAGE)
     throw broadcast.nodeError instanceof Error
       ? broadcast.nodeError
       : new Error('订单广播失败：节点与中继通道均未接单')
