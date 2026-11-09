@@ -112,3 +112,57 @@ forge script script/DeployStage3.s.sol \
 - [ ] 连带：`indexer/src/lib/settlementAbi.ts` 注释口径、
       `indexer/test/reconcile.test.ts`、`indexer/test/testindex
 ...[truncated 615 chars]
+## 附：切换执行记录（2026-11-09）
+
+> 第 1–3 步由主聊天执行并验证；配置回填（第 6 步的配置部分、第 7 步
+> 地址与断言、第 8 步索引器）由回填提交登记于此。老栈全程未动。
+
+### 部署结果（第 1 步）
+
+| 链 | 合约 | 新地址 | 部署块 | CREATE tx |
+|---|---|---|---|---|
+| Sepolia | Vault | 0x836cEFF0140aB66D8DD984ECb18765736BA121e9 | 12094696 | 0xe19e827b0f109bce9fa9b1088b05d1fd9c04da76f6b2cac6ff4f2f2b2dd961e7 |
+| Sepolia | Settlement | 0x5697F7B2178352eB391e29fc2c5681Dea864C1d9 | 12094697 | 0xbd3556e5c56d8bb57bb4d7196d8e708ba434fc1a1f77904467bb3705fba6d249 |
+| Sepolia | MakerVault | 0x5473D7c58c56BCd855c6f2048614A10e9645F7f0 | 12094705 | 0x0db47b0d0453519eb064b75fbed2fcc41e1085ef395d10e0528e28e1ff13950f |
+| Base Sepolia | Vault | 0x295F5529F5BfA4cA39290f395b1feF7EA637f5D3 | 56357189 | 0x905d01e918f5e57a9e232744aefa6fa66172dbf2e3b3db93433aff6cdec60f33 |
+| Base Sepolia | Settlement | 0x1021C7116cCE59f9c85683d6f1b5aD2215795949 | 56357193 | 0x4dcbd91be8829457ead8e6f3b27f195e2f0156d8bb098dc5fb3b79fc9ff971ed |
+| Base Sepolia | MakerVault | 0x66F43601e4ef88ba38F8AeDDe9D2b0F949427D31 | 56357240 | 0xadc2de0a544c283d3f54535a0e48d20f59964382908210370f3ba1f6833c8e21 |
+
+索引器 start_block 取 Settlement 的 CREATE 块：Sepolia 12094697 /
+Base Sepolia 56357193（已回填 indexer/config.yaml）。
+
+### 回读结论（第 2 步，主聊天链上回读）
+
+- 双链新 Settlement 的 feeBps、meterKeepBps、gasDeductCapBps、
+  maxFailureGasChargeQuote、feeDistributor、governance、chainConfig
+  与老栈逐项全等；vault() 指向新 Vault；relayer 未设（模型 B 开放提交）。
+- 新 Vault：settlement() 指向新 Settlement；lockers(部署者)==true；
+  **cancelledOrders 读口在新栈存在且返回 false、老栈同调用 revert**
+  （新旧栈判别成立，永久撤单代码已上链）。
+- 新 MakerVault：tradingVault()==新 Vault，asset()/baseToken()/priceFeed()
+  与第 0 步参数一致；signer 的 ROLE_MARKET_MAKER 已注册。
+
+### 注资（第 3 步）
+
+- 双链新 Vault 各转入 1000 测试 USDT（本测试 USDT 为 18 位精度，
+  即 1000×10^18），回读托管余额达标。
+
+### 配置回填登记（本提交）
+
+- frontend/src/config/chains.ts：双链 vault/settlement/makerVault 已换新值
+  （仅此六行，无关字段未动）；chains.test.ts、
+  services/orderSigningTypes.test.ts 写死断言同步。
+- indexer/config.yaml：双链 Settlement 地址 + start_block 已换新值，
+  文件头部署记录注释同步（新地址/CREATE tx/部署块）；连带
+  src/lib/settlementAbi.ts 注释、test/reconcile.test.ts、
+  test/testindexer.test.ts、README.md 部署表同步。
+- relay/src/config.ts：双链 settlement 已换新值，文件头核对注释同步；
+  relay/scripts/demo.mjs、relay/scripts/verify-1271-live.mjs 内
+  Sepolia Settlement / MakerVault 地址同步（Worker 重新部署不在本提交内，
+  由主聊天在合并后执行）。
+
+### 待主聊天续行
+
+- 第 4 步 E2E、第 5 步撤单永久性烟测、第 6 步 Worker 重新部署
+  （含 D1 备份与生产烟测）、第 7 步推送与线上 bundle 核验、
+  第 8 步 Envio 轮换。

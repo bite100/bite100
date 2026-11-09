@@ -18,8 +18,8 @@ import { orderDigest, tradeEntityId, type DecodedOrder } from '../src/lib/associ
 const SEPOLIA = 11155111
 const BASE = 84532
 const SETTLEMENT: Record<number, `0x${string}`> = {
-  [SEPOLIA]: '0xbf2B9635B682Ff30E73028a5b2beEB829873a88f',
-  [BASE]: '0x50aFA0d0a407bdeCcdd6b9b3f6d4a68f837F0305',
+  [SEPOLIA]: '0x5697F7B2178352eB391e29fc2c5681Dea864C1d9',
+  [BASE]: '0x1021C7116cCE59f9c85683d6f1b5aD2215795949',
 }
 const MAKER = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'
 const TAKER = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
@@ -65,7 +65,7 @@ function batchCalldata(): string {
 
 function tradeEvent(logIndex: number, chainId: number) {
   // 块号必须 ≥ 各链 config 的 start_block，否则 simulate 会被路由过滤
-  const blockNumber = chainId === BASE ? 56039300 : 12089800
+  const blockNumber = chainId === BASE ? 56357293 : 12094797
   return {
     contract: 'Settlement',
     event: 'TradeSettled',
@@ -111,7 +111,7 @@ describe('createTestIndexer 合成事件', () => {
                 takerDeduct: 200n,
                 takerShortfall: 0n,
               },
-              block: { number: 12089800, timestamp: 1700001000, hash: `0x${'ef'.repeat(32)}` },
+              block: { number: 12094797, timestamp: 1700001000, hash: `0x${'ef'.repeat(32)}` },
               transaction: { hash: TX },
               srcAddress: SETTLEMENT[SEPOLIA],
               logIndex: 7,
