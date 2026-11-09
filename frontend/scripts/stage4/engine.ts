@@ -38,6 +38,14 @@
  * 真实 AbortSignal 经适配器 fetchFn 注入点传进底层 fetch（不再
  * 只是等超时），relay.postOrder 打点覆盖到响应体读取。
  *
+ * 第 50 轮（第 48 轮推送后 ChatGPT 复审条件项统一修复）：① 隔离
+ * 对账遇回执未验真的迟到成交不再报 complete——抛错保隔离、失败
+ * 关闭；② 恢复账本主文件缺失时读遗留 `.tmp` 兜底首次创建崩溃
+ * 窗（校验不过即失败关闭）；③ 跨进程幂等判重补 metrics 落盘
+ * probe 记录（hasProbeRecord），重启不重复确认/记账；④ 恢复
+ * 账本改全字段 schema 校验，同 txHash 异内容冲突 = 失败关闭，
+ * 禁止静默覆盖。
+ *
  * 密钥纪律：只从 S4_KEYS_DIR（默认 ~/workspace/bite100-deployer）
  * 的 maker.env / taker.env / wallet.env 运行时读取，绝不打印/落盘。
  * 仅测试网链（11155111 / 84532），其他 chainId 直接拒绝。
@@ -362,8 +370,8 @@ export class PendingLedgerCorruptError extends Error {
   }
 }
 
-/** 构建备注：第 48 轮定版（叠加第 45 轮），随状态文件与 window-start 行落盘 */
-export const BUILD_NOTE = '第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
+/** 构建备注：第 50 轮定版（叠加第 48/45 轮），随状态文件与 window-start 行落盘 */
+export const BUILD_NOTE = '第 50 轮审查条件项修复（基线第 48 轮）：隔离对账遇未验真迟到成交不报 complete、抛错保隔离（失败关闭）；恢复账本主文件缺失时读遗留 .tmp 兜底首次创建崩溃窗；恢复账本全字段 schema 校验 + 同 txHash 异内容冲突失败关闭；跨进程幂等判重补 metrics 落盘 probe 记录，重启不重复确认。第 48 轮运行器修复（叠加第 45 轮 B1/B3/B2-lite + 方案 B 超时硬化 + 卡点埋点 + B4 失败关闭 + B5 恢复账本）：P1-1 txHash 先记账本再探回执；P1-2 周期超时后本链隔离、下一周期前先对账（遗留结算复查 + 事件扫描认回迟到成交）才许提新单；P1-3 恢复账本损坏 = 失败关闭停机；P2 确认记账顺序（先写记录再清 pending、启动幂等合并）、恢复路径已成交量 3 次重试、签名量缺失不跳过核对、中继拉簿真实 AbortSignal 注入、发单超时标接受未知并入在场探针、postOrder 打点覆盖响应体读取'
 
 export class Stage4Ledger {
   posted = new Map<string, PostedOrder>()
@@ -444,35 +452,139 @@ export class Stage4Ledger {
   }
 
   /**
+   * 第 50 轮：单行全字段 schema 校验——账本条目的每个必填字段逐一
+   * 验类型/存在，任一不符即按账本损坏失败关闭。第 48 轮 P1-3 的
+   * 浅校验只验 txHash/chainId 两项，缺腿数/缺签名量/缺摘要的半残
+   * 条目会被放行、到恢复确认时才爆，且爆点远离损坏源。
+   */
+  private static validatePendingRows(parsed: unknown, source: string): PendingSettlement[] {
+    if (!Array.isArray(parsed)) {
+      throw new PendingLedgerCorruptError(`${source}：内容不是待确认结算数组`)
+    }
+    parsed.forEach((r, i) => {
+      const bad = (field: string) =>
+        new PendingLedgerCorruptError(`${source}：第 ${i} 行字段 ${field} 缺失或类型不符`)
+      if (!r || typeof r !== 'object') throw bad('(整行)')
+      const row = r as Record<string, unknown>
+      if (typeof row.txHash !== 'string' || row.txHash.length === 0) throw bad('txHash')
+      if (typeof row.chainId !== 'number') throw bad('chainId')
+      if (typeof row.pair !== 'string') throw bad('pair')
+      if (typeof row.takerDigest !== 'string') throw bad('takerDigest')
+      if (typeof row.legs !== 'number') throw bad('legs')
+      if (!(typeof row.takerAmountIn === 'string' || row.takerAmountIn === null)) {
+        throw bad('takerAmountIn')
+      }
+      if (typeof row.notedAt !== 'number') throw bad('notedAt')
+    })
+    return parsed as PendingSettlement[]
+  }
+
+  /** 两行同 txHash 是否内容一致（逐字段比对，与键序无关） */
+  private static samePendingContent(a: PendingSettlement, b: PendingSettlement): boolean {
+    return (
+      a.chainId === b.chainId &&
+      a.pair === b.pair &&
+      lc(a.takerDigest) === lc(b.takerDigest) &&
+      a.legs === b.legs &&
+      a.takerAmountIn === b.takerAmountIn &&
+      a.notedAt === b.notedAt
+    )
+  }
+
+  /**
    * B5：读盘上遗留的待确认结算。第 48 轮 P1-3 定版：文件不存在 =
    * 空账本（正常）；文件存在但解析失败/形状不对 = 抛
    * PendingLedgerCorruptError 失败关闭——账本里是已提交未确认的
-   * 结算，读不懂绝不能静默当空账本继续跑。读入时按 txHash 幂等
-   * 合并进内存账本（同哈希重复行只留一条）。
+   * 结算，读不懂绝不能静默当空账本继续跑。
+   *
+   * 第 50 轮补三处（第 48 轮复审 P1/P2）：
+   * - **首次创建崩溃窗**：persistPending 先写 `.tmp` 再 rename，
+   *   进程若被 SIGKILL 卡在两者之间，主文件尚不存在而 `.tmp`
+   *   遗留——旧实现直接返回空账本，第一笔已记账结算就此丢失。
+   *   主文件缺失时改读遗留 `.tmp`：经全字段校验合法才采用，并
+   *   rename 愈合文件布局；校验不过按账本损坏失败关闭。
+   * - **全字段校验**：validatePendingRows 逐字段验，不再只验两项。
+   * - **同哈希重复条目**：内容相同则合并一条；内容冲突（同哈希
+   *   两套说法）抛 PendingLedgerCorruptError，禁止 Map 静默覆盖。
    */
   loadPending(): PendingSettlement[] {
-    if (!existsSync(this.pendingPath)) return []
-    let rows: PendingSettlement[]
+    let raw: string | null = null
+    let source = '恢复账本主文件'
+    let adoptTmp = false
+    if (existsSync(this.pendingPath)) {
+      raw = readFileSync(this.pendingPath, 'utf8')
+    } else if (existsSync(`${this.pendingPath}.tmp`)) {
+      raw = readFileSync(`${this.pendingPath}.tmp`, 'utf8')
+      source = '恢复账本 .tmp 遗留文件（主文件缺失，首次创建崩溃窗）'
+      adoptTmp = true
+    }
+    if (raw === null) return []
+    let parsed: unknown
     try {
-      rows = JSON.parse(readFileSync(this.pendingPath, 'utf8')) as PendingSettlement[]
+      parsed = JSON.parse(raw)
     } catch (e) {
       throw new PendingLedgerCorruptError(
-        `JSON 解析失败：${e instanceof Error ? e.message : String(e)}`,
+        `${source} JSON 解析失败：${e instanceof Error ? e.message : String(e)}`,
       )
     }
-    if (
-      !Array.isArray(rows) ||
-      rows.some((r) => !r || typeof r.txHash !== 'string' || typeof r.chainId !== 'number')
-    ) {
-      throw new PendingLedgerCorruptError('内容不是合法的待确认结算数组')
+    const rows = Stage4Ledger.validatePendingRows(parsed, source)
+    if (adoptTmp) {
+      // .tmp 内容已验真：rename 愈合布局，后续 persistPending 回到
+      // 主文件口径。愈合失败不拦恢复——数据已在手、已在内存，
+      // 下一次落盘仍会重写主文件。
+      try {
+        renameSync(`${this.pendingPath}.tmp`, this.pendingPath)
+      } catch {
+        // 忽略：见上
+      }
     }
-    for (const r of rows) this.pending.set(r.txHash.toLowerCase(), r)
+    for (const r of rows) {
+      const key = r.txHash.toLowerCase()
+      const prev = this.pending.get(key)
+      if (prev && !Stage4Ledger.samePendingContent(prev, r)) {
+        throw new PendingLedgerCorruptError(
+          `txHash ${r.txHash} 存在内容冲突的重复条目（同哈希异内容，拒绝静默覆盖）`,
+        )
+      }
+      this.pending.set(key, r)
+    }
     return [...this.pending.values()]
   }
 
   /** 第 48 轮：内存账本快照（隔离对账读遗留待确认结算用，不再回读磁盘） */
   pendingEntries(): PendingSettlement[] {
     return [...this.pending.values()]
+  }
+
+  /**
+   * 第 50 轮 P2：跨进程幂等判重——metrics JSONL 里是否已有该
+   * txHash 的 probe 确认记录行。确认记账顺序是「先写 probe 行、
+   * 再清 pending」（第 48 轮 P2），进程恰好死在两者之间时，重启
+   * 后内存 settlements 是空的、只查内存的旧判重会把这笔再确认
+   * 一遍并重复追加 probe 行，下游按行汇总即双计。metrics 文件
+   * 是落盘事实，判重以它兜底。文件不存在或个别行是坏 JSON
+   * （半写行）按「无记录」跳过：判重只防重复，读不通不能反过
+   * 来把恢复堵死（账本损坏的失败关闭判定在 loadPending）。
+   */
+  hasProbeRecord(txHash: string): boolean {
+    if (!existsSync(this.metricsPath)) return false
+    const want = txHash.toLowerCase()
+    for (const line of readFileSync(this.metricsPath, 'utf8').split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const row = JSON.parse(line) as { kind?: unknown; txHash?: unknown }
+        if (
+          row.kind === 'probe' &&
+          typeof row.txHash === 'string' &&
+          row.txHash.toLowerCase() === want
+        ) {
+          return true
+        }
+      } catch {
+        // 坏行跳过，不影响其余行的判重
+      }
+    }
+    return false
   }
 
   private persistPending(): void {
@@ -1279,6 +1391,10 @@ async function confirmPendingEntry(
  * 先写 probe/恢复记录、再清 pending——死在中间只会留下一笔可
  * 幂等复查的遗留，不会两头都丢。恢复账本损坏在此抛
  * PendingLedgerCorruptError，由启动路径失败关闭（P1-3）。
+ * 第 50 轮 P2：「已有确认记录」的判重补上落盘口径——除内存
+ * settlements 外再查 metrics 里既有的 probe 记录行（hasProbeRecord），
+ * 进程死在「probe 行已写、pending 未清」时重启不再重复确认、
+ * 不再重复追加 probe 行。
  */
 export async function recoverPendingSettlements(
   ledger: Stage4Ledger,
@@ -1295,7 +1411,10 @@ export async function recoverPendingSettlements(
         txHash: entry.txHash,
       })
     }
-    if (ledger.settlements.some((s) => lc(s.txHash) === lc(entry.txHash))) {
+    if (
+      ledger.settlements.some((s) => lc(s.txHash) === lc(entry.txHash)) ||
+      ledger.hasProbeRecord(entry.txHash)
+    ) {
       ledger.line({
         kind: 'recovery',
         ts: Date.now(),
@@ -1333,6 +1452,9 @@ export async function recoverPendingSettlements(
  * 抛（调用方保隔离状态、本轮不对该链提新单）；确认中发现不符
  * 按失败关闭 trip。对账能认回的是「已上链的成交」；迟到的单若
  * 还没成交，它仍在 ledger.posted 与中继簿里，后续周期自然覆盖。
+ * 第 50 轮 P1：事件扫描发现的迟到成交若回执在宽限内不可验真
+ * （取不到或 status≠1），对账不得报 complete——留痕后抛错保
+ * 隔离、下周期重试，堵住「未验真的迟到成交被对完账放行」的洞。
  */
 export async function reconcileAfterTimeout(
   ledger: Stage4Ledger,
@@ -1341,10 +1463,14 @@ export async function reconcileAfterTimeout(
   fromBlock: number,
 ): Promise<void> {
   void cfg
-  // ① 本链遗留待确认结算先确认完
+  // ① 本链遗留待确认结算先确认完（第 50 轮：判重同恢复路径，
+  // 内存 settlements + metrics 落盘 probe 记录双查，不重复记账）
   for (const entry of ledger.pendingEntries()) {
     if (entry.chainId !== ctx.chainId) continue
-    if (ledger.settlements.some((s) => lc(s.txHash) === lc(entry.txHash))) {
+    if (
+      ledger.settlements.some((s) => lc(s.txHash) === lc(entry.txHash)) ||
+      ledger.hasProbeRecord(entry.txHash)
+    ) {
       ledger.confirmPending(entry.txHash)
       continue
     }
@@ -1391,6 +1517,8 @@ export async function reconcileAfterTimeout(
       // 非 Settlement 成交事件，忽略（与 parseTradeEvents 同口径）
     }
   }
+  let lateRecovered = 0
+  const unverifiedLate: string[] = []
   for (const txHash of lateTxHashes) {
     const receipt = await fetchReceiptWithGrace(ctx, txHash)
     if (!receipt || receipt.status !== 1) {
@@ -1402,11 +1530,13 @@ export async function reconcileAfterTimeout(
         result: 'late-tx-unverified',
         detail: `迟到成交事件的回执${receipt ? ` status=${receipt.status}` : '宽限内未取得'}，只留痕不计数`,
       })
+      unverifiedLate.push(txHash)
       continue
     }
     const events = parseTradeEvents(receipt, ctx.chainCfg.contracts.settlement)
     ledger.counts[ctx.chainId].settlements += 1
     ledger.counts[ctx.chainId].legs += events.length
+    lateRecovered += 1
     ledger.line({
       kind: 'reconcile',
       ts: Date.now(),
@@ -1418,13 +1548,36 @@ export async function reconcileAfterTimeout(
     })
     log(`超时对账认回迟到成交 tx=${txHash}（chain ${ctx.chainId}，${events.length} 腿）`)
   }
+  // 第 50 轮 P1：有迟到成交没验真回执时，对账不完整——绝不报
+  // complete。旧实现记一行 late-tx-unverified 就 continue、最后照
+  // 报 complete，调用方据此删隔离：一笔只靠事件扫描发现、回执当
+  // 时不可见的迟到成交就被「对完账」放行，再无人复查。现改为
+  // 留痕后抛错（普通错误，非零容忍 trip）：调用方保隔离、本轮
+  // 不对本链提新单，下一周期重新对账——回执届时可见即认回，
+  // 持续不可见则隔离持续保留（失败关闭）。自家已 notePending 的
+  // 结算不走这条：它们在上方 ① 经 confirmPendingEntry 确认，
+  // 回执不可见本就 trip 失败关闭，语义不变。
+  if (unverifiedLate.length > 0) {
+    ledger.line({
+      kind: 'reconcile',
+      ts: Date.now(),
+      chainId: ctx.chainId,
+      result: 'incomplete-unverified-late-tx',
+      fromBlock: scanFrom,
+      unverifiedLate,
+      detail: '存在回执未验真的迟到成交，对账不完整：不报 complete、保隔离、下周期重试（失败关闭）',
+    })
+    throw new Error(
+      `超时对账未完成：${unverifiedLate.length} 笔迟到成交回执未验真（${unverifiedLate.join(', ')}），隔离保留`,
+    )
+  }
   ledger.line({
     kind: 'reconcile',
     ts: Date.now(),
     chainId: ctx.chainId,
     result: 'complete',
     fromBlock: scanFrom,
-    lateRecovered: lateTxHashes.length,
+    lateRecovered,
   })
 }
 

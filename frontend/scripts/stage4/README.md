@@ -78,6 +78,26 @@
   第二道保险）；`relay.postOrder` 打点覆盖到响应体读取。错误按
   timeout/http/network 分类（`isTimeoutError`），慢 ≠ 错。
 
+第 50 轮（第 48 轮推送后复审条件项修复，口径变更）：
+
+- **对账不得放行未验真的迟到成交**：事件扫描发现的迟到成交若
+  回执在宽限内取不到或 status≠1，对账只留痕（`late-tx-unverified`
+  + `incomplete-unverified-late-tx` 行）并抛错——**不报 complete、
+  隔离保留**，下一周期重新对账；回执届时可见即认回。自家已记
+  账本的结算仍走逐笔确认路径（回执不可见直接失败关闭停机）。
+- **恢复账本首次创建崩溃窗兜底**：主账本文件缺失时，若遗留
+  `.tmp`（写入后 rename 前被杀），先按全字段 schema 校验它：
+  合法则采用并 rename 愈合；不合法按账本损坏失败关闭。
+- **恢复账本全字段校验**：每行逐字段验（txHash/chainId/pair/
+  takerDigest/legs/takerAmountIn/notedAt）；同 txHash 重复条目
+  内容相同合并、内容冲突按账本损坏失败关闭，不再静默覆盖。
+- **跨进程幂等判重落盘化**：已确认判重除内存记录外，再查
+  metrics 里既有的 probe 记录行——进程死在「probe 行已写、
+  pending 未清」时，重启不再重复确认、不再重复追加 probe 行。
+- **故障注入自检**：`node scripts/stage4/faults.test.mjs`（假
+  provider 驱动账本/恢复/对账四场景；回执始终不可见的变体须
+  等满 120s 宽限，默认跳过，`S4_FAULTS_INCLUDE_SLOW=1` 启用）。
+
 ## 骑乘对照表（不重复造轮子）
 
 | 本运行器的件 | 骑乘的既有件 |
