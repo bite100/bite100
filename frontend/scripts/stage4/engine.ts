@@ -56,7 +56,7 @@ import {
   createViemChainTransport,
   type ChainStateReader,
 } from '../../src/services/dualread/chainState'
-import type { RawOrder } from '../../src/services/dualread/types'
+import type { RawOrder, SourceBook } from '../../src/services/dualread/types'
 import { runDualReadRound } from '../../src/services/dualread/index'
 import { executeFrontendMatch } from '../../src/services/matching/execute'
 import { orderDataToContractOrder } from '../../src/services/matching/fills'
@@ -106,6 +106,35 @@ export const CHAINS = [11155111, 84532] as const
 const PRICE = '2000' // 合成定价（与 soak 同口径：测状态机保真，不测价格真实性）
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * 超时硬化（2026-11-09 方案 B，Ren 批准）：给一段异步工作套硬超时，
+ * 超时以 CycleTimeoutError 抛出，由主循环按 cycle-error 记账并继续，
+ * 不再让某个无超时的网络等待整夜冻结运行器。被放弃的原 promise 迟到
+ * 拒绝会被吞掉（防 unhandled rejection 崩溃）；其迟到副作用（迟到的
+ * 成交仍受合约签名限价与累计记账约束，合法性不受影响）由账本与
+ * Envio 对账在汇总时兜底。
+ */
+export class CycleTimeoutError extends Error {
+  constructor(label: string, ms: number) {
+    super(`${label} 超时（>${Math.round(ms / 1000)}s，超时硬化）`)
+    this.name = 'CycleTimeoutError'
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new CycleTimeoutError(label, ms)), ms)
+  })
+  p.catch(() => {})
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
+
+const CHAIN_CYCLE_TIMEOUT_MS = 420_000
+const RECHECK_TIMEOUT_MS = 240_000
 const lc = (s: string) => (s ?? '').toLowerCase()
 export const log = (msg: string) =>
   console.log(`[stage4 ${new Date().toISOString()}] ${msg}`)
@@ -219,6 +248,9 @@ export interface ChainCounts {
 
 export class ZeroToleranceError extends Error {}
 
+/** 构建备注：2026-11-08 例行复审修复 B1/B3/B2-lite（工作树未提交版，随后续修复轮提交） */
+export const BUILD_NOTE = '运行器含 2026-11-08 复审修复 B1/B3/B2-lite（工作树未提交版）+ 2026-11-09 超时硬化（方案 B，Ren 批准）：单链周期 420s 硬超时、探针复查 240s 硬超时、中继发单 30s/节点拉簿 10s 请求超时；超时按 cycle-error 记账并继续，不再整夜卡死'
+
 export class Stage4Ledger {
   posted = new Map<string, PostedOrder>()
   settlements: SettlementRecord[] = []
@@ -289,6 +321,7 @@ export class Stage4Ledger {
       windowEndPlanned: this.windowEndPlanned,
       updatedAt: Date.now(),
       status,
+      note: BUILD_NOTE,
       cycles: this.cycles,
       chains: this.counts,
       zeroTolerance: this.zero,
@@ -350,6 +383,7 @@ function createDirectNodeAdapter(nodeUrl: string): BookAdapter {
     async fetchBook(chainId: number, pair: string) {
       const res = await fetch(
         `${nodeUrl}/api/orderbook?pair=${encodeURIComponent(pair)}`,
+        { signal: AbortSignal.timeout(10_000) },
       )
       if (!res.ok) throw new Error(`node orderbook http ${res.status}`)
       const data: unknown = await res.json()
@@ -440,6 +474,7 @@ export async function postToRelay(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
     })
     if (!res.ok) {
       return {
@@ -534,7 +569,26 @@ async function probePresence(
   const deadline = Date.now() + 60_000
   let missing = want
   while (Date.now() < deadline && missing.length > 0) {
-    const book = await ctx.relayAdapter.fetchBook(ctx.chainId, pair)
+    let book: SourceBook
+    try {
+      book = await ctx.relayAdapter.fetchBook(ctx.chainId, pair)
+    } catch (e) {
+      // B3 修复（2026-11-08 复审）：读簿异常原先直接冒泡成普通
+      // cycle-error，探针无结论且不留痕。改为记一行 probe-inconclusive
+      // 后本轮直接返回——不 trip orderLost、也不把这批单记为已验
+      // 在簿；后续周期的在场探针/撮合读簿会自然重新覆盖。
+      const reason = e instanceof Error ? e.message : String(e)
+      ledger.line({
+        kind: 'probe-inconclusive',
+        ts: Date.now(),
+        chainId: ctx.chainId,
+        pair,
+        reason,
+        orders: want.length,
+      })
+      log(`chain ${ctx.chainId} 在场探针读簿异常（无结论）：${reason}`)
+      return
+    }
     const ids = new Set([...book.bids, ...book.asks].map((o) => o.orderId))
     missing = want.filter((g) => !ids.has(String(g.body.orderId)))
     if (missing.length > 0) await sleep(10_000)
@@ -649,9 +703,16 @@ interface ParsedTradeEvent {
   amountOut: string
 }
 
-function parseTradeEvents(receipt: ethers.TransactionReceipt): ParsedTradeEvent[] {
+function parseTradeEvents(
+  receipt: ethers.TransactionReceipt,
+  settlementAddress: string,
+): ParsedTradeEvent[] {
   const out: ParsedTradeEvent[] = []
   for (const lg of receipt.logs) {
+    // B2-lite 修复（2026-11-08 复审）：解析前先核对日志来源必须是
+    // 本链 Settlement 合约（大小写不敏感），其他合约的同名事件跳过，
+    // 避免混入非本合约日志污染成交事件计数/多重集。
+    if (lc(lg.address) !== lc(settlementAddress)) continue
     try {
       const parsed = settleIface.parseLog({
         topics: [...lg.topics],
@@ -725,7 +786,7 @@ async function probeSettlement(
     })
   }
   rec.probe.receipt = 'ok'
-  rec.events = parseTradeEvents(receipt!)
+  rec.events = parseTradeEvents(receipt!, ctx.chainCfg.contracts.settlement)
   if (rec.events.length !== attempt.legsKept) {
     rec.probe.eventsMatch = 'fail'
     ledger.trip(
@@ -759,15 +820,25 @@ async function recheckIndexerProbes(
   if (!cfg.indexerUrl) return
   for (const rec of ledger.settlements) {
     if (rec.probe.indexer !== 'pending') continue
+    // B1 修复（2026-11-08 复审）：原先固定只读同交易对最近 50 条，
+    // 同对新成交多了会把待核验的早期成交挤出窗口、900s 后误触发
+    // indexerMismatch 假停机。改为按 offset 分页（每页 50、最多 10
+    // 页、短页即止），全部页里按 txHash 找本笔；任一页查询失败则
+    // 整笔按原口径稍后重试，不拿残缺窗口下结论。
     let rows: IndexerTrade[] = []
     try {
-      rows = await fetchIndexerTrades(
-        rec.chainId,
-        rec.pair,
-        50,
-        indexerFetchFn,
-        cfg.indexerUrl,
-      )
+      for (let page = 0; page < 10; page++) {
+        const chunk = await fetchIndexerTrades(
+          rec.chainId,
+          rec.pair,
+          50,
+          indexerFetchFn,
+          cfg.indexerUrl,
+          page * 50,
+        )
+        rows.push(...chunk)
+        if (chunk.length < 50) break
+      }
     } catch (e) {
       log(`索引器探针查询失败（稍后重试）：${e instanceof Error ? e.message : String(e)}`)
       continue
@@ -1502,6 +1573,7 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
   ledger.line({
     kind: 'window-start',
     ts: windowStart,
+    buildNote: BUILD_NOTE,
     windowEndPlanned: ledger.windowEndPlanned,
     relayUrl: cfg.relayUrl,
     indexerUrl: cfg.indexerUrl || '(unset)',
@@ -1518,6 +1590,7 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
     `阶段 4 运行器启动：窗口 ${new Date(windowStart).toISOString()} → ${new Date(ledger.windowEndPlanned).toISOString()}，` +
       `间隔 ${cfg.intervalSec}s，目标每链 ≥${cfg.targetPerChain} 单`,
   )
+  log(BUILD_NOTE)
   let stopping = false
   const onSig = () => {
     stopping = true
@@ -1534,7 +1607,11 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
       await processExpiryChecks(ledger, ctxs)
       for (const chainId of CHAINS) {
         try {
-          await runChainCycle(ledger, cfg, ctxs.get(chainId)!, cycle)
+          await withTimeout(
+            runChainCycle(ledger, cfg, ctxs.get(chainId)!, cycle),
+            CHAIN_CYCLE_TIMEOUT_MS,
+            `chain ${chainId} cycle ${cycle}`,
+          )
         } catch (e) {
           if (e instanceof ZeroToleranceError) throw e
           ledger.fail({
@@ -1545,7 +1622,21 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
           })
         }
       }
-      await recheckIndexerProbes(ledger, cfg, ctxs)
+      try {
+        await withTimeout(
+          recheckIndexerProbes(ledger, cfg, ctxs),
+          RECHECK_TIMEOUT_MS,
+          '索引器探针复查',
+        )
+      } catch (e) {
+        if (e instanceof ZeroToleranceError) throw e
+        ledger.fail({
+          ts: Date.now(),
+          chainId: 0,
+          kind: 'probe-recheck-error',
+          detail: e instanceof Error ? e.message.slice(0, 200) : String(e),
+        })
+      }
       ledger.saveState('running')
       const c1 = ledger.counts[11155111]
       const c2 = ledger.counts[84532]
@@ -1573,13 +1664,17 @@ export async function runStage4(cfg: Stage4Config): Promise<number> {
   // 收尾复查：给索引器 pending 探针最后一次机会（超宽限的会在此触发）
   await sleep(30_000)
   try {
-    await recheckIndexerProbes(ledger, cfg, ctxs)
+    await withTimeout(
+      recheckIndexerProbes(ledger, cfg, ctxs),
+      RECHECK_TIMEOUT_MS,
+      '收尾索引器探针复查',
+    )
   } catch (e) {
     if (e instanceof ZeroToleranceError) {
       ledger.saveState('zero-tolerance-triggered')
       return 3
     }
-    throw e
+    log(`收尾复查未完成（不阻断收尾记账）：${e instanceof Error ? e.message.slice(0, 200) : String(e)}`)
   }
   ledger.line({ kind: 'window-end', ts: Date.now(), cycles: ledger.cycles })
   ledger.saveState(stopping ? 'stopped-by-signal' : 'completed')
