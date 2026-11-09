@@ -166,3 +166,30 @@ Base Sepolia 56357193（已回填 indexer/config.yaml）。
 - 第 4 步 E2E、第 5 步撤单永久性烟测、第 6 步 Worker 重新部署
   （含 D1 备份与生产烟测）、第 7 步推送与线上 bundle 核验、
   第 8 步 Envio 轮换。
+
+### E2E 与撤单永久性烟测（第 4/5 步，主聊天 2026-11-09 执行，全过）
+
+临时验收脚本（骑 soak/generator 签单 + 生产 fills/ABI，验收后已删，不入仓）
+双链各跑一遍 TKA/TKB 对（价格 1 合成价，测状态机保真）：
+
+- **第 5 步烟测（双链同结论）**：maker SELL 单落锁（Sepolia 摘要
+  0x85dbde04…、锁 tx 0x0985a11b…；Base 摘要 0x5b248737…、锁 tx
+  0xbcac5a2a…）→ maker releaseOrderLock（Sepolia 0x2a19faee…；Base
+  0xdc2c4064…）→ 读回 orderLocks 清零、**cancelledOrders == true**、
+  可用余额恢复 → 陌生账户重落锁 staticCall 与真实发送均 revert
+  `Vault: order cancelled`、locker（部署者）重落锁 staticCall 同 revert →
+  已撤单直接 settleTrade staticCall revert `Vault: order not locked`。
+- **第 4 步 E2E**：单笔 settleTrade 成功（Sepolia tx 0x961d8d82…、
+  Base tx 0xdebedd95…，status=1，filledIn=0.5×10^18）；批量
+  settleTradesBatch 两腿成功（Sepolia tx 0xe0b58e96…、Base tx
+  0x1d0764e1…，status=1，filledIn=0.3/0.2×10^18）；坏价 fill
+  staticCall 双链均 revert `Settlement: fill breaches signed limit price`。
+- 执行插曲（如实登记）：Sepolia 首播因默认 gas 定价（1 gwei）余额不足
+  中途停摆，仅落一个孤儿 Vault（0x2dc73677…，耗测试 gas ≈0.0102 ETH，
+  老栈未受影响），改低价参数（0.1/0.05 gwei）+ --start-fresh 后全程
+  成功；部署者余额事先由 maker/taker 各转入补足（Sepolia 0.025×2、
+  Base 0.010×2）。验收脚本三课：①NonceManager 在 publicnode 多后端下
+  计数失同步，串行 await 场景用普通 Wallet 逐笔读 nonce；②Sepolia
+  publicnode gas 计量放大，结算 gasLimit 须 ≥15M（实测计量 1.70M，
+  1.5M 上限会执行中途耗尽）；③Base 单笔 gasLimit 上限受区块限约束，
+  25M 被 RPC 拒收（"gas limit too high"），用 3M。
