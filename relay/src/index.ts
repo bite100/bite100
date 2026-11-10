@@ -35,6 +35,7 @@ import {
   type PairRow,
 } from './pairs'
 import {
+  buildMirrorRecord,
   buildOrderEvent,
   parsePostmanSecret,
   publishToRelays,
@@ -273,7 +274,13 @@ async function handlePostOrder(
         const kind = Number(env.NOSTR_KIND ?? '') || 30078
         const event = buildOrderEvent(
           {
-            rawJson,
+            // 镜像只发服务端归一化记录（审查修复批 P2）：请求原文
+            // rawJson 只留在 D1 供可移植重发，不再进镜像 content
+            record: buildMirrorRecord(body, {
+              digest,
+              chainId,
+              expiresAt: Number(so.expiresAt),
+            }),
             digest,
             pair: body.pair,
             chainId,

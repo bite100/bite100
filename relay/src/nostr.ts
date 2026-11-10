@@ -13,13 +13,19 @@
  *         会在到期后自行删除事件，"exp" 是中继自有标签、老读端不认，
  *         两者并存兼容；注意这仍不构成镜像侧的撤单墓碑——订单状态以
  *         链上为准（设计口径不变）。
- *   content = 投递原文 JSON（与 POST /orders 请求体一致，含签名）
+ *   content = 服务端归一化记录 JSON（字段集与 D1 存储行 / GET 返回
+ *         一致，见 buildMirrorRecord）。第 59 轮审查修复批：旧实现把
+ *         请求原文当 content 转发，status/filled 不在签名覆盖内，
+ *         提交方可夹带伪造状态污染镜像消费者（D1 正式行已在块 4
+ *         净化、镜像却没有）——现只发服务端生成的记录，请求原文
+ *         只留在 D1 的 raw_json 列供可移植重发，不再进镜像。
  *
  * 邮差私钥只从环境变量 NOSTR_POSTMAN_SECRET_HEX（64 位 hex）读取（生产用
  * `wrangler secret put`，本地用 .dev.vars）；缺失时镜像静默跳过。
  * 发布失败只返回 null + 由调用方记日志，绝不阻塞主入库响应。
  */
 import { finalizeEvent, nip19, Relay, type Event, type EventTemplate } from 'nostr-tools'
+import type { NodeOrderBody } from './orders'
 
 export const DEFAULT_NOSTR_KIND = 30078
 export const DEFAULT_NOSTR_RELAYS = [
@@ -54,11 +60,46 @@ export function parsePostmanSecret(secret: string | undefined): Uint8Array | nul
 }
 
 export interface MirrorInput {
-  rawJson: string
+  /** 服务端归一化记录（buildMirrorRecord 的产物），序列化后作事件 content */
+  record: Record<string, unknown>
   digest: string
   pair: string
   chainId: number
   expiresAt: number
+}
+
+/**
+ * 镜像记录构造（纯函数，可单测）：字段集与中继存储行（GET /orders、
+ * /orderbook 的返回形状）一致——全部签名原字段 + 签名 + digest +
+ * chainId，status/filled 恒为服务端生成值（'open'/'0'）。入参 body
+ * 里自报的 status/filled 在此被丢弃：投毒提交（抢投他人订单并自报
+ * status='cancelled'）污染不了镜像，与块 4 的 D1 入库净化同口径。
+ * 键序固定构造，JSON.stringify 序列化结果确定。
+ * trader 按入库同口径小写化；expiresAt 用重建后的生效值（缺省 TTL
+ * 已展开），与存储行一致。
+ */
+export function buildMirrorRecord(
+  body: NodeOrderBody,
+  resolved: { digest: string; chainId: number; expiresAt: number },
+): Record<string, unknown> {
+  const record: Record<string, unknown> = {
+    orderId: body.orderId,
+    trader: body.trader.toLowerCase(),
+    pair: body.pair,
+    side: body.side,
+    price: body.price,
+    amount: body.amount,
+    filled: '0',
+    status: 'open',
+    nonce: body.nonce,
+    createdAt: body.createdAt,
+    expiresAt: resolved.expiresAt,
+    signature: body.signature,
+    chainId: resolved.chainId,
+    digest: resolved.digest,
+  }
+  if (body.execType) record.execType = body.execType
+  return record
 }
 
 /** 组装并签名订单镜像事件（纯函数，可单测） */
@@ -78,7 +119,7 @@ export function buildOrderEvent(
       ['exp', String(input.expiresAt)],
       ['expiration', String(input.expiresAt)],
     ],
-    content: input.rawJson,
+    content: JSON.stringify(input.record),
   }
   return finalizeEvent(template, secretKey)
 }

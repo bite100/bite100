@@ -2,20 +2,39 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { generateSecretKey, getPublicKey, nip19, verifyEvent } from 'nostr-tools'
 import {
+  buildMirrorRecord,
   buildOrderEvent,
   nostrToolsPublish,
   parsePostmanSecret,
   publishToRelays,
   resolveRelayUrls,
 } from '../../src/nostr'
+import type { NodeOrderBody } from '../../src/orders'
 
 const SECRET = generateSecretKey()
 const SECRET_HEX = Array.from(SECRET)
   .map((b) => b.toString(16).padStart(2, '0'))
   .join('')
 
+const RECORD = {
+  orderId: 'x',
+  trader: '0x' + '12'.repeat(20),
+  pair: 'BTC/USDT',
+  side: 'sell',
+  price: '100',
+  amount: '5',
+  filled: '0',
+  status: 'open',
+  nonce: 7,
+  createdAt: 1700000000,
+  expiresAt: 1999999999,
+  signature: '0x' + 'cd'.repeat(65),
+  chainId: 11155111,
+  digest: '0x' + 'ab'.repeat(32),
+}
+
 const INPUT = {
-  rawJson: '{"orderId":"x","pair":"BTC/USDT"}',
+  record: RECORD,
   digest: '0x' + 'ab'.repeat(32),
   pair: 'BTC/USDT',
   chainId: 11155111,
@@ -33,7 +52,7 @@ describe('parsePostmanSecret', () => {
 })
 
 describe('buildOrderEvent', () => {
-  it('事件可验签，标签含 d=digest / pair / chain / exp + NIP-40 expiration，content 为订单 JSON', () => {
+  it('事件可验签，标签含 d=digest / pair / chain / exp + NIP-40 expiration，content 为归一化记录 JSON', () => {
     const ev = buildOrderEvent(INPUT, SECRET, 30078, 1700000000)
     expect(ev.kind).toBe(30078)
     expect(ev.pubkey).toBe(getPublicKey(SECRET))
@@ -47,8 +66,75 @@ describe('buildOrderEvent', () => {
       // 支持 NIP-40 的中继到期自删；值必须与 exp 一致
       ['expiration', '1999999999'],
     ])
-    expect(ev.content).toBe(INPUT.rawJson)
+    expect(ev.content).toBe(JSON.stringify(RECORD))
     expect(ev.id).toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+describe('buildMirrorRecord（审查修复批 P2：镜像归一化）', () => {
+  // 投毒提交：请求体自报 status='cancelled'、filled='999'（不在签名
+  // 覆盖内）——镜像记录必须用服务端生成值，污染值无从进入。
+  const poisonedBody: NodeOrderBody = {
+    orderId: 'victim-order',
+    trader: '0xABCDEF0000000000000000000000000000001234',
+    pair: 'BTC/USDT',
+    side: 'sell',
+    price: '100',
+    amount: '5',
+    filled: '999',
+    status: 'cancelled',
+    nonce: 7,
+    createdAt: 1700000000,
+    expiresAt: 1999999999,
+    signature: '0x' + 'cd'.repeat(65),
+    execType: 'limit',
+  }
+  const digest = '0x' + 'ab'.repeat(32)
+
+  it('自报 status/filled 被丢弃：记录恒 open/0，且带全部签名原字段+签名+digest+chainId', () => {
+    const rec = buildMirrorRecord(poisonedBody, {
+      digest,
+      chainId: 11155111,
+      expiresAt: 1999999999,
+    })
+    expect(rec.status).toBe('open')
+    expect(rec.filled).toBe('0')
+    expect(rec).toEqual({
+      orderId: 'victim-order',
+      trader: '0xabcdef0000000000000000000000000000001234', // 入库同口径小写化
+      pair: 'BTC/USDT',
+      side: 'sell',
+      price: '100',
+      amount: '5',
+      filled: '0',
+      status: 'open',
+      nonce: 7,
+      createdAt: 1700000000,
+      expiresAt: 1999999999,
+      signature: '0x' + 'cd'.repeat(65),
+      chainId: 11155111,
+      digest,
+      execType: 'limit',
+    })
+  })
+
+  it('投毒提交产出的镜像事件 content 解析后 status=open、filled=0（不含请求原文的污染值）', () => {
+    const rec = buildMirrorRecord(poisonedBody, {
+      digest,
+      chainId: 11155111,
+      expiresAt: 1999999999,
+    })
+    const ev = buildOrderEvent(
+      { record: rec, digest, pair: 'BTC/USDT', chainId: 11155111, expiresAt: 1999999999 },
+      SECRET,
+      30078,
+      1700000000,
+    )
+    const parsed = JSON.parse(ev.content) as Record<string, unknown>
+    expect(parsed.status).toBe('open')
+    expect(parsed.filled).toBe('0')
+    expect(ev.content).not.toContain('cancelled')
+    expect(ev.content).not.toContain('"999"')
   })
 })
 
