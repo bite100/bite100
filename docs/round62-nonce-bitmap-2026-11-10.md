@@ -426,4 +426,29 @@ maxFailureGasChargeQuote=5e18、owner=deployer、relayer 未设（开放提交 B
 仓库切换：frontend/src/config/chains.ts（+ chains.test.ts /
 orderSigningTypes.test.ts 期望值）、relay/src/config.ts、indexer/config.yaml
 （地址 + start_block=部署块）与 README/settlementAbi.ts 标识同步更新。MCP 骑
-前端 chains.ts 单一事实源，无独立地址表需改。
+前端 chains.ts 单一事实源，无独立地址表需改；其硬断言测试
+（mcp/test/config.test.ts、read-tools.test.ts）随后一并对齐第 62 轮栈。
+
+**切换与冒烟结果（同日完成）**：
+- 中继：D1 备份（78 orders + 2 pairs，仓外 bite100-relay-d1-backup-
+  2026-11-10-r62.json）后重部署；线上无 CHAIN_CONFIG_JSON 覆盖，内置新配置
+  生效；postman 轮换，新 npub npub1c8asdx0w7x30j0yru0j7tfq7q3qg45csgj2e-
+  x4gsqxszhhze89uq7mn7gc；/health 正常。冒烟 4 张 maker 单经中继验签入库
+  （新域口径实证）；补跑单投递收到 409——首轮同 (maker, nonce) 旧单仍在
+  D1 live，块 D 在途撞号兜底按设计触发。
+- Envio：新端点 f60e420（部署提交 e1f17df），_meta 双链 isReady 且
+  startBlock 与部署块一致；VITE_INDEXER_URL 已切换、Pages 重跑后线上
+  bundle 只含新端点与新 Settlement 地址。最终保留 2 台部署（e1f17df 现行
+  + c32b430 兜底）。新端点 Trade 计数口径：只索引第 62 轮 Settlement，
+  冒烟后为 3（即下述三笔结算）；旧栈 43 笔历史在兜底端点 210e3f4 完好。
+- Sepolia 实盘冒烟（新栈 ETH/USDT）：乱序结算——先结 nonce 5
+  （tx 0xefa8d8c32eb8c619c94a94c7bd2d8d33322d7034cba5856adf3ad3c72ed79913）
+  再结 nonce 2（tx 0xf7d2f3d4a2a060b0499ad062c002f8e5d27a5d16b6b60f2f-
+  cd453fa84a3ddedc），两笔 status 1 且 TradeSettled，位图核心验收通过；
+  定点作废 invalidateUnorderedNonces(0, 1<<7)（tx 0xa7bbd65ab9fc7d0218d-
+  3b614a5f4112b8cc4027f2f63a2f87831a460cba81715），作废后位图 word0=164
+  （恰 bits {2,5,7}），该单结算 staticCall 以「nonce already used by
+  another order」revert、真发 tx 0xb85213af89eace609db9d2cda8a8ec6a780f0-
+  dd3f39d6f6ae131eeb566c2c35b 回执 status 0；相邻 nonce 6 随后正常结算
+  （tx 0xdf308475149d4719e067529c39cfdcacd0fcce82e894c6db8ff797304b8d4272），
+  终局位图 maker 228（bits {2,5,6,7}）/ taker 11（bits {0,1,3}）。

@@ -42,15 +42,15 @@ describe('交易对白名单', () => {
   })
 })
 
-describe('chainSummary 骑第 47 轮栈配置', () => {
-  it('Sepolia 地址与第 47 轮栈一致', () => {
+describe('chainSummary 骑第 62 轮栈配置', () => {
+  it('Sepolia 地址与第 62 轮栈一致', () => {
     const s = chainSummary(11155111)
-    expect(s.settlement).toBe('0x5697F7B2178352eB391e29fc2c5681Dea864C1d9')
+    expect(s.settlement).toBe('0xa38c087778d76DA30654F30CB87D1ddD83f7b263')
     expect(s.vault).toBe('0x836cEFF0140aB66D8DD984ECb18765736BA121e9')
   })
-  it('Base Sepolia 地址与第 47 轮栈一致（EIP-55 校验和形式）', () => {
+  it('Base Sepolia 地址与第 62 轮栈一致（EIP-55 校验和形式）', () => {
     const s = chainSummary(84532)
-    expect(s.settlement).toBe('0x1021C7116cCE59f9c85683d6f1b5aD2215795949')
+    expect(s.settlement).toBe('0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97')
     expect(s.vault).toBe('0x295F5529F5BfA4cA39290f395b1feF7EA637f5D3')
   })
 })

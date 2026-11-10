@@ -10,12 +10,12 @@ function tool(name: string): ToolDef {
 }
 
 describe('只读工具（mock 中继 + mock 链读）', () => {
-  it('get_chain_config 返回第 47 轮栈地址', async () => {
+  it('get_chain_config 返回第 62 轮栈地址', async () => {
     const { ctx } = makeCtx()
     const out = (await tool('get_chain_config').handler(ctx, { chainId: 84532 })) as {
       settlement: string
     }
-    expect(out.settlement).toBe('0x1021C7116cCE59f9c85683d6f1b5aD2215795949')
+    expect(out.settlement).toBe('0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97')
   })
 
   it('get_chain_config 拒绝主网 chainId', async () => {
