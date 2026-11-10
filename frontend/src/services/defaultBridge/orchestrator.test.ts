@@ -11,7 +11,43 @@ import {
 } from './orchestrator'
 import { confirmDisclosure, factorySettings } from './settings'
 import { getDelivery, upsertDelivery } from './deliveries'
+import { RegistryConflictError, RegistryUnavailableError } from './registry'
+import type { ClaimInput, DeliveryRegistry, ReportInput } from './registry'
 import { withSigner } from '../../utils'
+
+/** 内存版交付登记替身（第 63 轮桥-3）：记录 claim/report 调用，不触网 */
+function memRegistry() {
+  const claims: ClaimInput[] = []
+  const reports: ReportInput[] = []
+  const registry: DeliveryRegistry = {
+    claim: async (input) => {
+      claims.push(input)
+      return {
+        row: {
+          deliveryId: input.deliveryId,
+          account: input.account,
+          state: 'claimed',
+          attemptId: input.attemptId,
+          channel: input.channel ?? null,
+          sendTxHash: null,
+          trackingId: null,
+          note: null,
+          createdAt: 0,
+          updatedAt: 0,
+        },
+        duplicate: false,
+        takeover: false,
+        reclaimed: false,
+      }
+    },
+    report: async (input) => {
+      reports.push(input)
+    },
+    get: async () => null,
+    listByAccount: async () => [],
+  }
+  return { registry, claims, reports }
+}
 import type { Provider } from 'ethers'
 import type { executeMessageBridge, BridgeExecHooks, BridgeExecResult } from '../bridgeExecutors'
 import type { SettledFillInput } from './orchestrator'
@@ -162,7 +198,10 @@ describe('第 63 轮桥-1：披露执行复验（P1-②）', () => {
     const out = planDelivery(TAKER, fill(), settings())
     const stub = throwingSigner(new Error('halt-at-signer'))
     // executeDelivery 内部吞错落异常记录：放行后签名器被调用且错误进入异常注记
-    const result = await executeDelivery(TAKER, out.record!.id, settings(), { withSignerFn: stub.fn })
+    const result = await executeDelivery(TAKER, out.record!.id, settings(), {
+      withSignerFn: stub.fn,
+      registry: memRegistry().registry,
+    })
     expect(stub.calls()).toBe(1)
     expect(result.status).toBe('anomaly')
     expect(result.anomalyKind).toBe('initiation-failed')
@@ -227,6 +266,7 @@ describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
       withSignerFn: passthroughSigner,
       withdrawFn: okWithdraw(),
       executeBridgeFn: bridge.fn,
+      registry: memRegistry().registry,
     })
     expect(persistedDuringSend).toBe('0xsend')
     expect(result.status).toBe('anomaly')
@@ -235,7 +275,7 @@ describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
     expect(result.initiatedTxPending).toBe(true)
     expect(result.lastReconcile).toBeUndefined()
     expect(result.attemptCount).toBe(1)
-    expect(result.attemptId).toBe(`${out.record!.id}#1`)
+    expect(result.attemptId?.startsWith(`${out.record!.id}#1.`)).toBe(true)
   })
 
   it('任何广播前失败 = 第一方 missing：直接落章，重试可放行并成功', async () => {
@@ -249,6 +289,7 @@ describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
       executeBridgeFn: bridgeFake(async () => {
         throw new Error('不应到达桥存入')
       }).fn,
+      registry: memRegistry().registry,
     })
     expect(failed.status).toBe('anomaly')
     expect(failed.lastReconcile).toBe('missing')
@@ -259,6 +300,7 @@ describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
       withSignerFn: passthroughSigner,
       withdrawFn: okWithdraw(),
       executeBridgeFn: bridge.fn,
+      registry: memRegistry().registry,
     })
     expect(retried.status).toBe('in-flight')
     expect(retried.trackingId).toBe('guid-2')
@@ -340,5 +382,111 @@ describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
     })
     expect(recovered.status).toBe('in-flight')
     expect(recovered.trackingId).toBe('msg-42')
+  })
+})
+
+describe('第 63 轮桥-3：中继登记闸门（P1-③）', () => {
+  beforeEach(() => localStorage.clear())
+
+  const passthroughSigner = (async (cb: (s: unknown) => Promise<unknown>) =>
+    cb({})) as unknown as typeof withSigner
+
+  function okWithdraw() {
+    return (async (_s: unknown, _c: unknown, _t: unknown, _a: unknown, onTxHash?: (h: string) => Promise<void>) => {
+      await onTxHash?.('0xwithdraw')
+      return '0xwithdraw'
+    }) as unknown as typeof import('../bridgeExecutors').withdrawFromVault
+  }
+
+  it('登记冲突（另一设备执行中）→ 发起被阻止，记录保持 pending，零链上动作', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    let bridgeCalls = 0
+    const conflictRegistry: DeliveryRegistry = {
+      claim: async () => {
+        throw new RegistryConflictError('delivery already in flight')
+      },
+      report: async () => {},
+      get: async () => null,
+      listByAccount: async () => [],
+    }
+    await expect(
+      executeDelivery(TAKER, out.record!.id, settings(), {
+        withSignerFn: passthroughSigner,
+        withdrawFn: okWithdraw(),
+        executeBridgeFn: (async () => {
+          bridgeCalls++
+          throw new Error('不应到达')
+        }) as unknown as typeof executeMessageBridge,
+        registry: conflictRegistry,
+      })
+    ).rejects.toBeInstanceOf(RegistryConflictError)
+    expect(bridgeCalls).toBe(0)
+    expect(getDelivery(TAKER, 'trade-x', TAKER)?.status).toBe('pending-decision')
+  })
+
+  it('中继不可达 → fail-closed 阻止发起（不降级本地执行）', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    const downRegistry: DeliveryRegistry = {
+      claim: async () => {
+        throw new RegistryUnavailableError('中继不可达')
+      },
+      report: async () => {},
+      get: async () => null,
+      listByAccount: async () => [],
+    }
+    await expect(
+      executeDelivery(TAKER, out.record!.id, settings(), {
+        withSignerFn: passthroughSigner,
+        registry: downRegistry,
+      })
+    ).rejects.toBeInstanceOf(RegistryUnavailableError)
+    expect(getDelivery(TAKER, 'trade-x', TAKER)?.status).toBe('pending-decision')
+  })
+
+  it('首次冲突后 supersede 接管成功 → 发起放行；成功后汇报 initiated', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    const mem = memRegistry()
+    let claimCalls = 0
+    const takeoverRegistry: DeliveryRegistry = {
+      ...mem.registry,
+      claim: async (input) => {
+        claimCalls++
+        if (claimCalls === 1) throw new RegistryConflictError('stale claim')
+        return mem.registry.claim(input)
+      },
+    }
+    const result = await executeDelivery(TAKER, out.record!.id, settings(), {
+      withSignerFn: passthroughSigner,
+      withdrawFn: okWithdraw(),
+      executeBridgeFn: (async () => ({
+        channel: 'layerzero',
+        txHash: '0xsend',
+        trackingId: 'guid-9',
+        nativeFeeWei: 7n,
+      })) as unknown as typeof executeMessageBridge,
+      registry: takeoverRegistry,
+    })
+    expect(result.status).toBe('in-flight')
+    expect(claimCalls).toBe(2)
+    expect(mem.claims[0].supersede).toBe(true)
+    const initiatedReport = mem.reports.find((r) => r.state === 'initiated')
+    expect(initiatedReport?.sendTxHash).toBe('0xsend')
+    expect(initiatedReport?.trackingId).toBe('guid-9')
+    expect(initiatedReport?.attemptId).toBe(result.attemptId)
+  })
+
+  it('发起失败后汇报 anomaly 释放占位', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    const mem = memRegistry()
+    const rejectingWithdraw = (async () => {
+      throw new Error('user rejected')
+    }) as unknown as typeof import('../bridgeExecutors').withdrawFromVault
+    const result = await executeDelivery(TAKER, out.record!.id, settings(), {
+      withSignerFn: passthroughSigner,
+      withdrawFn: rejectingWithdraw,
+      registry: mem.registry,
+    })
+    expect(result.status).toBe('anomaly')
+    expect(mem.reports.some((r) => r.state === 'anomaly' && r.attemptId === result.attemptId)).toBe(true)
   })
 })

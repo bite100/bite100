@@ -38,7 +38,18 @@ import {
 } from './deliveries'
 import { consumeTempOverride } from './settings'
 import { channelSupports, decideRoute, hasValidConfirmation } from './support'
+import { RegistryConflictError, defaultRegistry } from './registry'
+import type { DeliveryRegistry, ReportInput } from './registry'
 import type { DeliveryRecord, DefaultBridgeSettings } from './types'
+
+/** 交付汇报 best-effort：记账失败绝不影响已发生的链上动作（桥-3 口径） */
+async function reportBestEffort(registry: DeliveryRegistry, input: ReportInput): Promise<void> {
+  try {
+    await registry.report(input)
+  } catch {
+    // 中继汇报失败只丢记账，本地记录与链上对账（桥-2）仍可恢复真相
+  }
+}
 
 /** 一笔已结算成交的交付判定输入（节点/索引器的成交行都带齐这些字段） */
 export interface SettledFillInput {
@@ -228,6 +239,8 @@ export interface ExecuteDeps {
   /** 第 63 轮桥-2：执行器注入点（默认真实实现；测试用桩验证 hash 落盘时序） */
   executeBridgeFn?: typeof executeMessageBridge
   withdrawFn?: typeof withdrawFromVault
+  /** 第 63 轮桥-3：交付登记（默认中继 HTTP 登记；claim 是闸门，report 是记账） */
+  registry?: DeliveryRegistry
 }
 
 /** 第 63 轮桥-2 对账依赖（原语可注入，默认骑 bridgeExecutors 的链上读取） */
@@ -237,6 +250,8 @@ export interface ReconcileDeps {
   checkReceiptFn?: (provider: Provider, hash: string) => Promise<'success' | 'reverted' | 'pending'>
   txKnownFn?: (provider: Provider, hash: string) => Promise<boolean>
   fetchGuidFn?: (provider: Provider, chain: ChainConfig, txHash: string) => Promise<string | null>
+  /** 第 63 轮桥-3：对账结论同步汇报中继登记（best-effort） */
+  registry?: DeliveryRegistry
 }
 
 /**
@@ -303,15 +318,35 @@ export async function executeDelivery(
   const homeChain = getChainConfig(record.homeChainId)
   if (!settleChain || !homeChain) throw new Error('链配置缺失，无法发起交付')
 
-  record = transition(record, { type: 'initiate', at: Date.now() })
   // 第 63 轮桥-2（P1-①）：先落意图凭证再执行——attemptId/序号 + pending 标记在任何
   // 链上动作之前落盘；之后每次广播的 hash 都经钩子即时落盘。这样进程在任意点
   // 崩溃，恢复方都有凭证对账，而不是只剩一个无出口的 initiating 状态。
+  // attemptId 带随机后缀：同浏览器多标签页各自算出的序号相同，后缀保证凭证
+  // 唯一——第二个标签页的 claim 会被中继判冲突，而不是被当作同一次重试放行。
   const attemptNo = (record.attemptCount ?? 0) + 1
+  const attemptId = `${record.id}#${attemptNo}.${Math.random().toString(36).slice(2, 8)}`
+
+  // 第 63 轮桥-3（P1-③）：发起前先向中继 claim 占位（跨设备仲裁）。claim 是
+  // 闸门：冲突/不可达一律中止发起（fail-closed），本地记录保持 pending 不动。
+  // 首次冲突时以 supersede 申请接管一次——中继侧只对陈旧占位放行，新鲜占位
+  //（另一设备正在执行）仍会拒绝，错误如实抛给用户。
+  const registry = deps.registry ?? defaultRegistry
+  const claimInput = { deliveryId: record.id, account, attemptId, channel }
+  try {
+    await registry.claim(claimInput)
+  } catch (e) {
+    if (e instanceof RegistryConflictError) {
+      await registry.claim({ ...claimInput, supersede: true })
+    } else {
+      throw e
+    }
+  }
+
+  record = transition(record, { type: 'initiate', at: Date.now() })
   record = {
     ...record,
     attemptCount: attemptNo,
-    attemptId: `${record.id}#${attemptNo}`,
+    attemptId,
     initiatedTxPending: true,
     sendTxHash: undefined,
     withdrawTxHash: undefined,
@@ -380,6 +415,15 @@ export async function executeDelivery(
     })
     record = { ...record, amountWei: result.amount.toString(), fundsLocation: undefined, initiatedTxPending: false }
     persist(account, record)
+    // 桥-3 记账：向中继汇报已发起（best-effort，失败不影响已发生的交付）
+    await reportBestEffort(registry, {
+      deliveryId: record.id,
+      account,
+      attemptId,
+      state: 'initiated',
+      sendTxHash: result.res.txHash,
+      trackingId: result.res.trackingId,
+    })
     return record
   } catch (e) {
     const note =
@@ -399,6 +443,17 @@ export async function executeDelivery(
       record = { ...record, initiatedTxPending: false, lastReconcile: 'missing', lastReconcileAt: Date.now() }
     }
     persist(account, record)
+    // 桥-3 记账：汇报本次尝试异常终局，释放中继占位（best-effort）。注意
+    // sendBroadcast 的情形桥发送可能已上链——汇报 anomaly 只释放「认领」，
+    // 不改变桥-2 的对账口径：本地恢复仍以链上回执为准，found 时会再汇报
+    // initiated 覆盖（中继状态机允许 anomaly ← initiated 的修正汇报）。
+    await reportBestEffort(registry, {
+      deliveryId: record.id,
+      account,
+      attemptId,
+      state: 'anomaly',
+      note: record.anomalyNote,
+    })
     return record
   }
 }
@@ -464,6 +519,7 @@ export async function reconcileDelivery(
   }
   // 无任何 hash（崩溃在广播与钩子之间）：无法断言，保持 unknown 待人工处理。
   record = { ...record, lastReconcile: verdict, lastReconcileAt: now, updatedAt: now }
+  const registry = deps.registry ?? defaultRegistry
   if (verdict === 'found' && record.sendTxHash && record.channel) {
     let trackingId = record.prefetchTrackingId ?? ''
     if (record.channel === 'wormhole') trackingId = record.sendTxHash
@@ -483,6 +539,19 @@ export async function reconcileDelivery(
       feeNativeWei: record.feeNativeWei ?? '0',
     })
     record = { ...record, initiatedTxPending: false, lastReconcile: 'found', lastReconcileAt: now }
+    persist(account, record)
+    // 桥-3 记账：对账恢复同步汇报中继（best-effort）
+    if (record.attemptId) {
+      await reportBestEffort(registry, {
+        deliveryId: record.id,
+        account,
+        attemptId: record.attemptId,
+        state: 'initiated',
+        sendTxHash: record.txHash,
+        trackingId: record.trackingId,
+      })
+    }
+    return record
   } else if (verdict === 'missing' && record.status === 'initiating') {
     record = transition(record, {
       type: 'initiation-failed',
@@ -490,6 +559,17 @@ export async function reconcileDelivery(
       note: '对账确认上一笔发起未上链（missing）：未发现发送交易上链事实，可安全重试。',
     })
     record = { ...record, initiatedTxPending: false, lastReconcile: 'missing', lastReconcileAt: now }
+    persist(account, record)
+    if (record.attemptId) {
+      await reportBestEffort(registry, {
+        deliveryId: record.id,
+        account,
+        attemptId: record.attemptId,
+        state: 'anomaly',
+        note: 'reconcile: missing',
+      })
+    }
+    return record
   }
   persist(account, record)
   return record
