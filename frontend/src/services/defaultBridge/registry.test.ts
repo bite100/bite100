@@ -67,9 +67,9 @@ describe('交付登记 HTTP 客户端（第 63 轮桥-3）', () => {
   })
 
   it('report 载荷透传对账结论与广播证据（第 63 轮修复批 P1-2）', async () => {
-    let body: Record<string, unknown> | null = null
+    const bodies: Record<string, unknown>[] = []
     const registry = createHttpRegistry('https://relay.example', async (_url, init) => {
-      body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
       return jsonResponse(200, { ok: true, delivery: ROW })
     })
     await registry.report({
@@ -79,7 +79,7 @@ describe('交付登记 HTTP 客户端（第 63 轮桥-3）', () => {
       state: 'anomaly',
       reconcile: 'missing',
     })
-    expect(body?.reconcile).toBe('missing')
+    expect(bodies[0]?.reconcile).toBe('missing')
     await registry.report({
       deliveryId: 't1:0xabc',
       account: '0xabc',
@@ -88,7 +88,7 @@ describe('交付登记 HTTP 客户端（第 63 轮桥-3）', () => {
       sendTxHash: '0xsend',
       broadcastEvidence: true,
     })
-    expect(body?.sendTxHash).toBe('0xsend')
-    expect(body?.broadcastEvidence).toBe(true)
+    expect(bodies[1]?.sendTxHash).toBe('0xsend')
+    expect(bodies[1]?.broadcastEvidence).toBe(true)
   })
 })
