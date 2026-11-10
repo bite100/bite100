@@ -8,7 +8,15 @@ interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement
   first<T = Record<string, unknown>>(): Promise<T | null>
   all<T = Record<string, unknown>>(): Promise<{ results: T[] }>
-  run(): Promise<{ success: boolean }>
+  /**
+   * 真实 D1 的 run() 返回 D1Result：meta.changes（受影响行数）与
+   * meta.last_row_id（最后插入行 id）——第 59 轮原子记账的条件
+   * upsert / 带门 INSERT 就靠这两个字段判定准入，不再是占位形状。
+   */
+  run(): Promise<{
+    success: boolean
+    meta: { changes: number; last_row_id: number }
+  }>
 }
 
 interface D1Database {
