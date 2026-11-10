@@ -2,7 +2,7 @@ import { SELF, env } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import { BUILTIN_CHAINS } from '../../src/config'
 import { buildSignedOrder, orderDigest } from '../../src/orders'
-import { makeSignedOrder, TEST_ADDRESS } from '../helpers'
+import { account2, makeSignedOrder, TEST_ADDRESS } from '../helpers'
 
 const BASE = 'http://relay.test'
 
@@ -307,5 +307,93 @@ describe('第 59 轮块 4：POST /orders 入库加固', () => {
     expect(res.status).toBe(200)
     const data = (await res.json()) as { duplicate?: boolean }
     expect(data.duplicate).toBe(true)
+  })
+})
+
+/** 第 62 轮块 D：在途 nonce 撞号兜底（多端同钱包窗口的第二道防线） */
+describe('第 62 轮块 D：POST /orders 在途 nonce 撞号兜底', () => {
+  it('同用户同链同 nonce、不同 digest 的第二单 → 409 nonce_in_flight，库里只有第一单', async () => {
+    const first = await makeSignedOrder({ nonce: 620_001 })
+    expect((await postOrder(first)).status).toBe(200)
+
+    const second = await makeSignedOrder({ nonce: 620_001 }) // 不同 orderId → 不同 digest
+    const res = await postOrder(second)
+    expect(res.status).toBe(409)
+    const data = (await res.json()) as { ok: boolean; error: string }
+    expect(data.ok).toBe(false)
+    expect(data.error).toBe('nonce_in_flight')
+
+    const { results } = await env.DB.prepare(
+      'SELECT order_id FROM orders WHERE nonce = 620001',
+    ).all<{ order_id: string }>()
+    expect(results.map((r) => r.order_id)).toEqual([first.orderId])
+  })
+
+  it('同 digest 重投走既有幂等路径：200 duplicate:true，不被撞号拦', async () => {
+    const body = await makeSignedOrder({ nonce: 620_002 })
+    expect((await postOrder(body)).status).toBe(200)
+    const res = await postOrder(body)
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { duplicate?: boolean }).duplicate).toBe(true)
+  })
+
+  it('第一单已过期（存量过期行同 nonce）→ 新单同 nonce 可入库', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.prepare(
+      `INSERT INTO orders (digest, chain_id, order_id, user_address, pair, side, price, amount,
+         amount_out, token_in, token_out, filled, status, nonce, created_at, expires_at,
+         signature, raw_json, received_at)
+       VALUES (?, 11155111, 'expired-nonce-row', ?, 'BTC/USDT', 'buy', '1', '1', '0', ?, ?, '0', 'open',
+         620003, ?, ?, '0x00', '{}', ?)`,
+    )
+      .bind(
+        '0x' + 'cd'.repeat(32),
+        TEST_ADDRESS.toLowerCase(),
+        BUILTIN_CHAINS[11155111].tokens.BTC,
+        BUILTIN_CHAINS[11155111].tokens.USDT,
+        now - 100000,
+        now - 10,
+        now,
+      )
+      .run()
+    const body = await makeSignedOrder({ nonce: 620_003 })
+    expect((await postOrder(body)).status).toBe(200)
+  })
+
+  it('存量同 nonce 订单已非 live 状态（cancelled）→ 新单同 nonce 可入库', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.prepare(
+      `INSERT INTO orders (digest, chain_id, order_id, user_address, pair, side, price, amount,
+         amount_out, token_in, token_out, filled, status, nonce, created_at, expires_at,
+         signature, raw_json, received_at)
+       VALUES (?, 11155111, 'cancelled-nonce-row', ?, 'BTC/USDT', 'buy', '1', '1', '0', ?, ?, '0', 'cancelled',
+         620004, ?, ?, '0x00', '{}', ?)`,
+    )
+      .bind(
+        '0x' + 'ab'.repeat(32),
+        TEST_ADDRESS.toLowerCase(),
+        BUILTIN_CHAINS[11155111].tokens.BTC,
+        BUILTIN_CHAINS[11155111].tokens.USDT,
+        now - 1000,
+        now + 86400,
+        now,
+      )
+      .run()
+    const body = await makeSignedOrder({ nonce: 620_004 })
+    expect((await postOrder(body)).status).toBe(200)
+  })
+
+  it('不同用户同 nonce 互不牵连 → 可入库', async () => {
+    const mine = await makeSignedOrder({ nonce: 620_005 })
+    expect((await postOrder(mine)).status).toBe(200)
+    const other = await makeSignedOrder({ nonce: 620_005, signer: account2 })
+    expect((await postOrder(other)).status).toBe(200)
+  })
+
+  it('同用户不同链同 nonce 互不牵连 → 可入库', async () => {
+    const sepoliaOrder = await makeSignedOrder({ nonce: 620_006 })
+    expect((await postOrder(sepoliaOrder)).status).toBe(200)
+    const baseOrder = await makeSignedOrder({ nonce: 620_006, chainId: 84532 })
+    expect((await postOrder(baseOrder)).status).toBe(200)
   })
 })

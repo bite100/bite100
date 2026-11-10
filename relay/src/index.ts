@@ -219,12 +219,26 @@ async function handlePostOrder(
   if (!valid) return textError('invalid signature', 401)
 
   const rawJson = JSON.stringify(raw)
+  // 在途 nonce 撞号兜底（第 62 轮块 D）：位图语义下链上只在结算时置位，
+  // 「已签未结」的同 nonce 第二单在链上事后必然有一张作废（独占规则）。
+  // 客户端分配器（网页/MCP）已在签发侧防撞，但多端同钱包仍有窗口——
+  // 中继以自家 D1 为据统一兜底：同一 (chainId, userAddress, nonce) 已有
+  // 另一 digest 的 live 订单（status open/partial 且未过期）时拒绝新单。
+  // 检查与插入合为一条条件 INSERT（WHERE NOT EXISTS），避免查/插之间
+  // 的竞态；只查 D1、不查链上 nonce 状态（保持中继无链上状态依赖）。
+  // 同 digest 重投已在上方去重前置返回，不进此路径。
   const res = await env.DB.prepare(
     `INSERT OR IGNORE INTO orders
        (digest, chain_id, order_id, user_address, pair, side, price, amount, amount_out,
         token_in, token_out, filled, status, nonce, created_at, expires_at, exec_type,
         signature, raw_json, received_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (
+       SELECT 1 FROM orders
+        WHERE chain_id = ? AND user_address = ? AND nonce = ?
+          AND digest <> ?
+          AND status IN ('open', 'partial') AND expires_at > ?
+     )`,
   )
     .bind(
       digest,
@@ -255,13 +269,35 @@ async function handlePostOrder(
       body.signature,
       rawJson,
       now,
+      // 条件插入的撞号判定参数（与上方 NOT EXISTS 子查询一一对应）
+      chainId,
+      body.trader.toLowerCase(),
+      body.nonce,
+      digest,
+      now,
     )
     .run()
 
   const inserted = (res.meta.changes ?? 0) > 0
   if (!inserted) {
-    // 重复投递：返回已存在，不报错（便签可多源重发，去重靠 digest 主键）
-    return json({ ok: true, orderId: body.orderId, digest, duplicate: true })
+    // 未插入分两种：同 digest 并发重投（去重前置之后的竞态）→ 幂等
+    // 返回；同 (chain, user, nonce) 已有另一 digest 的在途单 → 撞号 409。
+    const dup = await env.DB.prepare('SELECT digest FROM orders WHERE digest = ?')
+      .bind(digest)
+      .first()
+    if (dup) {
+      return json({ ok: true, orderId: body.orderId, digest, duplicate: true })
+    }
+    return json(
+      {
+        ok: false,
+        error: 'nonce_in_flight',
+        message:
+          `nonce ${body.nonce} is already used by another in-flight order ` +
+          `for this account on chain ${chainId}; allocate a fresh nonce and re-sign`,
+      },
+      409,
+    )
   }
 
   // Nostr 并行镜像：best-effort，waitUntil 后台发，不阻塞入库响应；
