@@ -263,3 +263,98 @@ describe('占位释放收紧（第 63 轮审查修复批 P1-2）', () => {
     expect(taken.status).toBe(409)
   })
 })
+
+describe('closed 通道收紧（紧凑复核残余 P1 微修复）', () => {
+  it('绕过复刻：A 广播后 initiated（带 hash）→ report closed 被拒，同带 missing 结论也拒，行保持 initiated', async () => {
+    const id = deliveryId()
+    await claim(id, `${id}#1`)
+    await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'initiated',
+      sendTxHash: '0xbroadcast',
+    })
+    const close1 = await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'closed',
+    })
+    expect(close1.status).toBe(409)
+    expect(close1.data.error).toBe('delivery_in_flight')
+    // 同一次汇报里补 missing 结论也救不了：行内已有广播证据
+    const close2 = await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'closed',
+      reconcile: 'missing',
+    })
+    expect(close2.status).toBe(409)
+    const one = await SELF.fetch(`${BASE}/deliveries?deliveryId=${encodeURIComponent(id)}`)
+    const row = (await one.json()) as { state: string; sendTxHash: string }
+    expect(row.state).toBe('initiated')
+    expect(row.sendTxHash).toBe('0xbroadcast')
+  })
+
+  it('claimed 行无结论转 closed 被拒；同一次汇报带 missing 结论（零证据）才放行', async () => {
+    const id = deliveryId()
+    await claim(id, `${id}#1`)
+    const noVerdict = await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'closed',
+    })
+    expect(noVerdict.status).toBe(409)
+    const withVerdict = await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'closed',
+      reconcile: 'missing',
+    })
+    expect(withVerdict.status).toBe(200)
+    expect(withVerdict.data.delivery.state).toBe('closed')
+    expect(withVerdict.data.delivery.lastReconcile).toBe('missing')
+  })
+
+  it('正路：anomaly（missing 结论、零证据）→ report closed 成功 → B 再 claim 成功', async () => {
+    const id = deliveryId()
+    await claim(id, `${id}#1`)
+    await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'anomaly',
+      reconcile: 'missing',
+    })
+    const closed = await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'closed',
+    })
+    expect(closed.status).toBe(200)
+    const re = await claim(id, `${id}#2`)
+    expect(re.status).toBe(200)
+    expect(re.data.reclaimed).toBe(true)
+  })
+
+  it('存量带广播证据的 closed 行：B claim 被拒；补报 missing 结论后才放行', async () => {
+    const id = deliveryId()
+    await claim(id, `${id}#1`)
+    await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'anomaly',
+      sendTxHash: '0xbroadcast',
+    })
+    // 模拟微修复前经旧通道转入 closed 的存量行（直写库播种）
+    await env.DB.prepare("UPDATE deliveries SET state = 'closed' WHERE delivery_id = ?")
+      .bind(id)
+      .run()
+    const blocked = await claim(id, `${id}#2`)
+    expect(blocked.status).toBe(409)
+    expect(blocked.data.error).toBe('delivery_in_flight')
+    // 原 attempt 在 closed 行上补报 missing 结论（同态汇报落结论）后解锁
+    const verdict = await post('/deliveries/report', {
+      deliveryId: id, account: TEST_ADDRESS, attemptId: `${id}#1`, state: 'closed',
+      reconcile: 'missing',
+    })
+    expect(verdict.status).toBe(200)
+    const re = await claim(id, `${id}#2`)
+    expect(re.status).toBe(200)
+    expect(re.data.reclaimed).toBe(true)
+  })
+
+  it('纯占位 closed 行（无证据无结论）再 claim 维持现状：直接放行', async () => {
+    const id = deliveryId()
+    await claim(id, `${id}#1`)
+    // 认领后从未执行即释放的历史占位行（直写库播种）
+    await env.DB.prepare("UPDATE deliveries SET state = 'closed' WHERE delivery_id = ?")
+      .bind(id)
+      .run()
+    const re = await claim(id, `${id}#2`)
+    expect(re.status).toBe(200)
+    expect(re.data.reclaimed).toBe(true)
+  })
+})
