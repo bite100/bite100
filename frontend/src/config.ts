@@ -74,9 +74,14 @@ export const GOVERNANCE_ABI = [
   // 第 32 轮补齐：治理页多步提案回退读取一直调用此函数，但旧 ABI 缺失，
   // 调用恒抛错、多步提案永远显示不出来。字段顺序与合约 10 字段返回一致。
   'function getMultiStepProposal(uint256 proposalId) view returns (address[] memory targets, bytes[] memory callDataArray, bytes32 merkleRoot, uint256 activeCount, uint256 createdAt, uint256 votingEndsAt, uint256 yesCount, uint256 noCount, uint256 executableAt, bool executed)',
-  'function createProposal(address target, bytes calldata callData, bytes32 merkleRoot, uint256 activeCount) returns (uint256)',
+  // 第 61 轮：createProposal 改为引用管理员已发布的活跃集快照编号，不再接受自带 merkleRoot/activeCount
+  'function createProposal(address target, bytes calldata callData, uint256 snapshotId) returns (uint256)',
+  'function snapshotCount() view returns (uint256)',
+  'function getSnapshot(uint256 snapshotId) view returns (bytes32 merkleRoot, uint256 activeCount, address publisher, uint256 publishedAt, bool exists)',
+  'function publishSnapshot(bytes32 merkleRoot, uint256 activeCount) returns (uint256)',
   'function vote(uint256 proposalId, bool support, bytes32[] calldata proof)',
   'function execute(uint256 proposalId)',
+  'event SnapshotPublished(uint256 indexed snapshotId, bytes32 merkleRoot, uint256 activeCount, address indexed publisher)',
   'event ProposalCreated(uint256 indexed proposalId, address indexed target, uint256 activeCount)',
   'event Voted(uint256 indexed proposalId, address indexed voter, bool support, uint256 weight)',
   'event ProposalExecuted(uint256 indexed proposalId)',
