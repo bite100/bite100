@@ -305,8 +305,9 @@ export async function executeDelivery(
   const executeBridgeFn = deps.executeBridgeFn ?? executeMessageBridge
   const withdrawFn = deps.withdrawFn ?? withdrawFromVault
   const provider = deps.provider ?? getProvider()
-  let record = loadDeliveries(account).find((r) => r.id === recordId)
-  if (!record) throw new Error('交付记录不存在')
+  const found = loadDeliveries(account).find((r) => r.id === recordId)
+  if (!found) throw new Error('交付记录不存在')
+  let record: DeliveryRecord = found
   if (!record.channel) throw new Error('交付记录尚未选定通道')
   const channel = record.channel
   if (record.status === 'pending-decision' && !hasValidConfirmation(settings, channel)) {
@@ -354,8 +355,8 @@ export async function executeDelivery(
   }
   persist(account, record)
 
-  // 本次发起是否发生过任何广播（第一方事实，供失败时判定可否直接记 missing）
-  let withdrawBroadcast = false
+  // 本次发起是否广播过桥发送（第一方事实，供失败时判定可否直接记 missing：
+  // 发送未广播 ⇒ 桥腿必然未发生，与提款腿是否广播无关）
   let sendBroadcast = false
   const hooks = {
     onSendTxHash: async (hash: string) => {
@@ -386,7 +387,6 @@ export async function executeDelivery(
         const token = settleChain.tokens?.[record!.asset]
         if (!token) throw new Error(`成交链未登记资产 ${record!.asset}`)
         await withdrawFn(signer, settleChain, token, amount, async (hash: string) => {
-          withdrawBroadcast = true
           record = { ...record, withdrawTxHash: hash, updatedAt: Date.now() }
           persist(account, record)
         })
@@ -516,6 +516,9 @@ export async function reconcileDelivery(
     // 提款已终局（成功=钱在钱包 / 失败=钱在 Vault）而桥发送从未广播 → 桥发起确定 missing
     if (r === 'success' || r === 'reverted') verdict = 'missing'
     else if (!(await txKnownFn(provider, record.withdrawTxHash)) && age > RECONCILE_MISSING_AFTER_MS) verdict = 'missing'
+    // 提款成功落地 = 资金已在钱包：按链上事实治愈 fundsLocation，使后续重试
+    // 直达桥腿、不重复提款（提款回滚时资金仍在 Vault，不治愈）
+    if (r === 'success') record = { ...record, fundsLocation: 'wallet' }
   }
   // 无任何 hash（崩溃在广播与钩子之间）：无法断言，保持 unknown 待人工处理。
   record = { ...record, lastReconcile: verdict, lastReconcileAt: now, updatedAt: now }

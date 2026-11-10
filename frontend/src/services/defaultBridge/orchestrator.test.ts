@@ -383,6 +383,45 @@ describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
     expect(recovered.status).toBe('in-flight')
     expect(recovered.trackingId).toBe('msg-42')
   })
+
+  it('只有提款凭据：提款成功落地 → missing 且 fundsLocation 按链上事实治愈为 wallet', async () => {
+    const out = planDelivery(TAKER, fill({ tradeId: 'trade-wd' }), settings())
+    upsertDelivery(TAKER, {
+      ...out.record!,
+      status: 'initiating',
+      fundsLocation: 'vault',
+      attemptId: `${out.record!.id}#1`,
+      attemptCount: 1,
+      initiatedTxPending: true,
+      withdrawTxHash: '0xwdlanded',
+      initiatedAt: Date.now(),
+    })
+    const settled = await reconcileDelivery(TAKER, out.record!.id, {
+      provider: fakeProvider,
+      checkReceiptFn: async () => 'success',
+    })
+    expect(settled.lastReconcile).toBe('missing')
+    expect(settled.fundsLocation).toBe('wallet') // 治愈：重试直达桥腿，不重复提款
+
+    // 提款回滚时资金仍在 Vault，不治愈
+    const out2 = planDelivery(TAKER, fill({ tradeId: 'trade-wd2' }), settings())
+    upsertDelivery(TAKER, {
+      ...out2.record!,
+      status: 'initiating',
+      fundsLocation: 'vault',
+      attemptId: `${out2.record!.id}#1`,
+      attemptCount: 1,
+      initiatedTxPending: true,
+      withdrawTxHash: '0xwdreverted',
+      initiatedAt: Date.now(),
+    })
+    const settled2 = await reconcileDelivery(TAKER, out2.record!.id, {
+      provider: fakeProvider,
+      checkReceiptFn: async () => 'reverted',
+    })
+    expect(settled2.lastReconcile).toBe('missing')
+    expect(settled2.fundsLocation).toBe('vault')
+  })
 })
 
 describe('第 63 轮桥-3：中继登记闸门（P1-③）', () => {
