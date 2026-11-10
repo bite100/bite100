@@ -93,6 +93,12 @@ contract ContributorRewardTest is Test {
         _attestAndSubmit(period, who, 1e18, 0, 0, 0, 0);
     }
 
+    /// @notice 审查修复批（P1-01）：领取以周期冻结为前置——夹具在注池后统一冻结
+    ///         （scoresRoot 取任意存证值；冻结只锚定分数/总量，不影响奖励池断言）
+    function _freeze(string memory period) internal {
+        reward.freezePeriod(period, bytes32(uint256(0xF20E)));
+    }
+
     /// @notice 反复领取直到 claimable 归零（单次受奖池 10% 上限）
     function _drainClaims(string memory period, address who) internal {
         for (uint256 i = 0; i < 30; i++) {
@@ -128,6 +134,7 @@ contract ContributorRewardTest is Test {
 
         token.approve(address(reward), 100e18);
         reward.setPeriodReward(period, address(token), 100e18);
+        _freeze(period);
 
         // 方案 A：claimable 为单次可领（受奖池 10% 上限）：池 100e18 → 单次 10e18；
         // 待领总额 = 可分配 85%（默认储备 15%）= 85e18
@@ -153,6 +160,7 @@ contract ContributorRewardTest is Test {
 
         token.approve(address(reward), 100e18);
         reward.setPeriodReward(period, address(token), 100e18);
+        _freeze(period);
 
         vm.prank(alice);
         reward.claimReward(period, address(token));
@@ -171,6 +179,7 @@ contract ContributorRewardTest is Test {
 
         token.approve(address(reward), 100e18);
         reward.setPeriodReward(period, address(token), 100e18);
+        _freeze(period);
 
         // 仅 Alice 有贡献：待领总额 = 100 * 80% = 80e18；单次可领受 10% 上限 = 10e18
         assertEq(reward.claimableTotal(period, address(token), alice), 80e18, "total should be 80% of pool");
@@ -188,6 +197,7 @@ contract ContributorRewardTest is Test {
 
         token.approve(address(reward), type(uint256).max);
         reward.setPeriodReward(period, address(token), 100e18);
+        _freeze(period);
 
         bytes32 pid = keccak256(abi.encodePacked(period));
         // 周期结束日 2025-02-07 23:59:59 UTC
@@ -204,6 +214,7 @@ contract ContributorRewardTest is Test {
         string memory period2 = "2025-01-25_2025-01-31";
         _submitRelayProof(period2, aliceKey, alice);
         reward.setPeriodReward(period2, address(token), 100e18);
+        _freeze(period2);
         bytes32 pid2 = keccak256(abi.encodePacked(period2));
         uint256 period2End = 1738367999; // 2025-01-31 23:59:59 UTC
         reward.setPeriodEndTimestamp(pid2, period2End);
@@ -244,6 +255,7 @@ contract ContributorRewardTest is Test {
 
         token.approve(address(reward), type(uint256).max);
         reward.setPeriodReward(period, address(token), 100e18); // 可分配 85e18，各 42.5e18
+        _freeze(period);
 
         // Alice 领两次（2 × 10e18 上限），Bob 一次不领
         vm.prank(alice);
@@ -284,6 +296,7 @@ contract ContributorRewardTest is Test {
 
         // Bob 在下一期提交贡献后，可领到含回流金额的奖池：待领总额 = 115 * 85% = 97.75e18，单次上限 = 115/10 = 11.5e18
         _submitRelayProof(nextPeriod, bobKey, bob);
+        _freeze(nextPeriod);
         assertEq(reward.claimableTotal(nextPeriod, address(token), bob), 97.75e18);
         assertEq(reward.claimable(nextPeriod, address(token), bob), 11.5e18);
         vm.prank(bob);
@@ -348,6 +361,7 @@ contract ContributorRewardTest is Test {
 
         token.approve(address(reward), 100e18);
         reward.setPeriodReward(period, address(token), 100e18); // 可分配 85e18
+        _freeze(period);
 
         assertEq(reward.claimableTotal(period, address(token), poster), 29.75e18, "posting 35%");
         assertEq(reward.claimableTotal(period, address(token), depositor), 21.25e18, "gas vault 25%");
