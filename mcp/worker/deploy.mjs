@@ -68,10 +68,22 @@ function main() {
   const dbId = db.uuid ?? db.id
   if (!dbId) throw new Error('D1 id missing from API response')
 
-  // 2) migrations（幂等：全部 IF NOT EXISTS / INSERT OR IGNORE）
+  // 2) migrations：0001 幂等（IF NOT EXISTS / INSERT OR IGNORE）；
+  // 0002 含 ALTER TABLE ADD COLUMN（SQLite 无 IF NOT EXISTS 写法），
+  // 重复执行时只容忍 duplicate column 错误，其余照常抛。
   const sql = readFileSync(new URL('./migrations/0001_init.sql', import.meta.url), 'utf8')
   cfJson('POST', `/client/v4/accounts/${ACCOUNT}/d1/database/${dbId}/query`, { sql })
-  console.log('d1 migrations applied')
+  const sql2 = readFileSync(new URL('./migrations/0002_r59_register.sql', import.meta.url), 'utf8')
+  try {
+    cfJson('POST', `/client/v4/accounts/${ACCOUNT}/d1/database/${dbId}/query`, { sql: sql2 })
+    console.log('d1 migrations applied (0001 + 0002)')
+  } catch (e) {
+    if (/duplicate column/i.test(e instanceof Error ? e.message : String(e))) {
+      console.log('d1 migrations applied (0001; 0002 already present)')
+    } else {
+      throw e
+    }
+  }
 
   // 3) 上传脚本（metadata 只带 D1 绑定；secret 绝不进上传体）
   if (!existsSync('worker-dist/worker.mjs')) throw new Error('worker-dist/worker.mjs 不存在：先跑 node build-worker.mjs')

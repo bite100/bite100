@@ -18,6 +18,10 @@ export interface FakeAgentRow {
   daily_max_quote: string
   write_rate_per_minute: number
   enabled: number
+  name?: string | null
+  created_at?: number
+  source?: string
+  wallet_address?: string | null
 }
 
 export interface FakeAuditRow {
@@ -209,10 +213,25 @@ export class FakeD1 {
       this.registrationEvents.push({ ip: b[0] as string, ts_ms: b[1] as number })
       return { changes: 1 }
     }
+    if (sql.includes('DELETE FROM registration_events')) {
+      const before = this.registrationEvents.length
+      this.registrationEvents = this.registrationEvents.filter((r) => r.ts_ms >= (b[0] as number))
+      return { changes: before - this.registrationEvents.length }
+    }
     if (sql.includes('INSERT INTO agents')) {
-      // binds 顺序与 register.ts 的 INSERT 列顺序一致
-      const [id, token_hash, role, per_order, daily, rate, enabled, name, created_at, source, wallet] =
-        b as [string, string, string, string, string, number, number, string | null, number, string, string | null]
+      // binds 与 register.ts 的 INSERT 一致（enabled=1、source='register'
+      // 是 SQL 字面量，不占位）：id, hash, role, per, daily, rate, name, created_at, wallet
+      const [id, token_hash, role, per_order, daily, rate, name, created_at, wallet] = b as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        number,
+        string | null,
+        number,
+        string | null,
+      ]
       if (this.agents.some((r) => r.id === id || r.token_hash === token_hash)) {
         throw new Error('fake d1: UNIQUE constraint failed (agents)')
       }
@@ -223,10 +242,10 @@ export class FakeD1 {
         per_order_max_quote: per_order,
         daily_max_quote: daily,
         write_rate_per_minute: rate,
-        enabled,
+        enabled: 1,
         ...(name !== undefined ? { name } : {}),
         ...(created_at !== undefined ? { created_at } : {}),
-        ...(source !== undefined ? { source } : {}),
+        source: 'register',
         ...(wallet !== undefined ? { wallet_address: wallet } : {}),
       } as FakeAgentRow)
       return { changes: 1 }

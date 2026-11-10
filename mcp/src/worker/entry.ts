@@ -14,8 +14,10 @@
  * 引擎经同一套 esbuild 打包进入 Worker（build-worker.mjs），双读的
  * 中继适配器通过 ctx 注入服务绑定 fetch（见 tools/common.ts）。
  *
- * 全部请求（含只读）都要 Bearer 令牌，与 stdio 版「无令牌连工具都
- * 调不了」的口径一致。/health 例外（只回服务名与时间，无数据）。
+ * MCP 请求（含只读）都要 Bearer 令牌，与 stdio 版「无令牌连工具都
+ * 调不了」的口径一致。公开面只有三个：/health（只回服务名与时间）、
+ * GET /skill.md（托管说明书）、POST /register（自助注册，第 59 轮
+ * 块 3——发令牌的入口本身不可能先有令牌，靠端点限流+紧限额兜底）。
  */
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { buildServer } from '../server'
@@ -28,6 +30,7 @@ import { DEFAULT_RELAY_URL } from '../config'
 import { _setKeyTextProvider } from '../signers'
 import type { ToolContext } from '../tools/common'
 import { buildRequestState, keyForRole, type WorkerEnv } from './state'
+import { handleRegister, skillMarkdown } from './register'
 
 function unauthorized(message: string): Response {
   return Response.json(
@@ -41,6 +44,18 @@ export default {
     const url = new URL(request.url)
     if (url.pathname === '/health') {
       return Response.json({ ok: true, service: 'bit100-mcp', time: Date.now() })
+    }
+    // 第 59 轮块 3：自助注册与托管说明书是公开面（注册本身就是发
+    // 令牌的入口，不可能要求先有令牌）；其余路径照旧全员要 Bearer。
+    if (url.pathname === '/skill.md') {
+      if (request.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
+      return new Response(skillMarkdown(url.origin), {
+        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+      })
+    }
+    if (url.pathname === '/register') {
+      if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 })
+      return handleRegister(request, env)
     }
     if (request.method !== 'POST') {
       return new Response('Method Not Allowed', { status: 405 })

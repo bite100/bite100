@@ -9,7 +9,9 @@
  *     不产生结算；第 59 轮块 2 起公开入口也有撮合）→ D1 急停置 1 时
  *     写拒（kill_switch_on）读通、复位 → 审计落库计数 > 0 → 退役
  *     smoke agent（停用 + 换掉哈希），旧令牌应 401。
- * 第 59 轮块 3 起另测自助注册全程（见脚本后半）。
+ * 第 59 轮块 3 起另测自助注册全程（脚本末段）：GET /skill.md 可达 →
+ * POST /register 发令牌（operator 应 400）→ 新令牌可 initialize →
+ * D1 里该行只有哈希且限额=服务端常量 → 退役该注册 agent。
  * 令牌明文只活在本进程内存；结束时 agent 已停用且哈希被替换，
  * 旧令牌不可再用。本脚本可重复执行（每次新建一个 smoke agent 行，
  * 退役行保留作审计痕迹）。
@@ -207,6 +209,48 @@ async function main() {
   const deadHash = createHash('sha256').update(randomBytes(32)).digest('hex')
   sql(`UPDATE agents SET enabled = 0, token_hash = '${deadHash}' WHERE id = '${agentId}'`)
   report((await rawPost(token)) === 401, 'retired token → 401')
+
+  // —— 第 59 轮块 3：自助注册全程 ——
+  const skillRes = await fetch(`${BASE}/skill.md`)
+  const skillText = await skillRes.text()
+  report(skillRes.status === 200 && skillText.includes('/register'), 'GET /skill.md hosted instructions')
+
+  const opRes = await fetch(`${BASE}/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'operator' }),
+  })
+  report(opRes.status === 400, 'POST /register role=operator → 400 (never self-serve)')
+
+  const regRes = await fetch(`${BASE}/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: `smoke-selfserve-${suffix}`, role: 'maker', dailyMaxQuote: '999999' }),
+  })
+  const reg = await regRes.json()
+  report(
+    regRes.status === 201 && reg.ok === true && /^b100_[0-9a-f]{64}$/.test(reg.token ?? ''),
+    'POST /register → 201 + one-time token',
+    reg.ok ? `agent=${reg.agent_id}` : JSON.stringify(reg).slice(0, 160),
+  )
+  if (reg.ok) {
+    // 请求体塞的 dailyMaxQuote 必须被忽略；D1 行限额=服务端常量、只存哈希
+    const rowRes = sql(
+      `SELECT token_hash, per_order_max_quote, daily_max_quote, source FROM agents WHERE id = '${reg.agent_id}'`,
+    )
+    const row = rowRes?.result?.[0]?.results?.[0] ?? {}
+    const expectHash = createHash('sha256').update(reg.token, 'utf8').digest('hex')
+    report(
+      row.token_hash === expectHash && row.daily_max_quote === '50' && row.per_order_max_quote === '10' && row.source === 'register',
+      'registered row: hash-only + server-side limits (body limits ignored)',
+      JSON.stringify(row),
+    )
+    report((await rawPost(reg.token)) === 200, 'registered token → initialize 200')
+    // 退役自助注册的 smoke agent（停用 + 换哈希）
+    const regDeadHash = createHash('sha256').update(randomBytes(32)).digest('hex')
+    sql(`UPDATE agents SET enabled = 0, token_hash = '${regDeadHash}' WHERE id = '${reg.agent_id}'`)
+    report((await rawPost(reg.token)) === 401, 'retired registered token → 401')
+  }
 
   console.log(failures === 0 ? '\n===== SMOKE ALL PASS =====' : `\n===== SMOKE ${failures} FAILURES =====`)
   process.exit(failures === 0 ? 0 : 1)

@@ -37,6 +37,7 @@ import type { AgentEntry, AgentRegistry, WriteGuard } from '../agents'
 import type { AuditEntry } from '../audit'
 import { QUOTE_AMOUNT_RE } from '../caps'
 import { ToolError } from '../errors'
+import { REGISTER_RAMP_LIMITS, REGISTER_RAMP_WINDOW_MS } from './register'
 
 export interface WorkerEnv {
   DB: D1Database
@@ -76,6 +77,9 @@ interface AgentRow {
   daily_max_quote: string
   write_rate_per_minute: number
   enabled: number
+  /** 第 59 轮 migration 0002 增列（旧行/测试行可能缺失，按缺省处理） */
+  created_at?: number
+  source?: string
 }
 
 /** 待刷盘语句收集器：第 59 轮起只承载审计行，请求返回前由入口 await 刷盘 */
@@ -305,6 +309,24 @@ export async function buildRequestState(env: WorkerEnv, token: string): Promise<
     dailyMaxQuote: row.daily_max_quote,
     writeRatePerMinute: row.write_rate_per_minute,
     enabled: row.enabled === 1,
+  }
+
+  // 自助注册 agent 的头 24 小时爬坡（块 3）：有效限额 = 行内限额与
+  // 爬坡常量取 min；过窗后自动恢复，不需要定时任务改行。手工/冒烟
+  // agent（source != 'register'）不受影响。
+  if (
+    row.source === 'register' &&
+    typeof row.created_at === 'number' &&
+    row.created_at > 0 &&
+    Date.now() - row.created_at < REGISTER_RAMP_WINDOW_MS
+  ) {
+    agent.perOrderMaxQuote = String(
+      Math.min(Number(agent.perOrderMaxQuote), Number(REGISTER_RAMP_LIMITS.perOrderMaxQuote)),
+    )
+    agent.dailyMaxQuote = String(
+      Math.min(Number(agent.dailyMaxQuote), Number(REGISTER_RAMP_LIMITS.dailyMaxQuote)),
+    )
+    agent.writeRatePerMinute = Math.min(agent.writeRatePerMinute, REGISTER_RAMP_LIMITS.writeRatePerMinute)
   }
 
   const cfg = await db
