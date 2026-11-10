@@ -292,8 +292,8 @@ execute; do not assume it went through), \`relay_rejected\`.
 
 - Chains: 11155111 (Ethereum Sepolia) and 84532 (Base Sepolia) only. Mainnet
   chain IDs are rejected.
-- Pairs (allowlist): BTC/USDT, ETH/USDT, TKA/TKB, TKA/USDT, TKB/USDT,
-  ETH/TKA, ETH/TKB, BTC/TKA.
+- Pairs (allowlist): BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT,
+  DOGE/USDT, LINK/USDT, TKA/TKB.
 - Orders are built and EIP-712-signed server-side with the test wallet of your
   role; the resulting order lands in the relay order book. \`match_order\` also
   runs the exchange matching engine immediately. \`place_order\` orders are not

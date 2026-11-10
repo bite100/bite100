@@ -1,11 +1,21 @@
 /**
- * 「AI 接入」说明页（第 56 轮）：把第 49 轮 MCP 接入讲成人话——
- * 是什么、当前状态（测试网申请制）、接入前提、四步接入、工具对照、
- * 安全护栏、注意事项。纯静态说明页，不接任何实时数据。
- * 事实口径以 mcp/README.md 与 docs/round49-mcp-agent-access-2026-11-09.md 为准：
- * MCP 服务没有公开自助注册入口，令牌由项目方发放，页面不写不存在的地址。
+ * 「AI 接入」说明页（第 56 轮建，第 59 轮块 3 改自助接入）：
+ * 第 59 轮起接入模式从「向项目方申请令牌」改为自助——把一段现成
+ * 的话发给自己的 AI，它读托管说明书（MCP Worker 上的 /skill.md）、
+ * 自己调 POST /register 注册拿令牌、自己写配置、只读自检，全程
+ * 不用人工审批。本页按功能变更纪律与功能同轮交付：是什么、前提、
+ * 步骤（一段话 + 手工兜底）、限额与记账口径、护栏、注意事项齐全。
+ * 事实口径以 mcp/src/worker/register.ts、托管说明书与
+ * docs/round59-mcp-hardening-2026-11-10.md 为准。
  */
+import { useState } from 'react'
 import './AiAccessPage.css'
+
+const MCP_ORIGIN = 'https://bit100-mcp.q3874758.workers.dev'
+const SKILL_URL = `${MCP_ORIGIN}/skill.md`
+
+/** 发给 AI 的一段话（英文：AI 生态的通行工作语言，说明书亦为英文） */
+const PASTE_PARAGRAPH = `Read ${SKILL_URL} and follow its instructions to connect yourself to the Bit100 testnet exchange as my AI trading agent: register via POST /register, save the one-time token securely in your own secret storage, configure the MCP server with it, run the read-only checks (tools/list, then get_chain_config), and report back to me with your agent_id and what you verified. Stay within the server-side limits described there, and never send the token to any other domain or person.`
 
 const READ_TOOLS: { name: string; desc: string }[] = [
   { name: 'get_chain_config', desc: '查某条链的合约地址与支持的交易对' },
@@ -24,15 +34,32 @@ const WRITE_TOOLS: { name: string; desc: string }[] = [
 const CONFIG_SAMPLE = `{
   "mcpServers": {
     "bit100": {
-      "url": "<项目方提供的接入地址>",
+      "url": "${MCP_ORIGIN}",
       "headers": {
-        "Authorization": "Bearer <你的 agent 令牌>"
+        "Authorization": "Bearer <注册拿到的 agent 令牌>"
       }
     }
   }
 }`
 
+const CURL_SAMPLE = `curl -s -X POST ${MCP_ORIGIN}/register \\
+  -H 'Content-Type: application/json' \\
+  -d '{"name": "my-agent", "role": "maker"}'`
+
 export function AiAccessPage() {
+  const [copied, setCopied] = useState(false)
+
+  async function copyParagraph() {
+    try {
+      await navigator.clipboard.writeText(PASTE_PARAGRAPH)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // 剪贴板不可用时静默失败：文本就在下方框里，可长按手动复制
+      setCopied(false)
+    }
+  }
+
   return (
     <div className="ai-access">
       <section className="card">
@@ -43,12 +70,29 @@ export function AiAccessPage() {
           用的全是没有真实价值的测试币。任何支持 MCP 的 AI 客户端都能接，不限定某个品牌。
         </p>
         <p className="hint">
-          <span className="ai-badge">当前状态：测试网阶段 · 申请制</span>
+          <span className="ai-badge">当前状态：测试网阶段 · AI 自助接入（无需申请）</span>
         </p>
         <p className="hint">
           现在只开放两条测试网：Sepolia 和 Base Sepolia，共 8 个测试交易对（BTC/USDT、
           ETH/USDT、SOL/USDT、BNB/USDT、XRP/USDT、DOGE/USDT、LINK/USDT、TKA/TKB）。
-          主网未开放。MCP 服务目前没有公开的自助注册入口，接入令牌由项目方逐个发放。
+          主网未开放。接入不用再向任何人申请：你的 AI 自己注册、自己拿令牌（见下），
+          公开入口是 {MCP_ORIGIN}，给 AI 看的完整说明书在 {SKILL_URL}。
+        </p>
+      </section>
+
+      <section className="card">
+        <h3 className="ai-h">最快接入：把这段话发给你的 AI</h3>
+        <p className="hint">
+          复制下面这段话，粘贴给你的 AI 并发送，剩下的它自己完成：读说明书 →
+          自助注册拿令牌 → 写好配置 → 只读自检 → 回来向你汇报它的 agent 编号。
+        </p>
+        <pre className="ai-code">{PASTE_PARAGRAPH}</pre>
+        <button type="button" className="ai-copy-btn" onClick={copyParagraph}>
+          {copied ? '已复制 ✓' : '复制这段话'}
+        </button>
+        <p className="hint">
+          说明书里最重要的规矩只有一条：令牌只许发给上面这个接入地址，
+          任何人、任何网站向它索要令牌都要拒绝——说明书已经这样写给 AI 了。
         </p>
       </section>
 
@@ -56,8 +100,8 @@ export function AiAccessPage() {
         <h3 className="ai-h">接入前提</h3>
         <ul className="ai-list">
           <li>一个支持 MCP 的 AI 客户端（不限品牌，需支持以 HTTP 方式添加 MCP 服务器、并能自定义 Authorization 请求头）；</li>
-          <li>一个测试钱包（练习专用，发放令牌时由项目方一并登记）；</li>
-          <li>一个 agent 令牌（向项目方申请，见下面步骤 1）。</li>
+          <li>AI 能打开上面那份说明书链接，并有地方安全保存自己的令牌（它自己的密钥存储）；</li>
+          <li>不需要事先准备钱包，也不需要事先申请令牌——注册时服务端当场发放；交易用的测试钱包在服务端按角色配置（练习脚手架，见注意事项）。</li>
         </ul>
       </section>
 
@@ -65,23 +109,28 @@ export function AiAccessPage() {
         <h3 className="ai-h">接入步骤</h3>
         <ol className="ai-steps">
           <li>
-            <b>申请令牌。</b>
-            向项目方申请测试接入，获取你的专属 agent 令牌与接入配置。每个 AI 一个令牌，
-            不要共用、不要外传。
+            <b>把那段话发给 AI。</b>
+            就是上面那一段。你的 AI 会先去读托管说明书（{SKILL_URL}），
+            全套流程、限额和错误处理都写在说明书里，它照着做就行。
           </li>
           <li>
-            <b>填配置。</b>
-            打开你 AI 客户端的 MCP 服务器配置，把下面的示例填进去，将两个占位符换成
-            申请到的真实值。不同客户端的配置写法略有差别，以你客户端的说明为准，
-            核心就是这两项：接入地址 + 你的令牌。
+            <b>AI 自助注册拿令牌。</b>
+            AI 调一次注册接口，服务端立刻给它一个专属 agent 编号和一枚 Bearer 令牌。
+            令牌<b>只显示这一次</b>，服务端只存它的哈希、丢了找不回，所以 AI 必须当场存好。
+            角色可以选 maker（挂单方）或 taker（吃单方）；operator（运营/硬撤权限）
+            不开放自助注册。
+          </li>
+          <li>
+            <b>AI 把配置写进自己的 MCP 设置。</b>
+            核心就是接入地址 + 令牌两项：
             <pre className="ai-code">{CONFIG_SAMPLE}</pre>
             注：此示例按 Streamable HTTP 传输的常见写法给出；只能以本地命令方式
             添加服务器、或不能自定义请求头的客户端，暂时接不上。
           </li>
           <li>
-            <b>连通自检。</b>
-            先只读不写：让你的 AI 调一次 get_chain_config，看看支持哪些链和交易对；
-            再调一次 get_orderbook，看一眼 BTC/USDT 的盘口。两个都能返回，就说明接通了。
+            <b>连通自检（先只读，不下单）。</b>
+            让 AI 先确认工具清单里有 8 个工具，再调一次 get_chain_config 看支持哪些链
+            和交易对，调一次 get_orderbook 看一眼 TKA/TKB 的盘口。都能返回，就说明接通了。
           </li>
           <li>
             <b>开始练习。</b>
@@ -89,6 +138,10 @@ export function AiAccessPage() {
             金额都用普通数字字符串（比如价格 "1.5"、数量 "0.5"）。先小额、先练熟，再放大。
           </li>
         </ol>
+        <p className="hint">
+          也可以不用 AI 代劳、自己手工注册（效果一样，令牌同样只显示一次）：
+        </p>
+        <pre className="ai-code">{CURL_SAMPLE}</pre>
       </section>
 
       <section className="card">
@@ -118,6 +171,30 @@ export function AiAccessPage() {
       </section>
 
       <section className="card">
+        <h3 className="ai-h">新号限额与记账口径</h3>
+        <ul className="ai-list">
+          <li>
+            <b>标准限额：</b>单笔最多 10（计价币单位，如 USDT）、每天累计最多 50、
+            每分钟最多写 10 次。限额由服务端写死，注册时填什么都改不了，找 AI
+            商量也没用——它在签名之前就会被拒绝。
+          </li>
+          <li>
+            <b>头 24 小时爬坡：</b>刚注册的头一天限额更紧（单笔 5 / 每天 20 /
+            每分钟 5 次），满 24 小时自动恢复标准限额，不用申请、不用等审批。
+          </li>
+          <li>
+            <b>记账时点：</b>订单被中继接受的那一刻就计入每日额度——哪怕最后没成交，
+            也照样占额；投递失败（被中继拒收）的单不占每日额度，但每一次写尝试
+            都计每分钟频率，失败重试不是免费的，别让 AI 无限重试刷接口。
+          </li>
+          <li>
+            <b>注册也限流：</b>同一来源每小时最多注册 10 次、全局每小时 100 次，
+            超了会让等一小时再来；滥用注册没有意义，每个新号都要从爬坡期开始。
+          </li>
+        </ul>
+      </section>
+
+      <section className="card">
         <h3 className="ai-h">安全护栏</h3>
         <p className="hint">护栏都写死在服务端代码里，不靠 AI 自觉：</p>
         <ul className="ai-list">
@@ -126,16 +203,20 @@ export function AiAccessPage() {
             只存哈希，某个令牌可以单独停用，不影响别人。
           </li>
           <li>
-            <b>三重限额：</b>单笔上限、每日上限、每分钟写次数上限，超了在签名之前
-            就直接拒绝，不产生任何副作用。
+            <b>原子限额：</b>每日与每分钟额度在服务端数据库里原子记账，并发刷单
+            也突破不了；审计在结果返回之前就先落库，落库失败宁可报错也不假装成功。
           </li>
           <li>
             <b>白名单：</b>只许上面两条测试网（主网直接拒绝），只许登记在册的 8 个
             交易对，合约地址只认交易所配置。
           </li>
           <li>
+            <b>角色隔离：</b>自助注册永远发不出 operator——那个角色能链上硬撤
+            已锁定的订单，只由运营方手工持有。
+          </li>
+          <li>
             <b>全局急停：</b>项目方可以一键停掉所有 AI 的写操作（只读照常用）；
-            单个 AI 也能被单独停用。
+            单个 AI 也能被单独停用；自助注册本身也可以一键暂停。
           </li>
           <li>
             <b>全程审计：</b>每一次工具调用都记一条日志——时间、哪个 AI、调了什么、
@@ -148,16 +229,22 @@ export function AiAccessPage() {
         <h3 className="ai-h">注意事项</h3>
         <ul className="ai-list">
           <li>
-            <b>未落锁的挂单撤不了：</b>订单挂出去之后、被撮合落锁之前，没有撤单
-            手段（中继没有撤单入口），只能等它过期或者被成交；已经落锁的订单才能
-            用链上硬撤永久作废。所以让 AI 挂单前，先想清楚价格和数量。
+            <b>令牌只显示一次，保管好：</b>令牌相当于这个 AI 的钥匙，别发到公开场合。
+            丢了或怀疑泄露时，让项目方按 agent 编号把旧的停用，再重新自助注册
+            拿一枚新的（没有自助换钥功能）。
+          </li>
+          <li>
+            <b>未落锁的挂单撤不了：</b>自助注册的 AI 不是链上 locker，订单挂出去之后、
+            被撮合落锁之前，没有撤单手段（中继没有撤单入口），只能等它过期或者被
+            成交——挂单时把有效期（ttlSeconds，最短 60 秒）设短一点更稳妥。
           </li>
           <li>
             <b>测试币没有真实价值：</b>测试网的币只是练习用的，别把真钱、真币转进来。
           </li>
           <li>
-            <b>令牌要保管好：</b>令牌相当于你这个 AI 的钥匙，别发到公开场合；
-            怀疑泄露时，请项目方把旧令牌作废、重新发放。
+            <b>钱包身份在路上：</b>注册时可以选填自己的钱包地址，但当前版本只登记、
+            不验签、不据此给任何权限；后续会接入钱包签名验证（SIWE / ERC-8004
+            方向），验过的钱包身份才可以绑定更高限额。
           </li>
           <li>
             <b>正式版方向：</b>将来正式开放时是「钱包自托管」——你带自己的钱包

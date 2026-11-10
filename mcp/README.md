@@ -121,14 +121,22 @@ Workers），任何支持 MCP Streamable HTTP 的客户端都能远程接入：
 
 - 端点：`https://bit100-mcp.q3874758.workers.dev`（根路径 POST；
   `GET /health` 免认证只回服务状态）。
-- 认证：每请求带 `Authorization: Bearer <你的 agent 令牌>`。令牌由
-  项目方按申请发放（申请制不变）；服务端只存哈希（D1 `agents` 表），
-  发放/停用/改限额都是改一行 SQL，不用重部署。
-- 工具面：只读 5 个 + `place_order` + `hard_cancel_order`，共 7 个。
-  `match_order` 暂未移植（撮合引擎的 Workers 适配在后续轮次），其余
-  护栏与 stdio 版完全一致：链/对白名单、单笔/每日/频率限额（计数在
-  D1）、全局急停（D1 `config.kill_switch` 置 `1` 或绑定
-  `KILL_SWITCH=1`）、审计只追加（D1 `audit_log`）。
+- 认证：每请求带 `Authorization: Bearer <你的 agent 令牌>`。服务端
+  只存哈希（D1 `agents` 表），停用/改限额都是改一行 SQL，不用重部署。
+- **自助注册（第 59 轮起，取代申请制）**：AI 读托管说明书
+  `GET /skill.md` 后，自己 `POST /register` 注册即得令牌（明文只
+  显示一次）。限额只来自服务端常量（单笔 10 / 每日 50 / 每分钟
+  10 次），头 24 小时爬坡收紧（5 / 20 / 5）；角色只开放 maker /
+  taker，operator 永不自助发放；注册端点按 IP 10 次/小时 + 全局
+  100 次/小时限流，`config.registration_open='0'` 可暂停注册。
+  给人看的说明在前端「其他 → AI 接入」页（带一段可直接发给 AI
+  的话）。
+- 工具面：只读 5 个 + `place_order` + `hard_cancel_order` +
+  `match_order`（第 59 轮移植），共 8 个，与 stdio 版一致。护栏：
+  链/对白名单、单笔/每日/频率限额（第 59 轮起 D1 原子记账：check
+  即预留、中继接受即记账，见 `docs/round59-mcp-hardening-2026-11-10.md`）、
+  全局急停（D1 `config.kill_switch` 置 `1` 或绑定 `KILL_SWITCH=1`）、
+  审计只追加（D1 `audit_log`，响应返回前落库）。
 - AI 客户端配置（远程形态）：
 
 ```json
