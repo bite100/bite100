@@ -64,3 +64,27 @@ type TxCursor {
   tradeIds: [String!]!
   gasCount: Int!
 }
+
+# 第 63 轮 gas-2：gas库（GasVault）资金流事件（部署属部署步——config.yaml 的
+# 链绑定在部署时按当轮文档填入；实体与 handler 先行落地，部署步只补配置）。
+# 一行 = 一个 GasVault 事件，kind 区分五类：deposit / withdraw（ERC-4626 存取，
+# amount=资产额、secondaryAmount=份额）、conversion（公开换汇补油箱，
+# token=换出币、amount=换出量、secondaryAmount=换回的包装原生币量）、
+# shortfall（计量短缺吸收，claimId 有值、actor=受益人、counterparty=计量人）、
+# float-funded（原生币浮存注资，actor=注资人）。池子状态（总资产/水位）前端
+# 直读合约，不在索引里重算——链才是唯一账本，索引只是展示缓存。
+type GasVaultFlow {
+  id: ID!
+  contractAddress: String!
+  txHash: String!
+  logIndex: Int!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  kind: String!
+  actor: String!
+  counterparty: String
+  token: String
+  amount: BigInt!
+  secondaryAmount: BigInt
+  claimId: String
+}
