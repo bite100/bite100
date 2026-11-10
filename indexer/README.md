@@ -33,12 +33,12 @@
 ## 配置口径（部署地址/起始块）
 
 只认最新轮次切换文档的部署记录（`config.yaml` 头部有完整出处与 CREATE tx；
-现行口径为第 47 轮，见 `docs/round47-cutover-2026-11-09.md`）：
+现行口径为第 62 轮，见 `docs/round62-nonce-bitmap-2026-11-10.md` §12）：
 
 | 链 | Settlement | 起始块（部署块） |
 | --- | --- | --- |
-| Sepolia 11155111 | `0x5697F7B2178352eB391e29fc2c5681Dea864C1d9` | 12094697 |
-| Base Sepolia 84532 | `0x1021C7116cCE59f9c85683d6f1b5aD2215795949` | 56357193 |
+| Sepolia 11155111 | `0xa38c087778d76DA30654F30CB87D1ddD83f7b263` | 12102776 |
+| Base Sepolia 84532 | `0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97` | 56845937 |
 
 合约重部署后必须同步更新地址、起始块与 ABI 子集（`src/lib/settlementAbi.ts`）
 并在轮次文档登记。历史轮次地址禁止抄入。

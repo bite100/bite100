@@ -396,3 +396,34 @@ Governance/MerkleDistributor/Settlement 已把手写 MerkleProof 换 OZ
 | `32b6a59` | 块 D：中继撞号兜底 + 测试（workers 32） |
 | `4029eb2` | 块 F-10：多腿对账脚手架位图迁移（§4.1） |
 | （本文档提交） | 块 E 评估 + 块 G 轮次文档 |
+
+## 12. 部署记录（2026-11-10，部署步）
+
+**路径判断：只部署新 Settlement + 现行 Vault 改指，不换 Vault。** 依据：
+`Vault.setSettlement` 是 owner setter，支持改指；Settlement 的 vault 指针在
+构造期设定，新实例构造时指向现行 Vault 即可；关键安全点是 Vault 的锁释放
+路径（`releaseOrderLock` / `releaseExpiredOrderLock`）不经 Settlement 调用，
+改指后旧订单的剩余锁定仍可由用户/locker 释放，不会困资。旧订单因 EIP-712
+域绑定 Settlement 地址随换址整体作废（与整栈更换同口径，§10.6）。用户余额
+留在现行 Vault 原地不动。部署脚本 `contracts/script/DeployR62.s.sol`（仿
+DeployStage3 的配置复制法，另加 feeDistributor 与 governance 读回核对断言）；
+MakerVault 已退役不部署；Governance / ContributorReward 不动；旧 Settlement
+原样保留作回滚（Vault 改指回旧地址即回滚）。
+
+| 链 | Vault（不换） | 旧 Settlement（回滚） | 新 Settlement | CREATE tx | 部署块 |
+|---|---|---|---|---|---|
+| Sepolia | 0x836cEFF0140aB66D8DD984ECb18765736BA121e9 | 0x5697F7B2178352eB391e29fc2c5681Dea864C1d9 | **0xa38c087778d76DA30654F30CB87D1ddD83f7b263** | 0xd8e7d3eef6a2b997a451a63616518224b47ebae518578952572583aa6cca54cc | 12102776 |
+| Base Sepolia | 0x295F5529F5BfA4cA39290f395b1feF7EA637f5D3 | 0x1021C7116cCE59f9c85683d6f1b5aD2215795949 | **0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97** | 0xb8e3fb3c00e4629805fc487cae057e4bad50b0e0ba0e5177b34df287985a60a5 | 56845937 |
+
+配置回读（双链新实例逐项 cast 核对，与旧栈一致）：vault=现行 Vault、
+feeDistributor 沿用旧实例、governance=第 61 轮 Governance（Sepolia
+0x1A25a086053703b41fec1Fa170A9BE3975afeCce / Base
+0xc3b0ca3128ABAD6721d6C7F07D3129367d521e32）、chainConfig 沿用旧实例、
+feeBps=1、meterKeepBps=7600、gasDeductCapBps=1000、
+maxFailureGasChargeQuote=5e18、owner=deployer、relayer 未设（开放提交 B
+模型）。双链 Vault.settlement() 已改指新实例；Vault lockers 仍仅 deployer。
+
+仓库切换：frontend/src/config/chains.ts（+ chains.test.ts /
+orderSigningTypes.test.ts 期望值）、relay/src/config.ts、indexer/config.yaml
+（地址 + start_block=部署块）与 README/settlementAbi.ts 标识同步更新。MCP 骑
+前端 chains.ts 单一事实源，无独立地址表需改。

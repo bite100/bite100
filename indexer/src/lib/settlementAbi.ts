@@ -2,8 +2,8 @@
  * Settlement ABI 子集（索引器专用）——事件与 settle 系列入口。
  *
  * 来源与版本标识：contracts/out/Settlement.sol/Settlement.json（Foundry 产物，
- * 对应第 47 轮部署栈：Sepolia 0x5697F7B2178352eB391e29fc2c5681Dea864C1d9 /
- * Base Sepolia 0x1021C7116cCE59f9c85683d6f1b5aD2215795949）。合约接口变更后
+ * 对应第 62 轮部署栈：Sepolia 0xa38c087778d76DA30654F30CB87D1ddD83f7b263 /
+ * Base Sepolia 0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97）。合约接口变更后
  * 须同步更新本文件与 config.yaml 的事件签名（config.yaml 头部有同一标识）。
  * 这里只保留索引器用到的 3 个事件 + 4 个 settle 入口（calldata 解码关联
  * digest 用），其余 ABI 不复制，避免再造一份全量 ABI 副本。

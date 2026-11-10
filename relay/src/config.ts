@@ -8,10 +8,11 @@
  * MockERC20 部署）；中继只按 (链, 交易对) 查这张表来重建签名订单——查不到的
  * 交易对直接拒绝入库（与节点 pairTokens 缺失时验签失败同口径，但报错更明确）。
  *
- * 第 47 轮切换核对：settlement 已按 2026-11-09 第 47 轮部署栈更新（Sepolia
- * 0x5697F7B2178352eB391e29fc2c5681Dea864C1d9 / Base Sepolia
- * 0x1021C7116cCE59f9c85683d6f1b5aD2215795949），见
- * docs/round47-cutover-2026-11-09.md；此前内置值停在第 30 轮、
+ * 第 62 轮切换核对：settlement 已按 2026-11-10 第 62 轮部署更新（nonce
+ * 位图新 Settlement，Vault 改指不换；Sepolia
+ * 0xa38c087778d76DA30654F30CB87D1ddD83f7b263 / Base Sepolia
+ * 0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97），见
+ * docs/round62-nonce-bitmap-2026-11-10.md §12；此前内置值停在第 47 轮、
  * demo 脚本停在第 27 轮，三方不一致导致本地演示验签失败——部署前务必按
  * 最新轮次文档核对本表（或用 CHAIN_CONFIG_JSON 覆盖），见 README §7 核对项。
  */
@@ -33,7 +34,7 @@ export const DEFAULT_CHAIN_ID = 11155111
 
 const SEPOLIA: ChainRelayConfig = {
   chainId: 11155111,
-  settlement: '0x5697F7B2178352eB391e29fc2c5681Dea864C1d9',
+  settlement: '0xa38c087778d76DA30654F30CB87D1ddD83f7b263',
   rpcUrl: 'https://ethereum-sepolia.publicnode.com',
   tokens: {
     TKA: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
@@ -51,7 +52,7 @@ const SEPOLIA: ChainRelayConfig = {
 
 const BASE_SEPOLIA: ChainRelayConfig = {
   chainId: 84532,
-  settlement: '0x1021C7116cCE59f9c85683d6f1b5aD2215795949',
+  settlement: '0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97',
   rpcUrl: 'https://sepolia.base.org',
   tokens: {
     TKA: '0xd3f1136Cb3511b4546BDE5dDAC4F0D5a4D5C5D33',

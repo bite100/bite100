@@ -78,7 +78,7 @@ const SEPOLIA: ChainConfig = {
   },
   contracts: {
     vault: '0x836cEFF0140aB66D8DD984ECb18765736BA121e9',
-    settlement: '0x5697F7B2178352eB391e29fc2c5681Dea864C1d9',
+    settlement: '0xa38c087778d76DA30654F30CB87D1ddD83f7b263',
     token0: '0x93a4af54d7cD8aF7c9aEF50D3Dd3977bA1Dde28E',
     token1: '0x1530b74E6d5C2D0e2b78314b5C253E66bfC4ddc2',
     contributorReward: '0x42a1719A263eF0cd40192bCA76076720f20DBE19',
@@ -144,7 +144,7 @@ const BASE_SEPOLIA: ChainConfig = {
   },
   contracts: {
     vault: '0x295F5529F5BfA4cA39290f395b1feF7EA637f5D3',
-    settlement: '0x1021C7116cCE59f9c85683d6f1b5aD2215795949',
+    settlement: '0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97',
     token0: '0xd3f1136Cb3511b4546BDE5dDAC4F0D5a4D5C5D33',
     token1: '0x8492ccCE958803F04772C0f5B51DbbC320A54daF',
     contributorReward: '0xe39A77A9A949cefAb0AD96bb46291DF5C1cf7d07',
