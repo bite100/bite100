@@ -125,6 +125,42 @@ describe('useTokenPrice', () => {
     expect(result.current.error).toBeNull()
   })
 
+  it('第59轮：切换 token 后旧请求迟到「失败」不得污染新 token 的 error 状态', async () => {
+    // 与上一条迟到成功用例镜像：r58 只钉了迟到成功不覆写 price；
+    // 迟到失败若不被 isCurrent 守卫拦住，会把新 token 的面板打成
+    // 报错态（实现 catch 分支同样过 isCurrent，本测试钉住这条路径）
+    let rejectOld: (e: unknown) => void = () => {}
+    ;(globalThis.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+      (url: unknown) => {
+        if (String(url).includes('ids=bitcoin')) {
+          return new Promise((_resolve, reject) => {
+            rejectOld = reject
+          })
+        }
+        return Promise.resolve({
+          json: () =>
+            Promise.resolve({ ethereum: { usd: 3000, usd_24h_change: 2 } }),
+        })
+      },
+    )
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useTokenPrice(id, 0),
+      { initialProps: { id: 'bitcoin' } },
+    )
+    rerender({ id: 'ethereum' })
+    await waitFor(() => {
+      expect(result.current.price?.usd).toBe(3000)
+    })
+    expect(result.current.error).toBeNull()
+    // 旧 bitcoin 请求此刻才失败：新 token 的 error/price 都不得被动
+    await act(async () => {
+      rejectOld(new Error('network down'))
+    })
+    expect(result.current.error).toBeNull()
+    expect(result.current.price?.usd).toBe(3000)
+    expect(result.current.loading).toBe(false)
+  })
+
   it('exposes refetch that re-runs fetch', async () => {
     ;(globalThis.fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({

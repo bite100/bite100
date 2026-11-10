@@ -41,26 +41,36 @@ describe('WriteGuard 护栏', () => {
     expect(() => guard.check(capped, 2)).not.toThrow()
   })
 
-  it('每日上限累计 → over_daily_cap', () => {
+  it('每日上限累计 → over_daily_cap（第 59 轮：check 即预留，无需 record）', () => {
     const reg = AgentRegistry.load(FIXTURE_REGISTRY)
     const guard = new WriteGuard(reg)
     const capped = reg.byId('capped-test')! // 每日上限 5，单笔 2
     guard.check(capped, 2)
-    guard.record(capped, 2)
     guard.check(capped, 2)
-    guard.record(capped, 2)
     expect(() => guard.check(capped, 2)).toThrowError(
       expect.objectContaining({ code: 'over_daily_cap' }),
     )
   })
 
-  it('频率上限 → rate_limited', () => {
+  it('release 只回滚每日预留，频率不回滚（第 59 轮协议）', () => {
+    const reg = AgentRegistry.load(FIXTURE_REGISTRY)
+    const guard = new WriteGuard(reg)
+    const capped = reg.byId('capped-test')! // 每日 5，单笔 2，频率 20
+    guard.check(capped, 2)
+    guard.check(capped, 2) // 预留累计 4
+    guard.release(capped, 2) // 投递失败回滚一笔 → 2
+    guard.check(capped, 2) // 回到 4，可行
+    expect(() => guard.check(capped, 2)).toThrowError(
+      expect.objectContaining({ code: 'over_daily_cap' }),
+    )
+  })
+
+  it('频率上限 → rate_limited（第 59 轮：check 当场落频率事件）', () => {
     const reg = AgentRegistry.load(FIXTURE_REGISTRY)
     const guard = new WriteGuard(reg)
     const maker = reg.byId('maker-test')! // 3 次/分钟
     for (let i = 0; i < 3; i++) {
       guard.check(maker, 0.1)
-      guard.record(maker, 0.1)
     }
     expect(() => guard.check(maker, 0.1)).toThrowError(
       expect.objectContaining({ code: 'rate_limited' }),

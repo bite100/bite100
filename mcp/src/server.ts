@@ -19,7 +19,7 @@ export function buildServer(
   ctx: ToolContext,
   tools: ToolDef[] = [...readTools, ...writeTools, ...matchTools],
 ): McpServer {
-  const server = new McpServer({ name: 'bit100-mcp', version: '0.57.0' })
+  const server = new McpServer({ name: 'bit100-mcp', version: '0.59.0' })
   for (const tool of tools) {
     server.registerTool(
       tool.name,

@@ -1,5 +1,6 @@
-/* 「AI 接入」说明页（第 56 轮）：纯静态说明，移动端优先——
-   单列、窄屏不横滚；代码块只在块内横向滚动，不撑破页面。 */
+/* 「AI 接入」说明页（第 56 轮建，第 59 轮改自助接入）：移动端优先——
+   单列、窄屏不横滚；代码块只在块内横向滚动，不撑破页面；
+   复制按钮触控高度 ≥44px。 */
 .ai-access {
   display: flex;
   flex-direction: column;
@@ -80,4 +81,19 @@
   color: var(--b100-text);
   overflow-wrap: anywhere;
   width: 38%;
+}
+.ai-copy-btn {
+  margin-top: 12px;
+  min-height: 44px;
+  padding: 0 22px;
+  border: none;
+  border-radius: 12px;
+  background: var(--b100-accent);
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ai-copy-btn:active {
+  background: var(--b100-accent-hover);
 }

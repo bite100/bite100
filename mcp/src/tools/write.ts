@@ -38,18 +38,27 @@ export const writeTools: ToolDef[] = [
     write: true,
     handler: async (ctx, args) => {
       const input = parseArgs(placeOrderSchema, args)
-      // 护栏先行：白名单与限额在构建/签名之前判定，拒绝不产生任何链上/中继副作用
+      // 护栏先行：白名单与限额在构建/签名之前判定，拒绝不产生任何链上/中继副作用。
+      // 第 59 轮记账协议：check 即预留（频率当场落账、每日名义额当场计入）；
+      // 中继接受（200）后预留转为正式记账；投递失败才 release 回滚每日预留。
       assertAllowedChain(input.chainId)
       assertAllowedPair(input.pair)
       const notional = Number(input.price) * Number(input.amount)
-      ctx.guard.check(ctx.agent, notional)
+      await ctx.guard.check(ctx.agent, notional)
 
-      const built = await buildAndSign(ctx, input)
-      const res = await ctx.relay.postOrder(built.body)
+      let built
+      let res
+      try {
+        built = await buildAndSign(ctx, input)
+        res = await ctx.relay.postOrder(built.body)
+      } catch (e) {
+        await ctx.guard.release(ctx.agent, notional)
+        throw e
+      }
       if (res.status !== 200) {
+        await ctx.guard.release(ctx.agent, notional)
         throw new ToolError('relay_rejected', `中继拒单 HTTP ${res.status}: ${res.text}`)
       }
-      ctx.guard.record(ctx.agent, notional)
       return {
         orderId: built.data.orderId,
         digest: built.digest,
@@ -73,7 +82,11 @@ export const writeTools: ToolDef[] = [
     handler: async (ctx, args) => {
       const { chainId, digest } = parseArgs(hardCancelSchema, args)
       assertAllowedChain(chainId)
-      ctx.guard.check(ctx.agent, 0) // 急停/停用对撤单同样生效
+      // 名义额 0：check 只落一条频率事件。第 59 轮起频率在 check 时
+      // 落账，后面每条路径（alreadyCancelled / no_active_lock 提前
+      // 返回、not_locker 抛错、成功撤单）都天然计数——第 57 轮这些
+      // 路径走 record-on-success 时全部漏记（审计 ⑥）。
+      await ctx.guard.check(ctx.agent, 0) // 急停/停用对撤单同样生效
 
       if (await ctx.chain.orderCancelled(chainId, digest)) {
         return { chainId, digest, cancelled: true, alreadyCancelled: true }
@@ -104,7 +117,6 @@ export const writeTools: ToolDef[] = [
       const tx = await vaultWrite.releaseOrderLock(digest)
       const receipt = await tx.wait()
       const cancelled = await ctx.chain.orderCancelled(chainId, digest)
-      ctx.guard.record(ctx.agent, 0)
       return {
         chainId,
         digest,

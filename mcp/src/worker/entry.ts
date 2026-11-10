@@ -9,24 +9,28 @@
  *   注册表/限额/审计 文件+内存 → D1（src/worker/state.ts）；
  *   签名钥 env 文件 → Worker secret 绑定（经 signers 的注入钩子）。
  *
- * 工具面（v1）：只读 5 + place_order + hard_cancel_order。
- * match_order 暂未移植：它骑的前端撮合引擎（dualread + matching）是
- * 为浏览器/Node 装配的整包，Workers 移植需单独评估打包体积与运行时
- * 差异，留待下一轮；在补齐前客户端看到的工具清单里没有它，不假装。
+ * 工具面：第 59 轮块 2 起与 stdio 全面对齐——只读 5 + place_order +
+ * hard_cancel_order + match_order（共 8）。match_order 骑的前端撮合
+ * 引擎经同一套 esbuild 打包进入 Worker（build-worker.mjs），双读的
+ * 中继适配器通过 ctx 注入服务绑定 fetch（见 tools/common.ts）。
  *
- * 全部请求（含只读）都要 Bearer 令牌，与 stdio 版「无令牌连工具都
- * 调不了」的口径一致。/health 例外（只回服务名与时间，无数据）。
+ * MCP 请求（含只读）都要 Bearer 令牌，与 stdio 版「无令牌连工具都
+ * 调不了」的口径一致。公开面只有三个：/health（只回服务名与时间）、
+ * GET /skill.md（托管说明书）、POST /register（自助注册，第 59 轮
+ * 块 3——发令牌的入口本身不可能先有令牌，靠端点限流+紧限额兜底）。
  */
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { buildServer } from '../server'
 import { readTools } from '../tools/read'
 import { writeTools } from '../tools/write'
+import { matchTools } from '../tools/match'
 import { RelayClient } from '../relay'
 import { EthersChainReader } from '../chain'
 import { DEFAULT_RELAY_URL } from '../config'
 import { _setKeyTextProvider } from '../signers'
 import type { ToolContext } from '../tools/common'
 import { buildRequestState, keyForRole, type WorkerEnv } from './state'
+import { handleRegister, skillMarkdown } from './register'
 
 function unauthorized(message: string): Response {
   return Response.json(
@@ -36,10 +40,22 @@ function unauthorized(message: string): Response {
 }
 
 export default {
-  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
     if (url.pathname === '/health') {
       return Response.json({ ok: true, service: 'bit100-mcp', time: Date.now() })
+    }
+    // 第 59 轮块 3：自助注册与托管说明书是公开面（注册本身就是发
+    // 令牌的入口，不可能要求先有令牌）；其余路径照旧全员要 Bearer。
+    if (url.pathname === '/skill.md') {
+      if (request.method !== 'GET') return new Response('Method Not Allowed', { status: 405 })
+      return new Response(skillMarkdown(url.origin), {
+        headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
+      })
+    }
+    if (url.pathname === '/register') {
+      if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 })
+      return handleRegister(request, env)
     }
     if (request.method !== 'POST') {
       return new Response('Method Not Allowed', { status: 405 })
@@ -48,33 +64,71 @@ export default {
     const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : ''
     if (!token) return unauthorized('缺少 Authorization: Bearer <agent 令牌>')
 
-    const state = await buildRequestState(env, token)
+    // 状态装配要读 D1；D1 故障时失败关闭：一个工具都不执行（也就
+    // 不存在未授权签名），回 503 而不是把故障伪装成令牌问题。
+    let state
+    try {
+      state = await buildRequestState(env, token)
+    } catch {
+      return Response.json(
+        {
+          jsonrpc: '2.0',
+          error: { code: -32002, message: '服务状态存储暂不可用（D1），请求未执行' },
+          id: null,
+        },
+        { status: 503 },
+      )
+    }
     if (!state) return unauthorized('令牌无效：未找到对应的 agent 身份')
 
     // 签名钥只经 secret 绑定注入（signers 钩子）；钥不进代码/配置/日志
     _setKeyTextProvider((role) => keyForRole(env, role))
 
     const relayBinding = env.RELAY
+    const relayFetch = relayBinding ? (url: string, init?: RequestInit) => relayBinding.fetch(url, init) : undefined
     const toolCtx: ToolContext = {
-      relay: new RelayClient(
-        env.RELAY_URL ?? DEFAULT_RELAY_URL,
-        relayBinding ? (url, init) => relayBinding.fetch(url, init) : undefined,
-      ),
+      relay: new RelayClient(env.RELAY_URL ?? DEFAULT_RELAY_URL, relayFetch),
       chain: new EthersChainReader(),
       registry: state.registry,
       guard: state.guard,
       audit: state.audit,
       agent: state.agent,
+      // 撮合工具的双读适配器同走服务绑定（块 2）
+      relayBaseUrl: env.RELAY_URL ?? DEFAULT_RELAY_URL,
+      relayFetch,
     }
-    const server = buildServer(toolCtx, [...readTools, ...writeTools])
+    const server = buildServer(toolCtx, [...readTools, ...writeTools, ...matchTools])
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // 无状态：每请求独立装配（Workers 口径）
       enableJsonResponse: true,
     })
     await server.connect(transport)
     const response = await transport.handleRequest(request)
-    // 审计与限额计数落库不阻塞响应，经 waitUntil 在响应后刷盘
-    ctx.waitUntil(state.flush())
+    // 第 59 轮（修第 57 轮 P1-③）：审计在**返回响应前** await 刷盘，
+    // 使「成功响应」永远意味着审计已落库。用量记账已在 check 内
+    // 同步落 D1（state.ts），不走这条通道。刷盘失败：重试一次；仍
+    // 失败 → 丢弃成功结果回 500，丢失显性化——已发生的交易不回滚
+    // （订单凭 digest 可用读工具对账），但本服务绝不假装记上了。
+    try {
+      await state.flush()
+    } catch {
+      try {
+        await state.flush()
+      } catch {
+        return Response.json(
+          {
+            jsonrpc: '2.0',
+            error: {
+              code: -32003,
+              message:
+                '审计落库失败：本次调用结果未确认送达。任何已发生的交易不会被回滚，请凭订单 digest 用只读工具对账后再决定是否重试。',
+            },
+            id: null,
+          },
+          { status: 500 },
+        )
+      }
+    }
     return response
   },
 }

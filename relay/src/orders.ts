@@ -81,6 +81,18 @@ export interface SignedOrder {
 const SCALE_1E18 = 10n ** 18n
 const DEFAULT_TTL_SEC = 7 * 24 * 3600
 
+/**
+ * 订单时效上限（第 59 轮块 4，审计 ②）：expiresAt 只验「未过期」时，
+ * 远未来订单会永久占住 D1 与订单簿（定时清理只删已过期行，永远够
+ * 不着它们）。入库时拒绝 TTL 超过 30 天的订单；createdAt（签名字段
+ * timestamp）只许落在 [now-1h, now+15min] 窗口内（容时钟偏差），
+ * 窗口外一律拒——这两个检查都在验签之前/之后同口径执行，不改变
+ * 任何合法客户端的行为（网页端订单 TTL 以小时计、createdAt=当下）。
+ */
+export const MAX_ORDER_TTL_SEC = 30 * 24 * 3600
+export const MAX_CREATED_AT_PAST_SEC = 3600
+export const MAX_CREATED_AT_FUTURE_SEC = 900
+
 function parseUint(v: unknown, field: string): bigint {
   if (typeof v === 'number') {
     if (!Number.isSafeInteger(v) || v < 0) throw new Error(`invalid ${field}`)
@@ -251,6 +263,42 @@ export function defaultGetPublicClient(chain: ChainRelayConfig): PublicClient | 
 }
 
 /**
+ * 地址有无合约代码的短缓存（第 59 轮块 4，审计 ③）：ERC-1271 回退
+ * 对 EOA 地址必然要烧一次 RPC 且必然失败——伪造订单正靠这个放大
+ * RPC 用量。先用一次 getCode 探明并缓存 60 秒：已知 EOA 直接本地
+ * 拒绝，不再调 verifyTypedData。TTL 只设 60 秒是因为反事实钱包
+ * （智能账户）可能稍后在同一地址部署代码，缓存太久会误拒合法单；
+ * 60 秒内的重复伪造已足够挡住放大。客户端没有 getCode（如单测
+ * mock）或 RPC 出错时返回 null = 未知，照常走回退判定，不改变语义。
+ */
+const codeCache = new Map<string, { hasCode: boolean; atMs: number }>()
+const CODE_CACHE_TTL_MS = 60_000
+
+export function _resetErc1271CodeCache(): void {
+  codeCache.clear()
+}
+
+async function hasContractCode(
+  client: PublicClient,
+  chain: ChainRelayConfig,
+  address: Address,
+): Promise<boolean | null> {
+  const key = `${chain.chainId}:${address.toLowerCase()}`
+  const hit = codeCache.get(key)
+  if (hit && Date.now() - hit.atMs < CODE_CACHE_TTL_MS) return hit.hasCode
+  if (typeof client.getCode !== 'function') return null
+  try {
+    const code = await client.getCode({ address })
+    const has = !!code && code !== '0x'
+    if (codeCache.size > 1000) codeCache.clear()
+    codeCache.set(key, { hasCode: has, atMs: Date.now() })
+    return has
+  } catch {
+    return null
+  }
+}
+
+/**
  * 验签（双路，与节点 handlePostOrder 的两段式同口径）：
  *  1. EOA 快路径：viem 纯本地 verifyTypedData（ecrecover == userAddress），不走网络；
  *  2. ERC-1271 回退：快路径失败且该链配了 RPC 时，用 publicClient.verifyTypedData
@@ -281,6 +329,9 @@ export async function verifyOrder(
   const getClient = deps.getPublicClient ?? defaultGetPublicClient
   const client = getClient(chain)
   if (!client) return false
+  // 已知 EOA（无合约代码）时 ERC-1271 回退注定失败：本地直接拒绝，
+  // 不再为每张伪造订单烧一次 eth_call（审计 ③）。
+  if ((await hasContractCode(client, chain, so.userAddress)) === false) return false
   try {
     // args 与本地路径同一份入参；PublicClient 的泛型签名比运行时要求更严，做一次定点转换
     return await client.verifyTypedData(

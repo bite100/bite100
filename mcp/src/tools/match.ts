@@ -35,18 +35,35 @@ export const matchTools: ToolDef[] = [
       assertAllowedChain(input.chainId)
       assertAllowedPair(input.pair)
       const notional = Number(input.price) * Number(input.amount)
-      ctx.guard.check(ctx.agent, notional)
+      // 第 59 轮记账协议（修第 57 轮 P1-①）：check 即预留；记账时点 =
+      // 中继接受。中继 200 之后无论最终成交与否（no-match 留簿同样
+      // 消耗）都不回滚；投递失败（组单/签名抛错、中继非 200）才
+      // release——旧实现只在 outcome=submitted 时 record，未成交单
+      // 零成本，本条即关闭该绕行。
+      await ctx.guard.check(ctx.agent, notional)
 
-      const built = await buildAndSign(ctx, input)
-      const res = await ctx.relay.postOrder(built.body)
+      let built
+      let res
+      try {
+        built = await buildAndSign(ctx, input)
+        res = await ctx.relay.postOrder(built.body)
+      } catch (e) {
+        await ctx.guard.release(ctx.agent, notional)
+        throw e
+      }
       if (res.status !== 200) {
+        await ctx.guard.release(ctx.agent, notional)
         throw new ToolError('relay_rejected', `中继拒单 HTTP ${res.status}: ${res.text}`)
       }
+      // —— 中继已接受：预留转为正式记账，下方撮合结果不再影响记账 ——
 
       const signer = loadSignerForRole(ctx.agent.role)
       const ethSigner = signer.connect(ctx.chain.provider(input.chainId))
       const deps = {
-        relayAdapter: createRelayBookAdapter(relayUrl()),
+        // 第 59 轮块 2（Workers 移植）：宿主经 ctx 注入中继地址与服务
+        // 绑定 fetch（适配器本就支持 (baseUrl, fetchFn) 注入，阶段 4
+        // 运行器同法）；stdio 不注入时回落 relayUrl()，行为不变。
+        relayAdapter: createRelayBookAdapter(ctx.relayBaseUrl ?? relayUrl(), ctx.relayFetch),
         chainReader: createChainStateReader(createViemChainTransport()),
       }
       let outcome = await executeFrontendMatch(
@@ -73,7 +90,6 @@ export const matchTools: ToolDef[] = [
           deps,
         )
       }
-      if (outcome.status === 'submitted') ctx.guard.record(ctx.agent, notional)
       return {
         takerOrderId: built.data.orderId,
         takerDigest: built.digest,

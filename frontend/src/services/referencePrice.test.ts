@@ -14,6 +14,7 @@ import {
   evaluateFeedReading,
   getFeedConfig,
   isDeviationWarning,
+  isKnownUsdStableToken,
   resolveMarketReference,
   resolveReferencePrice,
   staleAfterSec,
@@ -24,6 +25,30 @@ import {
 const NOW = 1_794_056_000
 const SEPOLIA = 11155111
 const BASE_SEPOLIA = 84532
+
+describe('isKnownUsdStableToken（第 59 轮块 4，审计 P2-3）', () => {
+  // Sepolia 链配置登记的正牌 USDT 地址（config/chains.ts tokens 表）
+  const SEPOLIA_USDT = '0x6Ca8cb68Ee5BB15474f1cfFE07B895C974Ab9c6e'
+  const SEPOLIA_BTC = '0x8EDa0025C245B10eA1E10c257674B794C85350f3'
+
+  it('正牌地址（大小写不敏感）→ true', () => {
+    expect(isKnownUsdStableToken(SEPOLIA, SEPOLIA_USDT)).toBe(true)
+    expect(isKnownUsdStableToken(SEPOLIA, SEPOLIA_USDT.toLowerCase())).toBe(true)
+  })
+
+  it('自称 USDT 的仿冒地址 → false（旧符号口径会误判 true）', () => {
+    expect(
+      isKnownUsdStableToken(SEPOLIA, '0x1111111111111111111111111111111111111111'),
+    ).toBe(false)
+  })
+
+  it('链配置内的非稳定币地址 → false；地址缺省/未知链 → false', () => {
+    expect(isKnownUsdStableToken(SEPOLIA, SEPOLIA_BTC)).toBe(false)
+    expect(isKnownUsdStableToken(SEPOLIA, undefined)).toBe(false)
+    expect(isKnownUsdStableToken(SEPOLIA, null)).toBe(false)
+    expect(isKnownUsdStableToken(999999, SEPOLIA_USDT)).toBe(false)
+  })
+})
 
 describe('getFeedConfig', () => {
   it('Sepolia ETH/USD 指向官方喂价地址，心跳 3600s', () => {

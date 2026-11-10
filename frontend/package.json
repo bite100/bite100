@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "check:abi": "node scripts/check-governance-abi.mjs",
     "check:abi:selftest": "node scripts/check-governance-abi.test.mjs",
+    "test:stage4-config": "node scripts/stage4/config.test.mjs",
     "test:soak-timing": "node scripts/soak/timing.test.mjs",
     "test:soak-report": "node scripts/soak/report.test.mjs"
   },

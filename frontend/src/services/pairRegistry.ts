@@ -48,6 +48,9 @@ export interface ResolvedPair {
 /** 种子代币的小数位：第 25 轮部署的 MockERC20 均为 18 位（部署文档口径） */
 export const SEED_TOKEN_DECIMALS = 18
 
+/** 代币 decimals 支持上限（与中继 pairs.ts MAX_TOKEN_DECIMALS 同口径，第 59 轮对齐） */
+export const MAX_TOKEN_DECIMALS = 36
+
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 const PAIR_KEY_RE = /^(\d+):(0x[0-9a-fA-F]{40})\/(0x[0-9a-fA-F]{40})$/
 
@@ -152,16 +155,29 @@ export async function fetchListedPairs(
   const fetchFn = opts.fetchFn ?? ((url: string, init?: RequestInit) => fetch(url, init))
   const p = (async () => {
     try {
-      const res = await withTimeout(
-        fetchFn(`${RELAY_URL}/pairs?chain=${chainId}`, {
-          signal: AbortSignal.timeout(8000),
-        }),
-        8000,
-        'relay pairs',
-      )
-      if (!res.ok) return listedCache.get(chainId) ?? []
-      const data = (await res.json()) as RelayPairJson[]
-      const rows = Array.isArray(data) ? data.map(relayPairToListed) : []
+      // 第 59 轮块 4（审计 P3-1）：中继 /pairs 已分页（单页上限 500，
+      // X-Pairs-Truncated 头报截断）——顺头翻页取全集，最多 10 页
+      // （5000 对）封顶防异常响应拖死；老中继无该头时第一页即全集。
+      const PAGE = 500
+      const MAX_PAGES = 10
+      const rows: ListedPair[] = []
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const res = await withTimeout(
+          fetchFn(
+            `${RELAY_URL}/pairs?chain=${chainId}&limit=${PAGE}&offset=${page * PAGE}`,
+            { signal: AbortSignal.timeout(8000) },
+          ),
+          8000,
+          'relay pairs',
+        )
+        if (!res.ok) return listedCache.get(chainId) ?? []
+        const data = (await res.json()) as RelayPairJson[]
+        if (!Array.isArray(data)) break
+        rows.push(...data.map(relayPairToListed))
+        // headers 在真实 Response 上恒存在；可选链是给单测的
+        // Response 替身（无 headers 字段）留的兼容口径——无头即单页全集
+        if (res.headers?.get?.('X-Pairs-Truncated') !== 'true') break
+      }
       listedCache.set(chainId, rows)
       return rows
     } catch {
@@ -321,7 +337,11 @@ export async function readTokenMetadata(
     const nm = String(name).replace(/\s+/g, ' ').trim().slice(0, 128)
     if (nm === '') return null
     const dec = Number(decimals)
-    if (!Number.isInteger(dec) || dec < 0 || dec > 255) return null
+    // 第 59 轮块 4（审计 P2-2，与中继 pairs.ts MAX_TOKEN_DECIMALS 对齐）：
+    // decimals 上限从 ERC-20 字节极限 255 收紧到 36——超出前端定价
+    // 精度可处理范围（18 + quote − base 须 ≥ 0）的代币读进来也交易
+    // 不了，注册前置校验与中继注册端同口径拒绝。
+    if (!Number.isInteger(dec) || dec < 0 || dec > MAX_TOKEN_DECIMALS) return null
     return { address: address.toLowerCase(), symbol: sym, name: nm, decimals: dec }
   } catch {
     return null

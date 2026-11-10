@@ -8,6 +8,11 @@
  *   kind = 30078（NIP-78 参数化可替换应用数据；可用 NOSTR_KIND 覆盖）
  *   tags: ["d", <order digest>]            —— 同一订单重复发布在 Nostr 侧自动收敛为同一条
  *         ["pair", <pair>] ["chain", <chainId>] ["exp", <expiresAt unix 秒>]
+ *         ["expiration", <expiresAt unix 秒>] —— 第 59 轮块 4 起并行带上
+ *         NIP-40 标准过期标签（审计 ⑤ 的最小修法）：支持 NIP-40 的中继
+ *         会在到期后自行删除事件，"exp" 是中继自有标签、老读端不认，
+ *         两者并存兼容；注意这仍不构成镜像侧的撤单墓碑——订单状态以
+ *         链上为准（设计口径不变）。
  *   content = 投递原文 JSON（与 POST /orders 请求体一致，含签名）
  *
  * 邮差私钥只从环境变量 NOSTR_POSTMAN_SECRET_HEX（64 位 hex）读取（生产用
@@ -71,6 +76,7 @@ export function buildOrderEvent(
       ['pair', input.pair],
       ['chain', String(input.chainId)],
       ['exp', String(input.expiresAt)],
+      ['expiration', String(input.expiresAt)],
     ],
     content: input.rawJson,
   }

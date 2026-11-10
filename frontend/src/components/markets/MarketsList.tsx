@@ -19,7 +19,7 @@ import { usePairStats } from '../../hooks/usePairStats'
 import { useReferencePrice } from '../../hooks/useReferencePrice'
 import { useListedPairs } from '../../hooks/useListedPairs'
 import { useResolvedPair } from '../../hooks/useResolvedPair'
-import { isUsdStableSymbol } from '../../services/referencePrice'
+import { isKnownUsdStableToken } from '../../services/referencePrice'
 import { CHAIN_ID } from '../../config'
 import {
   filterMarketRows,
@@ -410,6 +410,10 @@ function RowCollector({
   })
   // 第六十轮：符号走解析层（自助对为地址型键）；$ 参考价仅在美元计价外部源
   // 且计价币为美元稳定币时成立（否则参考价是计价币口径，不能冠 $ 展示）
+  // 第 59 轮块 4 收紧（审计 P2-3）：dexscreener 分支不再只认符号——
+  // 自助对可注册自称 USDT 的任意代币，必须地址与链配置登记的正牌
+  // 稳定币一致（isKnownUsdStableToken）才冠 $；种子对解析出的正是
+  // 配置地址，行为不变。
   const resolved = useResolvedPair(CHAIN_ID, pair)
   const [seedBase, seedQuote] = pair.split('/')
   const base = resolved?.base.symbol ?? seedBase
@@ -417,7 +421,8 @@ function RowCollector({
   const refUsd =
     reference.status === 'ok' &&
     (reference.ref.source === 'chainlink' ||
-      (reference.ref.source === 'dexscreener' && isUsdStableSymbol(quote)))
+      (reference.ref.source === 'dexscreener' &&
+        isKnownUsdStableToken(CHAIN_ID, resolved?.quote.address)))
       ? reference.ref.price
       : null
 

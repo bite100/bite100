@@ -154,9 +154,12 @@ describe('GET /orders 查询', () => {
 
 describe('GET /orderbook 聚合', () => {
   it('买卖分开、价格-时间排序，形状为 {pair, bids, asks}', async () => {
-    const buyLow = await makeSignedOrder({ side: 'buy', price: '50000000000000000000000', createdAt: 1700000100, expiresAt: 1999999999 })
-    const buyHigh = await makeSignedOrder({ side: 'buy', price: '51000000000000000000000', createdAt: 1700000200, expiresAt: 1999999999 })
-    const sell = await makeSignedOrder({ side: 'sell', price: '52000000000000000000000', createdAt: 1700000300, expiresAt: 1999999999 })
+    // 时间戳取当前时刻：第 59 轮入库窗口（createdAt 近 1 小时内、
+    // TTL ≤ 30 天）会拒旧实现时期的固定历史/远未来时间戳夹具
+    const now = Math.floor(Date.now() / 1000)
+    const buyLow = await makeSignedOrder({ side: 'buy', price: '50000000000000000000000', createdAt: now, expiresAt: now + 86400 })
+    const buyHigh = await makeSignedOrder({ side: 'buy', price: '51000000000000000000000', createdAt: now + 1, expiresAt: now + 86400 })
+    const sell = await makeSignedOrder({ side: 'sell', price: '52000000000000000000000', createdAt: now + 2, expiresAt: now + 86400 })
     await postOrder(buyLow)
     await postOrder(buyHigh)
     await postOrder(sell)
@@ -183,5 +186,59 @@ describe('GET /health', () => {
     expect(status).toBe(200)
     expect((data as { ok: boolean; db: string }).ok).toBe(true)
     expect((data as { ok: boolean; db: string }).db).toBe('ok')
+  })
+})
+
+/** 第 59 轮块 4：入库加固（审计 ①②③ 的端到端回归） */
+describe('第 59 轮块 4：POST /orders 入库加固', () => {
+  it('状态污染回归：请求体自报 status/filled 被忽略，入库恒 open/0 且订单簿可见（审计 ①）', async () => {
+    const body = await makeSignedOrder({})
+    // status/filled 不在签名覆盖内：攻击者抢先投递他人订单并自报
+    // status='cancelled'、filled='999'——旧实现原样落库把订单藏出
+    // 订单簿。现在服务端生成状态，自报值必须被完全忽略。
+    const res = await postOrder({ ...body, status: 'cancelled', filled: '999' })
+    expect(res.status).toBe(200)
+    const { results } = await env.DB.prepare(
+      'SELECT status, filled FROM orders WHERE order_id = ?',
+    )
+      .bind(body.orderId)
+      .all<{ status: string; filled: string }>()
+    expect(results).toHaveLength(1)
+    expect(results[0].status).toBe('open')
+    expect(results[0].filled).toBe('0')
+    const book = (await getJson(`/orderbook?pair=${encodeURIComponent(body.pair)}`)).data as unknown as {
+      bids: { orderId: string }[]
+      asks: { orderId: string }[]
+    }
+    const ids = [...book.bids, ...book.asks].map((r) => r.orderId)
+    expect(ids).toContain(body.orderId)
+  })
+
+  it('TTL 上限：expiresAt 超过 30 天 → 400 order ttl too long（审计 ②）', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const body = await makeSignedOrder({ createdAt: now, expiresAt: now + 31 * 24 * 3600 })
+    const res = await postOrder(body)
+    expect(res.status).toBe(400)
+    expect(await res.text()).toContain('order ttl too long')
+  })
+
+  it('createdAt 窗口：早于 1 小时 → 400 order timestamp out of window（审计 ②）', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const body = await makeSignedOrder({ createdAt: now - 7200, expiresAt: now + 3600 })
+    const res = await postOrder(body)
+    expect(res.status).toBe(400)
+    expect(await res.text()).toContain('order timestamp out of window')
+  })
+
+  it('去重前置：已存订单换上垃圾签名重投 → 仍 200 duplicate（证明验签未先跑，审计 ③）', async () => {
+    const body = await makeSignedOrder({})
+    const first = await postOrder(body)
+    expect(first.status).toBe(200)
+    // 垃圾签名格式合法（0x + 130 hex）但签名者完全不对：若实现先
+    // 验签后去重，这里会是 401；先去重则直接 duplicate:true
+    const res = await postOrder({ ...body, signature: `0x${'11'.repeat(65)}` })
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { duplicate?: boolean }
+    expect(data.duplicate).toBe(true)
   })
 })
