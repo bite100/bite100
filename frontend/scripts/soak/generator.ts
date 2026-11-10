@@ -11,8 +11,8 @@
  * - 签名字段重构不另写一套：复用 dualread/digest 的 buildSignedOrderData
  *   与 computeOrderDigest（与前端/节点/中继三方同一口径），签名走既有
  *   ORDER_TYPES / getEIP712Domain（services/orderSigningTypes）。
- * - nonce 取链上 Settlement.getCurrentNonce（与前端 fetchOrderNonce
- *   同一口径），批次内顺序递增（结算逐单消费 nonce 的语义）。
+ * - nonce 游标首次由链上 Settlement.nonceBitmap 扫描播种（第 62 轮
+ *   位图口径，与前端 fetchOrderNonce 同一语义），批次内顺序递增。
  * - 每单先预检 Vault.availableBalance 是否覆盖落锁义务（卖单锁
  *   tokenIn×amountIn、买单锁 tokenOut×amountOut）：不足则跳过该单并
  *   在结果里给出确切缺口数字——本工具绝不自行给钱包注资。
@@ -42,9 +42,12 @@ export const TESTNET_CHAINS = [11155111, 84532] as const
 const SETTLEMENT_NONCE_ABI = [
   {
     type: 'function',
-    name: 'getCurrentNonce',
+    name: 'nonceBitmap',
     stateMutability: 'view',
-    inputs: [{ name: 'user', type: 'address' }],
+    inputs: [
+      { name: 'user', type: 'address' },
+      { name: 'wordPos', type: 'uint256' },
+    ],
     outputs: [{ name: '', type: 'uint256' }],
   },
 ] as const
@@ -91,15 +94,27 @@ function publicClient(chainId: number) {
   return { cfg, client: createPublicClient({ transport: http(cfg.rpcUrl) }) }
 }
 
+/**
+ * 游标播种（第 62 轮位图口径）：从 word 0 起扫描 nonceBitmap，取第一个
+ * 未置位的位作为游标起点。与前端分配器（nonceAllocator）同一语义；
+ * 链上位图看不到未结订单，故游标仍须由调用方跨批次持有（见 generateBatch）。
+ */
 export async function currentNonce(chainId: number, user: string): Promise<number> {
   const { cfg, client } = publicClient(chainId)
-  const n = await client.readContract({
-    address: cfg.contracts.settlement as `0x${string}`,
-    abi: SETTLEMENT_NONCE_ABI,
-    functionName: 'getCurrentNonce',
-    args: [user as `0x${string}`],
-  })
-  return Number(n)
+  const FULL_WORD = (1n << 256n) - 1n
+  for (let wordPos = 0n; ; wordPos++) {
+    const word = await client.readContract({
+      address: cfg.contracts.settlement as `0x${string}`,
+      abi: SETTLEMENT_NONCE_ABI,
+      functionName: 'nonceBitmap',
+      args: [user as `0x${string}`, wordPos],
+    })
+    if (word !== FULL_WORD) {
+      let bit = 0
+      while (((word >> BigInt(bit)) & 1n) === 1n) bit++
+      return Number(wordPos) * 256 + bit
+    }
+  }
 }
 
 export async function vaultAvailable(
@@ -155,8 +170,8 @@ let orderSeq = 0
 
 /**
  * 按规格批量签发（逐单预检 + 签名）。nonce 游标由调用方跨批次持有
- * （nonceCursor 参数）：首次为某 (链，钱包) 签发时读链上 getCurrentNonce
- * 作起点，之后顺序递增——链上 nonce 只在结算时消费，逐批重读会让不同
+ * （nonceCursor 参数）：首次为某 (链，钱包) 签发时扫描链上 nonceBitmap
+ * 作起点，之后顺序递增——链上位图只在结算时置位，逐批重读会让不同
  * 订单共用同一 nonce，游标必须跨批次连续。
  */
 export async function generateBatch(

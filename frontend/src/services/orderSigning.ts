@@ -6,6 +6,11 @@ import {
   CANCEL_TYPES,
   type OrderData,
 } from './orderSigningTypes'
+import {
+  allocateNonce,
+  createNonceCursorStorage,
+  nonceCursorStorageKey,
+} from './nonceAllocator'
 
 export type { OrderData } from './orderSigningTypes'
 
@@ -22,11 +27,13 @@ export async function signOrder(
 }
 
 const SETTLEMENT_NONCE_ABI = [
-  'function getCurrentNonce(address user) view returns (uint256)',
+  'function nonceBitmap(address user, uint256 wordPos) view returns (uint256)',
 ]
 
 /**
- * 读取用户当前链上结算 nonce（下单签名必须用它，结算时被合约消耗）。
+ * 分配本单的链上结算 nonce（第 62 轮起为无序位图语义）：由位图分配器
+ * （nonceAllocator）取一个链上未消耗、且不被本客户端其他在途订单占用
+ * 的 nonce——位图位在结算时才置位，只读链会让连下的两单撞同一 nonce。
  * settlementAddress 缺省取该链 Settlement（域绑定的 verifyingContract）。
  */
 export async function fetchOrderNonce(
@@ -37,8 +44,13 @@ export async function fetchOrderNonce(
 ): Promise<number> {
   const settlement = settlementAddress ?? getEIP712Domain(chainId).verifyingContract
   const contract = new ethers.Contract(settlement, SETTLEMENT_NONCE_ABI, runner)
-  const nonce: bigint = await contract.getCurrentNonce(userAddress)
-  return Number(nonce)
+  return allocateNonce(
+    {
+      readWord: async (wordPos: number) =>
+        BigInt(await contract.nonceBitmap(userAddress, wordPos)),
+    },
+    createNonceCursorStorage(nonceCursorStorageKey(chainId, userAddress)),
+  )
 }
 
 /** 撤单签名（域与下单签名同规则，按链生成）。 */

@@ -52,7 +52,7 @@ Order(string orderId,address userAddress,address tokenIn,address tokenOut,uint25
 | price | 报价，1e18 定点缩放：`price = amountOut * 1e18 / amountIn` |
 | timestamp | 下单时间（Unix 秒），不得晚于链上当前时间 |
 | expiresAt | 过期时间（Unix 秒），必填；链上时间超过即不可结算 |
-| nonce | 签名者的**链上结算 nonce**：下单时读取 `Settlement.getCurrentNonce(user)`；不是时间戳、不是消息去重 nonce（P2P 广播层的同名字段是另一概念，不得混用） |
+| nonce | 签名者的**链上结算 nonce（第 62 轮起为无序位图，Permit2 式）**：下单时由客户端分配器取一个链上未消耗（`Settlement.nonceBitmap` 对应位未置）、且不被本用户其他在途订单占用的 nonce；nonce 之间无顺序关系，任意顺序结算互不阻塞。不是时间戳、不是消息去重 nonce（P2P 广播层的同名字段是另一概念，不得混用） |
 | side | **订单方向（阶段 3 新增签名字段，`uint8`，置于结构末尾）**：`0 = BUY`（签名者付 tokenOut、收 tokenIn）、`1 = SELL`（签名者付 tokenIn、收 tokenOut）。与订单簿/中继行的自报 side 字符串一一对应（`buy ↔ 0`、`sell ↔ 1`，前端 sideProof 的枚举别名口径一致）。非法值（∉ {0,1}）在结算与落锁时均被拒 |
 
 字符串字段（orderId）按 EIP-712 规则以 `keccak256(bytes(value))` 进 structHash。
@@ -90,9 +90,16 @@ tokenIn = maker 卖出、tokenOut = taker 卖出）。合约逐项校验：
    方向计）。每笔成交按方向折算后累加，两侧都不得超过签名量。此规则同时支持
    部分成交（一单多笔结算）与防超额重放（全额成交后重复提交同一 Fill 必因超额
    被拒）。
-5. **nonce 独占**：订单首次结算时经 `OrderNonceManager.useNonce` 消耗其 nonce
-   （单调水位）；同一 digest 的后续部分成交跳过消耗；**不同订单复用同一 nonce
-   永远无法结算**（其 digest 无成交记录且 nonce 已被占用 → 拒绝）。
+5. **nonce 独占（第 62 轮改为无序位图）**：订单首次结算时经
+   `OrderNonceManager.useNonce` 消耗其 nonce——消耗 = 在签名者的
+   `nonceBitmap` 位图中置位（nonce 高 248 位选字、低 8 位选位，Permit2
+   SignatureTransfer 同语义）；同一 digest 的后续部分成交跳过消耗；**不同
+   订单复用同一 nonce 永远无法结算**（其 digest 无成交记录且 nonce 已被
+   占用 → 拒绝）。nonce 之间无顺序关系：低 nonce 不被高 nonce 的结算阻塞，
+   先签的单可以后结。用户可经 `invalidateUnorderedNonces(wordPos, mask)`
+   主动失效自己的 nonce（链上撤单原语：掩码置 1 的位永不可被消耗，撤单
+   模型见第 62 轮轮次文档）；位图失效不释放 Vault 锁，已落锁订单的撤单
+   仍走既有硬撤路径。
 
 批量入口（`settleTradesBatch` / `settleTradesBatchWithGasSavings` /
 `settleTradesBatchWithMerkle`）与单笔走同一套 `_verifyFill` 校验，无例外路径。
@@ -192,10 +199,12 @@ reason, gasUsedClaimed)`，由结算调用方（owner / relayer / 白名单 rela
 - **节点 API 校验**：`POST /api/order` 与撤单先做纯 ecrecover 校验；
   失败且配置了 RPC 与 settlement 地址时，改走链上校验（10 秒超时；
   RPC 错误 → fail-closed 400）。纯校验通过的 EOA 订单不受影响。
-- **nonce**：合约用户的 nonce 仍由 `Settlement.getCurrentNonce(userAddress)`
-  读取，与 EOA 订单同一规则（§2）。注意：Settlement 换地址重部署后，
-  `orderFilled`/`usedNonces` 从 0 起算（域绑定地址，digest 随之改变），
-  旧订单/旧锁在新域下全部失效，须释放旧锁 → 按新域重签 → 重落锁。
+- **nonce**：合约用户的 nonce 与 EOA 同一规则（§2 的分配器口径；位图键为
+  `order.userAddress`；合约用户须以自身身份调用
+  `invalidateUnorderedNonces` 失效 nonce，第 62 轮不提供代发路径）。
+  注意：Settlement 换地址重部署后，`orderFilled`/`nonceBitmap` 从 0 起算
+  （域绑定地址，digest 随之改变），旧订单/旧锁在新域下全部失效，
+  须释放旧锁 → 按新域重签 → 重落锁。
 - **安全边界**：ERC-1271 回退只认 `isValidSignature` 的返回值；金库合约
   的签名者注册表由 owner 控制，签名者只能交易、不能提款（见
   `docs/round27-maker-vault-2026-11-08.md` §1.1、§8）。
@@ -215,3 +224,19 @@ reason, gasUsedClaimed)`，由结算调用方（owner / relayer / 白名单 rela
   runbook 见阶段 3 轮文档 `docs/stage3-contract-matching-2026-11-08.md`）。
 - **跨语言向量**：§6 的向量参数不变（同一私钥/域），但订单消息自本版起
   必须含 `side`；三方向量测试以含 side 的新消息为准，旧向量仅作历史记录。
+
+## 10. 第 62 轮切换：nonce 位图化与历史订单处置（2026-11-10 新增）
+
+- **类型哈希不变**：本轮不动 Order 结构与类型字符串（§2），§6 跨语言
+  向量原样有效——合约侧 `Stage3PriceFix.t.sol` 的冻结向量断言与前端
+  dualread 的向量断言在本轮代码上逐字复现同一 digest，即为「digest
+  不变」的机器证明，不是人工声明。
+- **旧单作废机理与阶段 3 不同，勿混淆**：阶段 3（§9）靠类型哈希随
+  `side` 改变使旧单验签必败；本轮类型哈希**不变**，旧单作废靠切换时
+  Settlement **重部署换地址**——域的 verifyingContract 改变，旧单 digest
+  与新域重算结果永不相等，验签必败。不存在「类型哈希没变、旧单可在
+  新栈续用」的路径。
+- **切换清理**：与 §9 同口径（中继清 D1 订单表、前端以新 Settlement
+  地址重算域、旧锁随旧栈弃置并引导用户处置）。
+- **位图从空开始**：新栈 `nonceBitmap` 全零，无存量状态迁移；客户端
+  分配器首次从 word 0 起扫描播种（见第 62 轮轮次文档块 C）。

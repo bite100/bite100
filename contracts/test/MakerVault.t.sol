@@ -217,7 +217,7 @@ contract MakerVaultTest is Test {
         uint256 nav = makerVault.totalAssets();
         assertGt(nav, 999e18, "NAV near 1000 after round trip leg");
         assertLt(nav, 1000e18, "NAV reduced by fees");
-        assertEq(settlement.getCurrentNonce(address(makerVault)), 1, "vault nonce consumed");
+        assertEq(settlement.nonceBitmap(address(makerVault), 0), 1, "vault nonce consumed");
     }
 
     function testVaultRoundTrip() public {

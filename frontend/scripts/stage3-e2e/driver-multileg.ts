@@ -445,10 +445,12 @@ async function main() {
     orders,
     scenarios,
     filled,
+    // 第 62 轮：getCurrentNonce 已删除；nonces 字段改报 nonceBitmap
+    // 的 word 0（已消耗 nonce 集合的位图，compare 按位图口径对账）
     nonces: {
-      maker: (await settleR.getCurrentNonce(makerAddr)).toString(),
-      taker: (await settleR.getCurrentNonce(takerAddr)).toString(),
-      owner: (await settleR.getCurrentNonce(ownerAddr)).toString(),
+      maker: (await settleR.nonceBitmap(makerAddr, 0)).toString(),
+      taker: (await settleR.nonceBitmap(takerAddr, 0)).toString(),
+      owner: (await settleR.nonceBitmap(ownerAddr, 0)).toString(),
     },
     vault: {
       makerA: await bal(A, makerAddr), makerB: await bal(B, makerAddr),

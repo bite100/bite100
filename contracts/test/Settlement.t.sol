@@ -343,9 +343,12 @@ contract SettlementTest is Test {
         _lock(m);
         _lock(t);
         settlement.settleTrade(_fillWithOrders(m, t, 60e18, 60e18, 0, 0));
-        assertEq(settlement.getCurrentNonce(maker), 1); // 首次结算消耗 nonce 0
+        // 第 62 轮位图口径：首次结算消耗 nonce 0 ⇔ word 0 的 bit 0 置位
+        assertEq(settlement.nonceBitmap(maker, 0), 1);
+        assertFalse(settlement.isValidNonce(maker, 0));
         settlement.settleTrade(_fillWithOrders(m, t, 40e18, 40e18, 0, 0));
-        assertEq(settlement.getCurrentNonce(maker), 1); // 续结不再消耗
+        assertEq(settlement.nonceBitmap(maker, 0), 1); // 续结不再重复置位
+        assertTrue(settlement.isValidNonce(maker, 1)); // 相邻 nonce 不受影响
         assertEq(settlement.orderFilledIn(settlement.orderDigest(m.order)), 100e18);
 
         vm.expectRevert("Settlement: fill exceeds signed order");
@@ -364,6 +367,142 @@ contract SettlementTest is Test {
         _lockFill(fill2); // 第二张订单同样先落锁，revert 须来自 nonce 独占校验而非缺锁
         vm.expectRevert("Settlement: nonce already used by another order");
         settlement.settleTrade(fill2);
+    }
+
+    // ---------- 第 62 轮：无序位图 nonce（Permit2 式） ----------
+
+    /// @notice 乱序结算（本轮立项理由本体）：同一用户先结 nonce 5、再结 nonce 2，两笔都必须成功；
+    /// 旧单调水位语义下第二笔必 revert（水位已被推过 2）。顺带锚定位图语义：
+    /// 未用过的高 nonce 一开始就是 valid，低 nonce 不被高 nonce 的结算阻塞。
+    function test_SettleTrade_OutOfOrderNonces_BothSettle() public {
+        assertTrue(settlement.isValidNonce(maker, 999_999)); // 无水位：任意未用 nonce 皆 valid
+        assertTrue(settlement.isValidNonce(maker, 5));
+
+        // 先结 nonce 5
+        _settle(_fillWithOrders(
+            _signed(makerKey, _order(maker, "m5", 100e18, 100e18, 5, 1)),
+            _signed(takerKey, _order(taker, "t5", 100e18, 100e18, 0, 0)),
+            100e18, 100e18, 0, 0
+        ));
+        assertFalse(settlement.isValidNonce(maker, 5));
+        assertTrue(settlement.isValidNonce(maker, 2)); // 核心回归：低 nonce 未被阻塞
+
+        // 再结 nonce 2
+        _settle(_fillWithOrders(
+            _signed(makerKey, _order(maker, "m2", 100e18, 100e18, 2, 1)),
+            _signed(takerKey, _order(taker, "t2", 100e18, 100e18, 1, 0)),
+            100e18, 100e18, 0, 0
+        ));
+        // word 0 中 bit 5 与 bit 2 置位，其余为 0
+        assertEq(settlement.nonceBitmap(maker, 0), (1 << 5) | (1 << 2));
+        assertTrue(settlement.isValidNonce(maker, 3));
+    }
+
+    /// @notice 字边界：nonce 255（word 0 末位）与 256（word 1 首位）乱序互结成功，
+    /// 位分解正确（bitmapPositions：高 248 位选字、低 8 位选位）。
+    function test_SettleTrade_NonceWordBoundary_255_256() public {
+        // 先结 256（word 1 的 bit 0）
+        _settle(_fillWithOrders(
+            _signed(makerKey, _order(maker, "m256", 100e18, 100e18, 256, 1)),
+            _signed(takerKey, _order(taker, "t256", 100e18, 100e18, 0, 0)),
+            100e18, 100e18, 0, 0
+        ));
+        assertEq(settlement.nonceBitmap(maker, 1), 1);
+        assertEq(settlement.nonceBitmap(maker, 0), 0);
+
+        // 再结 255（word 0 的 bit 255）
+        _settle(_fillWithOrders(
+            _signed(makerKey, _order(maker, "m255", 100e18, 100e18, 255, 1)),
+            _signed(takerKey, _order(taker, "t255", 100e18, 100e18, 1, 0)),
+            100e18, 100e18, 0, 0
+        ));
+        assertEq(settlement.nonceBitmap(maker, 0), uint256(1) << 255);
+        assertEq(settlement.nonceBitmap(maker, 1), 1);
+    }
+
+    /// @notice 失效点杀（粒度陷阱回归）：invalidate 只置目标 nonce 的一位 → 该单结算被拒；
+    /// 同字相邻位订单不受影响、仍可结算。
+    function test_InvalidateUnorderedNonces_PointKill() public {
+        Settlement.Fill memory killed = _fillWithOrders(
+            _signed(makerKey, _order(maker, "m3", 100e18, 100e18, 3, 1)),
+            _signed(takerKey, _order(taker, "t3", 100e18, 100e18, 0, 0)),
+            100e18, 100e18, 0, 0
+        );
+        _lockFill(killed);
+        vm.prank(maker);
+        settlement.invalidateUnorderedNonces(0, uint256(1) << 3);
+        assertEq(settlement.nonceBitmap(maker, 0), uint256(1) << 3);
+        vm.expectRevert("Settlement: nonce already used by another order");
+        settlement.settleTrade(killed);
+
+        // 相邻位 nonce 4 的订单照常结算（taker nonce 0 未被上笔回滚交易消耗，可复用新单）
+        _settle(_fillWithOrders(
+            _signed(makerKey, _order(maker, "m4", 100e18, 100e18, 4, 1)),
+            _signed(takerKey, _order(taker, "t4", 100e18, 100e18, 0, 0)),
+            100e18, 100e18, 0, 0
+        ));
+        assertEq(settlement.nonceBitmap(maker, 0), (uint256(1) << 3) | (uint256(1) << 4));
+    }
+
+    /// @notice 整字全杀语义锚定：word 0 全 1 掩码失效后，该字内所有未结订单（nonce 0 与 7）都不可结算。
+    function test_InvalidateUnorderedNonces_FullWordKill() public {
+        vm.prank(maker);
+        settlement.invalidateUnorderedNonces(0, type(uint256).max);
+        assertEq(settlement.nonceBitmap(maker, 0), type(uint256).max);
+
+        Settlement.Fill memory f0 = _fillWithOrders(
+            _signed(makerKey, _order(maker, "m0", 100e18, 100e18, 0, 1)),
+            _signed(takerKey, _order(taker, "t0", 100e18, 100e18, 0, 0)),
+            100e18, 100e18, 0, 0
+        );
+        _lockFill(f0);
+        vm.expectRevert("Settlement: nonce already used by another order");
+        settlement.settleTrade(f0);
+
+        Settlement.Fill memory f7 = _fillWithOrders(
+            _signed(makerKey, _order(maker, "m7", 100e18, 100e18, 7, 1)),
+            _signed(takerKey, _order(taker, "t7", 100e18, 100e18, 1, 0)),
+            100e18, 100e18, 0, 0
+        );
+        _lockFill(f7);
+        vm.expectRevert("Settlement: nonce already used by another order");
+        settlement.settleTrade(f7);
+    }
+
+    /// @notice 失效只能动自己的位图：taker 失效自己的 (0, bit0) 不影响 maker 的 nonce 0。
+    function test_InvalidateUnorderedNonces_CannotTouchOthers() public {
+        vm.prank(taker);
+        settlement.invalidateUnorderedNonces(0, 1);
+        assertEq(settlement.nonceBitmap(taker, 0), 1);
+        assertEq(settlement.nonceBitmap(maker, 0), 0);
+        assertFalse(settlement.isValidNonce(taker, 0));
+        assertTrue(settlement.isValidNonce(maker, 0));
+
+        // maker nonce 0 照常结算（taker 改用 nonce 1，其 nonce 0 已自杀）
+        _settle(_fillWithOrders(
+            _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0, 1)),
+            _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 1, 0)),
+            100e18, 100e18, 0, 0
+        ));
+        assertEq(settlement.nonceBitmap(maker, 0), 1);
+    }
+
+    /// @notice 已部分成交订单的 nonce 再失效 = 无操作：位已置位，OR 不改变状态；
+    /// 续结判定走 continuation 路径，不受失效影响，剩余量仍可结清。
+    function test_Invalidate_AfterPartialFill_ContinuationStillWorks() public {
+        Settlement.SignedOrder memory m = _signed(makerKey, _order(maker, "m1", 100e18, 100e18, 0, 1));
+        Settlement.SignedOrder memory t = _signed(takerKey, _order(taker, "t1", 100e18, 100e18, 0, 0));
+        _lock(m);
+        _lock(t);
+        settlement.settleTrade(_fillWithOrders(m, t, 60e18, 60e18, 0, 0));
+        assertEq(settlement.nonceBitmap(maker, 0), 1);
+
+        vm.prank(maker);
+        settlement.invalidateUnorderedNonces(0, 1); // 对已置位再 OR：无操作、不回滚
+        assertEq(settlement.nonceBitmap(maker, 0), 1);
+
+        settlement.settleTrade(_fillWithOrders(m, t, 40e18, 40e18, 0, 0));
+        assertEq(settlement.orderFilledIn(settlement.orderDigest(m.order)), 100e18);
     }
 
     /// @notice 过期订单不可结算

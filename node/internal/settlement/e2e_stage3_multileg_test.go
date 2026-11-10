@@ -388,10 +388,12 @@ func TestAnvilStage3MultiLegNodePath(t *testing.T) {
 			"out": call(settlement, "orderFilledOut", d).String(),
 		}
 	}
+	// 第 62 轮：getCurrentNonce 已删除；Nonces 改报 nonceBitmap 的
+	// word 0（已消耗 nonce 集合的位图，compare 按位图口径对账）
 	res.Nonces = map[string]string{
-		"maker": call(settlement, "getCurrentNonce", maker).String(),
-		"taker": call(settlement, "getCurrentNonce", taker).String(),
-		"owner": call(settlement, "getCurrentNonce", owner).String(),
+		"maker": call(settlement, "nonceBitmap", maker, big.NewInt(0)).String(),
+		"taker": call(settlement, "nonceBitmap", taker, big.NewInt(0)).String(),
+		"owner": call(settlement, "nonceBitmap", owner, big.NewInt(0)).String(),
 	}
 	res.Vault = map[string]string{
 		"makerA": call(vault, "balanceOf", tokenAAddr, maker).String(),

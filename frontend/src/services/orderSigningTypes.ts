@@ -2,7 +2,7 @@
  * EIP-712 订单签名共享类型与常量 —— 统一规范的唯一事实源见 docs/eip712-order-spec.md
  * 与 orderSigning.ts、orderVerification.ts、node/internal/match/signature.go、contracts/src/Settlement.sol 保持一致：
  * - 域为四字段 EIP712Domain(name, version, chainId, verifyingContract)，verifyingContract = Settlement 地址
- * - Order 结构含 nonce（签名者的链上结算 nonce，下单时读 Settlement.getCurrentNonce）
+ * - Order 结构含 nonce（签名者的链上结算 nonce，第 62 轮起为无序位图语义，下单时由客户端位图分配器取未消耗 nonce，见 nonceAllocator.ts）
  * - amountOut = amountIn * price / 1e18（price 为 1e18 定点缩放）
  * 修改 domain/Order 结构时需四处同步（见 .cursor/skills/order-signing/SKILL.md）
  */
@@ -88,7 +88,7 @@ export interface OrderData {
   price: string
   timestamp: number
   expiresAt: number
-  /** 链上结算 nonce（Settlement.getCurrentNonce(userAddress)），结算时被合约消耗 */
+  /** 链上结算 nonce（无序位图语义，fetchOrderNonce 分配），结算时其位被合约置位消耗 */
   nonce: number
   /** 签名方向（阶段 3）：SIDE_BUY=0 / SIDE_SELL=1，见上方常量 */
   side: number

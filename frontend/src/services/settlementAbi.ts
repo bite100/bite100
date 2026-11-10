@@ -1,16 +1,65 @@
 /**
- * Settlement 合约 ABI（settle 系列 + getCurrentNonce + 结算事件）
+ * Settlement 合约 ABI（settle 系列 + nonce 位图三件 + 结算事件）
  * 自动生成自 contracts/out/Settlement.sol/Settlement.json，合约接口变更后重新生成，勿手改
+ * （第 62 轮：getCurrentNonce 已随单调水位语义删除，换 nonceBitmap /
+ * isValidNonce / invalidateUnorderedNonces，条目逐字取自当轮构建工件）
  */
 export const SETTLEMENT_ABI = [
   {
     "type": "function",
-    "name": "getCurrentNonce",
+    "name": "invalidateUnorderedNonces",
+    "inputs": [
+      {
+        "name": "wordPos",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "mask",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "isValidNonce",
     "inputs": [
       {
         "name": "user",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "nonce",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "nonceBitmap",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [
