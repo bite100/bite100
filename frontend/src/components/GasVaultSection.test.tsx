@@ -1,12 +1,19 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { GasVaultSection, isGasVaultDeployed, gasVaultWaterLevel } from './GasVaultSection'
 
 /**
  * 第 63 轮 gas-2：gas库分区。
- * 测试环境链配置未填 gasVault 地址（部署属部署步）——组件必须如实显示
- * 「尚未部署开放」并给出完整使用说明，绝不伪造池子数据或存取入口。
+ * 组件必须在当前链未部署 gas库 时如实显示「尚未部署开放」并给出完整使用
+ * 说明，绝不伪造池子数据或存取入口。
+ * 部署步更新（2026-11-10）：Sepolia / Base Sepolia 已实际部署并接线
+ * （chains.ts 已填地址），默认链不再是未部署态——本套件把 config 的
+ * GAS_VAULT_ADDRESS mock 为 undefined，继续钉住未部署链的渲染口径。
  */
+vi.mock('../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config')>()
+  return { ...actual, GAS_VAULT_ADDRESS: undefined }
+})
 
 describe('isGasVaultDeployed', () => {
   it('undefined / 零地址 = 未部署', () => {
