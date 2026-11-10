@@ -116,3 +116,29 @@
 | 前端 / 合约 | 零改动（`git diff` 为空，未跑前端门禁——无前端变更） |
 
 诚实标注：镜像 content 在 workers 集成环境不可直接观测（发布走 waitUntil 且测试中继不可达），归一化性质以 `buildMirrorRecord` + `buildOrderEvent` 的纯函数单测组合钉住；生产镜像内容待部署轮部署后抽查一条真实事件复核。故障注入的「对账」走生产 `listOrders` 代码路径与生产摘要比对逻辑，非测试专用旁路。
+
+## 10. 微修复批（2026-11-10，修复批复审裁定后）+ 运维注意事项
+
+> 复审范围 4d98027..b4f7185（裁定见 `docs/full-review-remediation-plan-2026-11-10.md` 末节「修复批复审裁定」）：3×P2 + 1×P3，其中 2 条并入本批、1 条接受已缓解不修、1 条记录不改码。基线 main `b4f7185`；分支 `round59-micro-fixes`，**本地提交，未部署、未合并、未推送**——随下一部署轮上线。合约零改动、前端零改动。
+
+- **对账换摘要精确查（relay `0ef9d77` + mcp `1bbd8e4`）**：修复批的投递对账骑 `listOrders` 列表扫描（limit 200），复审指出同对订单超 200 时目标单可能被截断在列表外、对账误判未入库（裁定：机制成立、当前不可达——对账已按本人地址+交易对过滤且 MCP 写限 10 次/分钟，同秒同对 200+ 单不可达；但精确查是廉价根治，仍修）。中继 `GET /orders` 新增可选 `digest` 查询参数：按 digest 列精确匹配（参数归一小写后比对），与 chain/pair/userAddress 自由组合；MCP `RelayClient` 新增 `getOrderByDigest`，`deliverOrder()` 对账切换为精确查——命中 ⇒ 预留保留、确认未入库 ⇒ release、对账失败 ⇒ `delivery_ambiguous`，三路语义不变。`listOrders` 本体与其余既有用户（list_orders 工具等）不动。回归钉子：假中继同对预置 250 张更新的存量单时对账仍精确命中（旧扫描实现下必然漏检）。
+- **镜像删除 execType（relay，`729bf01`）**：`buildMirrorRecord` 不再带请求体自报的 `execType`（不在签名覆盖内）——镜像只承载签名事实 + 服务端生成状态。D1 存储行与订单簿 API 保留 execType 不变：那里它已声明为非权威提示，撮合不依赖它裁决。
+- **重试幂等（接受已缓解，本批不修，记录候选）**：place_order 尚无协议级幂等键；当前恢复契约是 `delivery_ambiguous` 错误文案自带订单摘要原文，并明确指示调用方「先用 list_orders 核对该摘要是否在簿、确认不在簿前不要重下同单」，托管说明书（skill.md）错误码表同口径记载。盲目重下属调用方违背明确指引，与任何交易 API 同理。**协议级幂等键（客户端订单号 + 服务端去重）记为 MCP 后续增强候选**，不在本批范围。
+
+### 运维注意事项（部署/运维侧，改配置前必读）
+
+- **MCP Worker 路由不得启用剥离访客 IP 头的 Managed Transform**：注册限流按 `cf-connecting-ip` 分桶（每来源 10 次/小时、全局 100 次/小时）；缺该头时一律归入共享 `unknown` 桶。若在 Cloudflare 侧为 `bit100-mcp` 的路由启用会剥离/改写访客 IP 头的 Managed Transform，全部注册请求将看不到 `cf-connecting-ip`、一齐落进 `unknown` 桶——等于全局注册被压到 10 次/小时（且任一来源的滥用会挤占所有人）。当前生产未启用此类 Transform，此为配置红线而非代码问题（复审 P3，记录不改码）。
+
+骑乘清单（微修复批）：对账骑中继既有 `GET /orders` 读面加一个精确匹配参数 + MCP 既有 `RelayClient`/`getJson` 通道，零新端点、零新基础设施；镜像修法是删一个字段的透传，无新件；运维注意事项纯文档。
+
+验证证据（微修复批终测，2026-11-10）：
+
+| 门 | 结果（修复批基线 → 微修复批） |
+|---|---|
+| mcp 测试 `npm test` | 86/86 → **89/89**（+2 getOrderByDigest 客户端、+1 对账 250 单回归） |
+| mcp 类型 `npm run typecheck` | 干净 |
+| mcp 打包 `npm run build:worker` | 通过，gzip 377,727 B（修复批 377,694，同量级） |
+| 中继单测 `npm run test:unit` | 51/51 → **52/52**（+1 镜像 execType 不透传） |
+| 中继集成 `npm run test:workers` | 24/24 → **25/25**（+1 digest 精确查） |
+| 中继类型 `npm run typecheck` | 干净 |
+| 前端 / 合约 | 零改动（`git diff b4f7185 -- frontend contracts` 为空） |

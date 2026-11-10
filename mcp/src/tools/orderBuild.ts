@@ -109,8 +109,10 @@ export async function buildAndSign(
  * 旧实现把抛错一律当投递失败并 release 每日预留，于是簿上活单零成本
  * （预留被退、订单照样能成交）。修法按结果确定性分三路：
  *  (a) 明确 HTTP 非 200：中继明确未接受 → release 后抛 relay_rejected；
- *  (b) 抛错：先按 digest 向中继对账（骑既有读面 listOrders 按本人
- *      地址查、摘要逐字比对——digest 在签名后即已知）：
+ *  (b) 抛错：先按 digest 向中继精确对账（getOrderByDigest 骑中继
+ *      GET /orders 的 digest 精确匹配参数——微修复批起；旧实现骑
+ *      listOrders 列表扫描，同对订单超 200 时目标单会被截断在列表
+ *      外、对账误判未入库，截断竞态已从根上消除）：
  *      - 查到 = 已入库：不 release（预留转为正式记账），返回
  *        { reconciled: true }，调用方按已接受继续；
  *      - 确认未入库：release 后原样抛投递错误；
@@ -131,13 +133,11 @@ export async function deliverOrder(
   } catch (postErr) {
     let found: boolean
     try {
-      const mine = await ctx.relay.listOrders({
+      const hit = await ctx.relay.getOrderByDigest({
         chainId: Number(built.body.chainId),
-        pair: String(built.body.pair),
-        userAddress: String(built.body.trader),
-        limit: 200,
+        digest: built.digest,
       })
-      found = mine.some((o) => o.digest.toLowerCase() === built.digest.toLowerCase())
+      found = hit !== null
     } catch {
       throw new ToolError(
         'delivery_ambiguous',
