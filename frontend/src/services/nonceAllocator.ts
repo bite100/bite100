@@ -111,10 +111,57 @@ function bitOf(word: bigint, bitPos: number): boolean {
 }
 
 /**
+ * Web Locks 协调（第 63 轮骑乘-1，补第 62 轮评审 P2 的多标签页竞态）：
+ * 同一浏览器同一钱包的多个标签页共享同一 localStorage 游标时，「读游标 →
+ * 扫描 → 写回」若交错，两页会取到同一 nonce。临界区用 Web Locks API
+ * （Baseline Widely Available）串行化：锁名按 (chainId, address) 隔离。
+ * 纪律：特性检测不到（无 navigator.locks / 非安全上下文 / Node/Worker）
+ * 就诚实降级直跑现行流程——绝不用 localStorage 自制假锁；跨设备/跨浏览器
+ * 的撞号仍由中继 409 在途守卫 + 链上独占规则兜底。
+ */
+export interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>
+}
+
+export interface AllocateNonceOptions {
+  /** 锁名（见 nonceLockName）；缺省按存储键派生不出时不加锁 */
+  lockName?: string
+  /** 注入的锁管理器（测试用）；undefined = 自动探测 navigator.locks；null = 明确不加锁 */
+  locks?: LockManagerLike | null
+}
+
+export function nonceLockName(chainId: number, userAddress: string): string {
+  return `bit100:nonce-alloc:${chainId}:${userAddress.toLowerCase()}`
+}
+
+function detectLocks(): LockManagerLike | null {
+  try {
+    const nav = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator
+    return nav?.locks ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
  * 分配一个 nonce：链上未消耗、且不被本客户端在途订单占用。
  * 返回后该 nonce 进入 inFlight 并持久化，cursor 前进到其后一位。
+ * 有锁环境下整个「读-扫-写」临界区在锁内执行（只包临界区，链上读词也在
+ * 区内——修剪与扫描都依赖同一份状态快照，拆出去就失去串行意义）。
  */
 export async function allocateNonce(
+  reader: NonceWordReader,
+  storage: NonceCursorStorage,
+  options: AllocateNonceOptions = {},
+): Promise<number> {
+  const locks = options.locks !== undefined ? options.locks : detectLocks()
+  if (locks && options.lockName) {
+    return locks.request(options.lockName, () => allocateNonceCritical(reader, storage))
+  }
+  return allocateNonceCritical(reader, storage)
+}
+
+async function allocateNonceCritical(
   reader: NonceWordReader,
   storage: NonceCursorStorage,
 ): Promise<number> {
