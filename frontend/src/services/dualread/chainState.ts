@@ -4,8 +4,9 @@
  * 读取面（全部 view 函数，按订单 digest 批量）：
  * - Settlement.orderFilledIn / orderFilledOut(digest)：该订单自身方向的
  *   累计成交（src/OrderVolumeTracker.sol 语义，见轮次文档状态机规范）；
- * - Settlement.usedNonces(user, nonce)：nonce 是否已被任一结算消费
- *   （Settlement 继承 OrderNonceManager，映射就在 Settlement 上）；
+ * - Settlement.nonceBitmap(user, wordPos)：nonce 是否已被任一结算消费
+ *   （第 62 轮无序位图：读 nonce 所在字后做位测试；Settlement 继承
+ *   OrderNonceManager，位图就在 Settlement 上）；
  * - Vault.orderLocks(digest)：活跃锁（user/token/remaining/expiresAt），
  *   user 为零地址 = 无活跃锁；
  * - Vault.lockTombstones(digest)：曾落锁的墓碑（释放/耗尽后不删），
@@ -58,13 +59,13 @@ export const SETTLEMENT_READ_ABI = [
   },
   {
     type: 'function',
-    name: 'usedNonces',
+    name: 'nonceBitmap',
     stateMutability: 'view',
     inputs: [
       { name: 'user', type: 'address' },
-      { name: 'nonce', type: 'uint256' },
+      { name: 'wordPos', type: 'uint256' },
     ],
-    outputs: [{ name: '', type: 'bool' }],
+    outputs: [{ name: '', type: 'uint256' }],
   },
   {
     type: 'function',
@@ -164,9 +165,14 @@ function namedOrIdx(result: unknown, name: string, idx: number): unknown {
   return tupleAt(result, idx)
 }
 
-/** 把一次 multicall 的原始结果组装成 ChainOrderState；任一核心项失败返回 null */
-export function assembleChainState(results: StateCallResult[]): ChainOrderState | null {
-  // 约定顺序：filledIn, filledOut, nonceUsed, lock, tombstone, [verify?]
+/** 把一次 multicall 的原始结果组装成 ChainOrderState；任一核心项失败返回 null。
+ * 第 62 轮：第 3 项是 nonceBitmap 的整个字（uint256），nonceUsed 由调用方
+ * 传入的 bitPos（nonce 低 8 位）做位测试得出。 */
+export function assembleChainState(
+  results: StateCallResult[],
+  bitPos = 0,
+): ChainOrderState | null {
+  // 约定顺序：filledIn, filledOut, nonceBitmapWord, lock, tombstone, [verify?]
   if (results.length < 5) return null
   for (let i = 0; i < 5; i++) {
     if (results[i].status !== 'success') return null
@@ -179,7 +185,7 @@ export function assembleChainState(results: StateCallResult[]): ChainOrderState 
   const state: ChainOrderState = {
     filledIn: toBigInt(ok(0)),
     filledOut: toBigInt(ok(1)),
-    nonceUsed: Boolean(ok(2)),
+    nonceUsed: ((toBigInt(ok(2)) >> BigInt(bitPos)) & 1n) === 1n,
     lock:
       lockUser.toLowerCase() === ZERO_ADDRESS
         ? null
@@ -210,8 +216,8 @@ export function buildStateCalls(req: ChainStateRequest): StateCall[] {
     { contract: 'settlement', functionName: 'orderFilledOut', args: [digest] },
     {
       contract: 'settlement',
-      functionName: 'usedNonces',
-      args: [req.userAddress, BigInt(req.nonce)],
+      functionName: 'nonceBitmap',
+      args: [req.userAddress, BigInt(Math.floor(req.nonce / 256))],
     },
     { contract: 'vault', functionName: 'orderLocks', args: [digest] },
     { contract: 'vault', functionName: 'lockTombstones', args: [digest] },
@@ -276,8 +282,12 @@ export function createChainStateReader(
           calls.push(...built)
         }
         const results = await transport.multicall(calls, block.number)
-        for (const span of spans) {
-          const assembled = assembleChainState(results.slice(span.start, span.start + span.len))
+        for (let i = 0; i < spans.length; i++) {
+          const span = spans[i]
+          const assembled = assembleChainState(
+            results.slice(span.start, span.start + span.len),
+            todo[i].nonce % 256,
+          )
           if (assembled) states.set(span.digest, assembled)
           else missing.add(span.digest)
         }

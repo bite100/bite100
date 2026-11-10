@@ -13,7 +13,7 @@
 |---|---|
 | 订单签发 | 前端既有 `ORDER_TYPES`/`getEIP712Domain`（services/orderSigningTypes）+ ethers `signTypedData` |
 | 签名字段重构/digest | dualread 的 `buildSignedOrderData`/`computeOrderDigest`（与前端/节点/中继同一口径，不另写） |
-| nonce 读取 | 链上 `Settlement.getCurrentNonce`（与前端 fetchOrderNonce 同口径，viem 直读） |
+| nonce 读取 | 链上 `Settlement.nonceBitmap` 扫描播种（第 62 轮位图口径，与前端 fetchOrderNonce 同语义，viem 直读） |
 | 落锁预检 | 链上 `Vault.availableBalance`（viem 直读），义务口径同 node 的 `ObligationForOrder` |
 | 影子轮次 | dualread 的 `runDualReadRound`/`ShadowObserver`/`computeShadowMetrics`（生产同一套代码） |
 | 链上状态 | dualread 的 `createChainStateReader` + viem multicall 传输层 |

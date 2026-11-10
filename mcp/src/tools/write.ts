@@ -5,7 +5,7 @@
  * 骑乘关系：
  * - 订单构建/摘要：前端生产代码 dualread/digest 的 buildSignedOrderData
  *   + computeOrderDigest（与 soak 生成器、阶段 4 运行器同一条路径）；
- * - nonce：orderSigning.fetchOrderNonce（链上 Settlement.getCurrentNonce）；
+ * - nonce：orderSigning.fetchOrderNonce（第 62 轮位图分配器，骑链上 Settlement.nonceBitmap + 本地游标）；
  * - 签名：EIP-712（orderSigningTypes 的域与 ORDER_TYPES）；
  * - 投递：中继 REST POST /orders（中继入库时自带验签）；
  * - 硬撤：Vault.releaseOrderLock（第 46/47 轮语义）。

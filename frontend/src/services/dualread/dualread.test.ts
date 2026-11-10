@@ -842,7 +842,7 @@ describe('链上读取器（mock transport）', () => {
             return { status: 'success', result: 0n }
           if (c.functionName === 'orderFilledOut')
             return { status: 'success', result: 0n }
-          if (c.functionName === 'usedNonces') return { status: 'success', result: false }
+          if (c.functionName === 'nonceBitmap') return { status: 'success', result: 0n }
           if (c.functionName === 'orderLocks')
             return {
               status: 'success',
@@ -863,11 +863,24 @@ describe('链上读取器（mock transport）', () => {
     const assembled = assembleChainState([
       { status: 'failure' },
       { status: 'success', result: 0n },
-      { status: 'success', result: false },
+      { status: 'success', result: 0n }, // nonceBitmap 字（第 62 轮位图口径）
       { status: 'success', result: [TRADER, LOCK.token, 0n, 0n] },
       { status: 'success', result: [TRADER, LOCK.token] },
     ])
     expect(assembled).toBeNull()
+  })
+
+  it('第 62 轮：nonceBitmap 字按 bitPos 位测试得出 nonceUsed', () => {
+    const results: StateCallResult[] = [
+      { status: 'success', result: 0n },
+      { status: 'success', result: 0n },
+      { status: 'success', result: 1n << 5n }, // word 0 的 bit 5 已置位
+      { status: 'success', result: [TRADER, LOCK.token, 0n, 0n] },
+      { status: 'success', result: ['0x0000000000000000000000000000000000000000', LOCK.token] },
+    ]
+    expect(assembleChainState(results, 5)?.nonceUsed).toBe(true)
+    expect(assembleChainState(results, 4)?.nonceUsed).toBe(false)
+    expect(assembleChainState(results, 0)?.nonceUsed).toBe(false)
   })
 
   it('第 35 轮 D4：multicall 钉在取到的区块号，快照按该块归属', async () => {
@@ -882,7 +895,7 @@ describe('链上读取器（mock transport）', () => {
         return calls.map((c): StateCallResult => {
           if (c.functionName === 'orderFilledIn') return { status: 'success', result: 0n }
           if (c.functionName === 'orderFilledOut') return { status: 'success', result: 0n }
-          if (c.functionName === 'usedNonces') return { status: 'success', result: false }
+          if (c.functionName === 'nonceBitmap') return { status: 'success', result: 0n }
           if (c.functionName === 'orderLocks')
             return { status: 'success', result: [TRADER, LOCK.token, 100n * E18, 1700086400n] }
           return { status: 'success', result: [TRADER, LOCK.token] }

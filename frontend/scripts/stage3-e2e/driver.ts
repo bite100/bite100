@@ -241,9 +241,10 @@ async function main() {
       takerIn: (await settleR.orderFilledIn(takerDigest)).toString(),
       takerOut: (await settleR.orderFilledOut(takerDigest)).toString(),
     },
-    nonces: {
-      maker: (await settleR.getCurrentNonce(makerAddr)).toString(),
-      taker: (await settleR.getCurrentNonce(takerAddr)).toString(),
+    // 第 62 轮：getCurrentNonce 已删除；状态打印改读 nonceBitmap 的 word 0
+    nonceBitmapWord0: {
+      maker: (await settleR.nonceBitmap(makerAddr, 0)).toString(),
+      taker: (await settleR.nonceBitmap(takerAddr, 0)).toString(),
     },
     gasEvent,
   }
