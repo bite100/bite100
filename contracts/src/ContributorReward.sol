@@ -2,12 +2,39 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @title ContributorReward 贡献奖励（按周期、按贡献分分配固定总量）
-/// @notice 节点提交贡献证明（ECDSA 签名），合约按贡献分占比发放该周期奖励池；与 FeeDistributor 并列，不扩展 FeeDistributor
-contract ContributorReward {
+/// @notice 合约按贡献分占比发放该周期奖励池；与 FeeDistributor 并列，不扩展 FeeDistributor。
+/// @notice 第 61 轮起废除自签自证：贡献事实须由【注册计量人】以 EIP-712 签名证明
+///         （计量人按贡献线分权注册、密钥与被计量账户分离，签名绑定 chainId/周期/
+///         账户/指标/证据根/nonce/截止时间，nonce 一次性消费防重放）；周期结束由
+///         owner 冻结（冻结后禁再提交/改分，分配分母锚定冻结时刻总数，纠错只能
+///         走下一周期追加）。计量签名是「可审计贡献事实的认证」，不是事实本身。
+contract ContributorReward is EIP712 {
     address public owner;
     address public governance;
+
+    /// EIP-712 计量证明类型哈希：指标线 = nodeType（0 中继 / 1 挂单 / 2 结算提交 / 3 gas 库存款）
+    bytes32 private constant METRIC_ATTESTATION_TYPEHASH = keccak256(
+        "MetricAttestation(address account,bytes32 periodId,uint8 metricType,uint256 uptime,uint256 postingMetric,uint256 storageTotalGB,uint256 bytesRelayed,uint256 tradesMatched,uint256 volumeMatched,bytes32 evidenceRoot,uint256 nonce,uint256 deadline)"
+    );
+    bytes32 private constant LIQUIDITY_ATTESTATION_TYPEHASH = keccak256(
+        "LiquidityAttestation(address account,bytes32 periodId,uint256 amount,bytes32 evidenceRoot,uint256 nonce,uint256 deadline)"
+    );
+
+    /// metricType => 计量人 => 是否授权（按线分权：一线的计量人不能签另一线）
+    mapping(uint8 => mapping(address => bool)) public measurers;
+    /// 已消费证明键 = keccak256(abi.encode(计量人, 账户, periodId, metricType, nonce))
+    mapping(bytes32 => bool) public attestationConsumed;
+    /// periodId => 是否已冻结
+    mapping(bytes32 => bool) public periodFrozen;
+    /// periodId => 冻结时锚定的最终分数根（链下按最终分数表折成，供事后审计重算）
+    mapping(bytes32 => bytes32) public periodScoresRoot;
+    /// periodId => 冻结时刻的总贡献分 / 总加权分（冻结后分配分母以此为准）
+    mapping(bytes32 => uint256) public periodFrozenTotalScore;
+    mapping(bytes32 => uint256) public periodFrozenTotalWeightedScore;
 
     /// 储备比例 bps，10% = 1000，不参与当周分配；可分配额 = pool * (10000 - reserveBps) / 10000
     uint16 public reserveBps = 1500; // 默认 15%
@@ -66,6 +93,8 @@ contract ContributorReward {
     mapping(bytes32 => mapping(address => mapping(address => uint256))) public claimed;
 
     event ProofSubmitted(bytes32 indexed periodId, address indexed account, uint256 score);
+    event MeasurerSet(uint8 indexed metricType, address indexed measurer, bool enabled);
+    event PeriodFrozen(bytes32 indexed periodId, bytes32 scoresRoot, uint256 totalScore, uint256 totalWeightedScore);
     event PeriodRewardSet(bytes32 indexed periodId, address indexed token, uint256 amount);
     event PeriodEndTimestampSet(bytes32 indexed periodId, uint256 endTimestamp);
     event RewardClaimed(bytes32 indexed periodId, address indexed account, address indexed token, uint256 amount);
@@ -88,38 +117,163 @@ contract ContributorReward {
         _;
     }
 
-    constructor() {
+    constructor() EIP712("Bit100 ContributorReward", "1") {
         owner = msg.sender;
+    }
+
+    /// @notice 注册/注销某贡献线的计量人（仅 owner）。计量人是离线计量 CLI 的
+    ///         签名身份，私钥独立保管、不得与被计量账户或部署者共用（见轮次文档）。
+    function setMeasurer(uint8 metricType, address measurer, bool enabled) external onlyOwner {
+        require(measurer != address(0), "ContributorReward: zero address");
+        measurers[metricType][measurer] = enabled;
+        emit MeasurerSet(metricType, measurer, enabled);
+    }
+
+    /// @notice 冻结某周期（仅 owner）：冻结后该周期的证明提交与一切改分路径关闭，
+    ///         分配分母锚定冻结时刻总数，最终分数根上链存证。纠错只能走下一周期
+    ///         追加记录，不得回改已冻结周期的份额。领取不受冻结影响（冻结正是
+    ///         让领取所依据的分数定版）。
+    /// @param scoresRoot 链下按最终分数表（账户→分数）折成的 Merkle 根，事后可重算核对
+    function freezePeriod(string calldata period, bytes32 scoresRoot) external onlyOwner {
+        bytes32 pid = _periodId(period);
+        require(!periodFrozen[pid], "ContributorReward: already frozen");
+        periodFrozen[pid] = true;
+        periodScoresRoot[pid] = scoresRoot;
+        periodFrozenTotalScore[pid] = periodTotalScore[pid];
+        periodFrozenTotalWeightedScore[pid] = periodTotalWeightedScore[pid];
+        emit PeriodFrozen(pid, scoresRoot, periodTotalScore[pid], periodTotalWeightedScore[pid]);
+    }
+
+    /// @notice 计量证明的 EIP-712 摘要（供计量人离线签名与任何人复核；域含 chainId 与本合约）
+    function metricAttestationDigest(
+        address account,
+        bytes32 periodId,
+        uint8 metricType,
+        uint256 uptime,
+        uint256 postingMetric,
+        uint256 storageTotalGB,
+        uint256 bytesRelayed,
+        uint256 tradesMatched,
+        uint256 volumeMatched,
+        bytes32 evidenceRoot,
+        uint256 nonce,
+        uint256 deadline
+    ) public view returns (bytes32) {
+        return _hashTypedDataV4(keccak256(abi.encode(
+            METRIC_ATTESTATION_TYPEHASH,
+            account,
+            periodId,
+            metricType,
+            uptime,
+            postingMetric,
+            storageTotalGB,
+            bytesRelayed,
+            tradesMatched,
+            volumeMatched,
+            evidenceRoot,
+            nonce,
+            deadline
+        )));
+    }
+
+    /// @notice gas 库存款证明的 EIP-712 摘要（metricType 固定为 3）
+    function liquidityAttestationDigest(
+        address account,
+        bytes32 periodId,
+        uint256 amount,
+        bytes32 evidenceRoot,
+        uint256 nonce,
+        uint256 deadline
+    ) public view returns (bytes32) {
+        return _hashTypedDataV4(keccak256(abi.encode(
+            LIQUIDITY_ATTESTATION_TYPEHASH,
+            account,
+            periodId,
+            amount,
+            evidenceRoot,
+            nonce,
+            deadline
+        )));
+    }
+
+    /// @dev 校验计量人证明并消费 nonce：签名者必须是该指标线的注册计量人；
+    ///      同一（计量人, 账户, 周期, 指标, nonce）组合只能成功提交一次。
+    function _verifyMeasurer(
+        bytes32 digest,
+        bytes calldata signature,
+        uint8 metricType,
+        address account,
+        bytes32 pid,
+        uint256 nonce,
+        uint256 deadline
+    ) internal {
+        require(block.timestamp <= deadline, "ContributorReward: attestation expired");
+        address measurer = ECDSA.recover(digest, signature);
+        require(measurers[metricType][measurer], "ContributorReward: unregistered measurer");
+        bytes32 key = keccak256(abi.encode(measurer, account, pid, metricType, nonce));
+        require(!attestationConsumed[key], "ContributorReward: attestation replayed");
+        attestationConsumed[key] = true;
+    }
+
+    /// @dev 把新分数记到账户（同周期重交以新证明为准：扣旧加新，含信誉加权口径）
+    function _applyScore(bytes32 pid, address account, uint256 newScore) internal {
+        uint256 oldScore = contributionScore[pid][account];
+        if (oldScore > 0) {
+            periodTotalScore[pid] -= oldScore;
+            if (useReputationWeighting) {
+                uint256 oldWeightedScore = (oldScore * reputationScore[account]) / 10000;
+                periodTotalWeightedScore[pid] -= oldWeightedScore;
+            }
+        }
+        periodTotalScore[pid] += newScore;
+        contributionScore[pid][account] = newScore;
+        if (useReputationWeighting) {
+            uint256 newWeightedScore = (newScore * reputationScore[account]) / 10000;
+            periodTotalWeightedScore[pid] += newWeightedScore;
+        }
+        emit ProofSubmitted(pid, account, newScore);
     }
 
     function _periodId(string calldata period) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(period));
     }
 
-    /// @notice 提交贡献证明（兼容旧版：无撮合字段，digest 不含 tradesMatched/volumeMatched）
-    /// @param signature 65 字节 ECDSA：对 keccak256(abi.encodePacked(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType)) 的签名
+    /// @notice 提交贡献证明（基础版：无结算提交字段，摘要中 trades/volume 记 0）
+    /// @dev 第 61 轮起：signature 必须是该 nodeType 线【注册计量人】对 EIP-712
+    ///      MetricAttestation 的签名（见 metricAttestationDigest）；account 是被
+    ///      计量账户，提交者可为任意人（自签自证已废除）。evidenceRoot 绑定链下
+    ///      证据（如计量明细的 Merkle 根），nonce 在（计量人, 账户, 周期, 指标）
+    ///      内唯一且一次性消费。
     function submitProof(
         string calldata period,
+        address account,
         uint256 uptime,
         uint256 storageUsedGB,
         uint256 storageTotalGB,
         uint256 bytesRelayed,
         uint8 nodeType,
-        bytes calldata signature
+        bytes32 evidenceRoot,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata measurerSignature
     ) external {
         require(bytes(period).length > 0, "ContributorReward: empty period");
+        require(account != address(0), "ContributorReward: zero address");
         require(uptime <= SCALE, "ContributorReward: uptime > 1e18");
-        require(signature.length == 65, "ContributorReward: bad signature length");
-        bytes32 digest = keccak256(abi.encodePacked(
-            period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType
-        ));
-        _verifyAndApplyScore(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, 0, 0, nodeType, signature, digest);
+        bytes32 pid = _periodId(period);
+        require(!periodFrozen[pid], "ContributorReward: period frozen");
+        bytes32 digest = metricAttestationDigest(
+            account, pid, nodeType, uptime, storageUsedGB, storageTotalGB, bytesRelayed, 0, 0, evidenceRoot, nonce, deadline
+        );
+        _verifyMeasurer(digest, measurerSignature, nodeType, account, pid, nonce, deadline);
+        uint256 newScore = _computeScore(uptime, storageUsedGB, storageTotalGB, bytesRelayed, 0, 0, nodeType);
+        _applyScore(pid, account, newScore);
     }
 
-    /// @notice 提交贡献证明（扩展版：含结算提交 tradesMatched/volumeMatched（字段名沿用），nodeType=2 为结算提交）
-    /// @param signature 65 字节 ECDSA：对 keccak256(abi.encodePacked(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType)) 的签名
+    /// @notice 提交贡献证明（扩展版：含结算提交 tradesMatched/volumeMatched，nodeType=2 为结算提交线）
     function submitProofEx(
         string calldata period,
+        address account,
         uint256 uptime,
         uint256 storageUsedGB,
         uint256 storageTotalGB,
@@ -127,67 +281,22 @@ contract ContributorReward {
         uint256 tradesMatched,
         uint256 volumeMatched,
         uint8 nodeType,
-        bytes calldata signature
+        bytes32 evidenceRoot,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata measurerSignature
     ) external {
         require(bytes(period).length > 0, "ContributorReward: empty period");
+        require(account != address(0), "ContributorReward: zero address");
         require(uptime <= SCALE, "ContributorReward: uptime > 1e18");
-        require(signature.length == 65, "ContributorReward: bad signature length");
-        bytes32 digest = keccak256(abi.encodePacked(
-            period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType
-        ));
-        _verifyAndApplyScore(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType, signature, digest);
-    }
-
-    function _verifyAndApplyScore(
-        string calldata period,
-        uint256 uptime,
-        uint256 storageUsedGB,
-        uint256 storageTotalGB,
-        uint256 bytesRelayed,
-        uint256 tradesMatched,
-        uint256 volumeMatched,
-        uint8 nodeType,
-        bytes calldata signature,
-        bytes32 digest
-    ) internal {
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-        assembly {
-            let ptr := signature.offset
-            r := calldataload(ptr)
-            s := calldataload(add(ptr, 32))
-            v := byte(0, calldataload(add(ptr, 64)))
-        }
-        if (v < 27) v += 27;
-        require(v == 27 || v == 28, "ContributorReward: invalid v");
-        address signer = ecrecover(digest, v, r, s);
-        require(signer == msg.sender && signer != address(0), "ContributorReward: invalid signature");
-
         bytes32 pid = _periodId(period);
-        uint256 oldScore = contributionScore[pid][msg.sender];
+        require(!periodFrozen[pid], "ContributorReward: period frozen");
+        bytes32 digest = metricAttestationDigest(
+            account, pid, nodeType, uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, evidenceRoot, nonce, deadline
+        );
+        _verifyMeasurer(digest, measurerSignature, nodeType, account, pid, nonce, deadline);
         uint256 newScore = _computeScore(uptime, storageUsedGB, storageTotalGB, bytesRelayed, tradesMatched, volumeMatched, nodeType);
-
-        if (oldScore > 0) {
-            periodTotalScore[pid] -= oldScore;
-            // 如果启用信誉加权，更新总加权贡献分
-            if (useReputationWeighting) {
-                uint256 oldReputation = reputationScore[msg.sender];
-                uint256 oldWeightedScore = (oldScore * oldReputation) / 10000;
-                periodTotalWeightedScore[pid] -= oldWeightedScore;
-            }
-        }
-        periodTotalScore[pid] += newScore;
-        contributionScore[pid][msg.sender] = newScore;
-        
-        // 如果启用信誉加权，更新总加权贡献分
-        if (useReputationWeighting) {
-            uint256 myReputation = reputationScore[msg.sender];
-            uint256 newWeightedScore = (newScore * myReputation) / 10000;
-            periodTotalWeightedScore[pid] += newWeightedScore;
-        }
-
-        emit ProofSubmitted(pid, msg.sender, newScore);
+        _applyScore(pid, account, newScore);
     }
 
     /// @dev 贡献分：按 nodeType 应用定版权重（挂单 35%、gas 库存款 25%、中继 20%、结算提交 20%）
@@ -282,11 +391,12 @@ contract ContributorReward {
             uint256 myReputation = reputationScore[account];
             if (myReputation == 0) return 0;
             uint256 myWeightedScore = (myScore * myReputation) / 10000;
-            uint256 totalWeightedScore = periodTotalWeightedScore[pid];
+            // 冻结后分母以冻结时刻锚定值为准，不随事后记账漂移
+            uint256 totalWeightedScore = periodFrozen[pid] ? periodFrozenTotalWeightedScore[pid] : periodTotalWeightedScore[pid];
             if (totalWeightedScore == 0) return 0;
             return (distributable * myWeightedScore) / totalWeightedScore - claimed[pid][token][account];
         }
-        uint256 total = periodTotalScore[pid];
+        uint256 total = periodFrozen[pid] ? periodFrozenTotalScore[pid] : periodTotalScore[pid];
         if (total == 0) return 0;
         return (distributable * myScore) / total - claimed[pid][token][account];
     }
@@ -431,6 +541,8 @@ contract ContributorReward {
         if (useReputationWeighting) {
             for (uint256 i = 0; i < periods.length; i++) {
                 bytes32 pid = _periodId(periods[i]);
+                // 第 61 轮：冻结周期的加权总数已锚定，禁止再重算
+                require(!periodFrozen[pid], "ContributorReward: period frozen");
                 uint256 contribution = contributionScore[pid][account];
                 if (contribution > 0) {
                     uint256 oldWeighted = (contribution * oldScore) / 10000;
@@ -462,84 +574,35 @@ contract ContributorReward {
     }
 
     /// @notice Owner 直接设置某地址在某周期的贡献分（用于上线奖励等特殊分配）
+    /// @dev 第 61 轮起：已冻结周期禁止调用（冻结后改分只能走下一周期）。
     function setContributionScore(string calldata period, address account, uint256 score) external onlyOwner {
         require(account != address(0), "ContributorReward: zero address");
         bytes32 pid = _periodId(period);
-        uint256 oldScore = contributionScore[pid][account];
-        if (oldScore > 0) {
-            periodTotalScore[pid] -= oldScore;
-            // 如果启用信誉加权，更新总加权贡献分
-            if (useReputationWeighting) {
-                uint256 oldReputation = reputationScore[account];
-                uint256 oldWeightedScore = (oldScore * oldReputation) / 10000;
-                periodTotalWeightedScore[pid] -= oldWeightedScore;
-            }
-        }
-        if (score > 0) {
-            periodTotalScore[pid] += score;
-            // 如果启用信誉加权，更新总加权贡献分
-            if (useReputationWeighting) {
-                uint256 myReputation = reputationScore[account];
-                uint256 newWeightedScore = (score * myReputation) / 10000;
-                periodTotalWeightedScore[pid] += newWeightedScore;
-            }
-        }
-        contributionScore[pid][account] = score;
-        emit ProofSubmitted(pid, account, score);
+        require(!periodFrozen[pid], "ContributorReward: period frozen");
+        _applyScore(pid, account, score);
     }
 
     /// @notice 提交 gas 库存款贡献证明（函数名沿用 submitLiquidityProof：该线
-    ///         原为 AMM 流动性线，第 42 轮改记 gas 库存款——存款人向 gas 库注资后调用）
-    /// @param period 周期
-    /// @param liquidityAmount 存款数量（以稳定币计价，如 USDC；参数名沿用）
-    /// @param signature 签名：对 keccak256(abi.encodePacked(period, liquidityAmount, nodeType=3)) 的签名
+    ///         原为 AMM 流动性线，第 42 轮改记 gas 库存款）。
+    /// @dev 第 61 轮起：signature 必须是 gas 库存款线（metricType=3）注册计量人对
+    ///      EIP-712 LiquidityAttestation 的签名（见 liquidityAttestationDigest）。
     function submitLiquidityProof(
         string calldata period,
+        address account,
         uint256 liquidityAmount,
-        bytes calldata signature
+        bytes32 evidenceRoot,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata measurerSignature
     ) external {
         require(bytes(period).length > 0, "ContributorReward: empty period");
+        require(account != address(0), "ContributorReward: zero address");
         require(liquidityAmount > 0, "ContributorReward: zero liquidity");
-        require(signature.length == 65, "ContributorReward: bad signature length");
-        
-        bytes32 digest = keccak256(abi.encodePacked(period, liquidityAmount, uint8(3)));
-        
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-        assembly {
-            let ptr := signature.offset
-            r := calldataload(ptr)
-            s := calldataload(add(ptr, 32))
-            v := byte(0, calldataload(add(ptr, 64)))
-        }
-        if (v < 27) v += 27;
-        require(v == 27 || v == 28, "ContributorReward: invalid v");
-        address signer = ecrecover(digest, v, r, s);
-        require(signer == msg.sender && signer != address(0), "ContributorReward: invalid signature");
-
         bytes32 pid = _periodId(period);
-        uint256 oldScore = contributionScore[pid][msg.sender];
-        uint256 newScore = _computeGasVaultScore(liquidityAmount);
-
-        if (oldScore > 0) {
-            periodTotalScore[pid] -= oldScore;
-            if (useReputationWeighting) {
-                uint256 oldReputation = reputationScore[msg.sender];
-                uint256 oldWeightedScore = (oldScore * oldReputation) / 10000;
-                periodTotalWeightedScore[pid] -= oldWeightedScore;
-            }
-        }
-        periodTotalScore[pid] += newScore;
-        contributionScore[pid][msg.sender] = newScore;
-        
-        if (useReputationWeighting) {
-            uint256 myReputation = reputationScore[msg.sender];
-            uint256 newWeightedScore = (newScore * myReputation) / 10000;
-            periodTotalWeightedScore[pid] += newWeightedScore;
-        }
-
-        emit ProofSubmitted(pid, msg.sender, newScore);
+        require(!periodFrozen[pid], "ContributorReward: period frozen");
+        bytes32 digest = liquidityAttestationDigest(account, pid, liquidityAmount, evidenceRoot, nonce, deadline);
+        _verifyMeasurer(digest, measurerSignature, 3, account, pid, nonce, deadline);
+        _applyScore(pid, account, _computeGasVaultScore(liquidityAmount));
     }
 
     /// @notice 计算 gas 库存款贡献分

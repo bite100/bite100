@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "./MerkleProof.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /// @title MerkleDistributor 基于 Merkle Tree 的奖励分发（上线空投等）
 /// @notice Gas 高效，用户按需领取；上线前 owner 设置 merkleRoot 并转入代币

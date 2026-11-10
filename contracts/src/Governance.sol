@@ -2,11 +2,14 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "./MerkleProof.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /// @title Governance 治理合约
 /// @notice 按「最近 2 周内有贡献的地址」定义活跃集，同意超过 50% 即通过。任意链上可执行操作均可提案（手续费、上币、流通链等）。
 /// @notice 支持 Timelock（执行延迟）：提案通过后可设置延迟执行时间，便于紧急取消。
+/// @notice 第 61 轮起：活跃集改为「快照注册表」——merkleRoot/activeCount 只能由治理管理员
+///         （owner）通过 publishSnapshot 按周期发布并上链固定，提案只能按编号引用已发布
+///         快照，不得自带 root/count（堵住自选活跃集自证通过的治理洞）。
 contract Governance is ReentrancyGuard {
     uint256 public constant VOTING_PERIOD = 7 days;
     uint256 public constant COOLDOWN_PERIOD = 7 days; // 同一提案执行后一周内不可再创建相同提案
@@ -28,9 +31,22 @@ contract Governance is ReentrancyGuard {
         bool isMultiStep; // 是否为多步骤提案
         address[] targets; // 多步骤提案的目标数组（isMultiStep=true 时使用）
         bytes[] callDataArray; // 多步骤提案的调用数据数组（isMultiStep=true 时使用）
+        uint256 snapshotId; // 引用的活跃集快照编号（第 61 轮起；root/count 由快照复制绑定）
+    }
+
+    /// @notice 活跃集快照：由治理管理员发布、一经发布不可变；提案只能引用它
+    struct ActiveSetSnapshot {
+        bytes32 merkleRoot;
+        uint256 activeCount;
+        address publisher;
+        uint256 publishedAt;
+        bool exists;
     }
 
     mapping(uint256 => Proposal) public proposals;
+    /// 活跃集快照注册表：snapshotId => 快照（只增不改）
+    mapping(uint256 => ActiveSetSnapshot) public snapshots;
+    uint256 public snapshotCount;
     mapping(uint256 => mapping(address => bool)) public hasVoted;
     mapping(bytes32 => uint256) public lastExecutedAt; // proposalHash => 执行时间，同一 (target, callData) 一周冷却
     // 委托投票：delegator => delegatee
@@ -41,6 +57,7 @@ contract Governance is ReentrancyGuard {
     address public owner;
 
     // 优化事件：减少gas消耗
+    event SnapshotPublished(uint256 indexed snapshotId, bytes32 merkleRoot, uint256 activeCount, address indexed publisher);
     event ProposalCreated(uint256 indexed proposalId, address indexed target, uint256 activeCount);
     event MultiStepProposalCreated(uint256 indexed proposalId, address[] targets, uint256 activeCount);
     event Voted(uint256 indexed proposalId, address indexed voter, bool support, uint256 weight);
@@ -57,16 +74,54 @@ contract Governance is ReentrancyGuard {
         owner = msg.sender;
     }
 
+    /// @notice 发布一期活跃集快照（仅治理管理员 owner；现阶段为部署者，后续迁多签）。
+    /// @dev 快照输入 = 离线贡献计量 CLI 产出的成员清单折成的 Merkle 根与人数，
+    ///      发布动作本身即发布者对该清单的签认（见轮次文档的快照生产流程）。
+    ///      快照只增不改：修正名单只能发布新快照，已建提案继续绑其引用编号。
+    function publishSnapshot(
+        bytes32 merkleRoot,
+        uint256 activeCount
+    ) external onlyOwner returns (uint256 snapshotId) {
+        require(merkleRoot != bytes32(0), "Governance: zero root");
+        require(activeCount > 0, "Governance: zero active");
+        snapshotId = snapshotCount++;
+        snapshots[snapshotId] = ActiveSetSnapshot({
+            merkleRoot: merkleRoot,
+            activeCount: activeCount,
+            publisher: msg.sender,
+            publishedAt: block.timestamp,
+            exists: true
+        });
+        emit SnapshotPublished(snapshotId, merkleRoot, activeCount, msg.sender);
+    }
+
+    /// @notice 读取快照（不存在时 exists=false、其余为零值）
+    function getSnapshot(uint256 snapshotId) external view returns (
+        bytes32 merkleRoot,
+        uint256 activeCount,
+        address publisher,
+        uint256 publishedAt,
+        bool exists
+    ) {
+        ActiveSetSnapshot storage s = snapshots[snapshotId];
+        return (s.merkleRoot, s.activeCount, s.publisher, s.publishedAt, s.exists);
+    }
+
+    /// @notice 内部：按编号取已发布快照的 root/count，未发布即回滚
+    function _snapshotRootCount(uint256 snapshotId) internal view returns (bytes32 merkleRoot, uint256 activeCount) {
+        ActiveSetSnapshot storage s = snapshots[snapshotId];
+        require(s.exists, "Governance: snapshot not published");
+        return (s.merkleRoot, s.activeCount);
+    }
+
     /// @notice 内部：创建提案的核心逻辑；供外部接口与扩展合约复用
     function _createProposal(
         address target,
         bytes calldata callData,
-        bytes32 merkleRoot,
-        uint256 activeCount
+        uint256 snapshotId
     ) internal returns (uint256 proposalId) {
         require(target != address(0), "Governance: zero target");
-        require(merkleRoot != bytes32(0), "Governance: zero root");
-        require(activeCount > 0, "Governance: zero active");
+        (bytes32 merkleRoot, uint256 activeCount) = _snapshotRootCount(snapshotId);
 
         bytes32 proposalHash = keccak256(abi.encode(target, callData));
         uint256 lastExecuted = lastExecutedAt[proposalHash];
@@ -89,7 +144,8 @@ contract Governance is ReentrancyGuard {
             executed: false,
             isMultiStep: false,
             targets: new address[](0),
-            callDataArray: new bytes[](0)
+            callDataArray: new bytes[](0),
+            snapshotId: snapshotId
         });
 
         emit ProposalCreated(proposalId, target, activeCount);
@@ -98,19 +154,16 @@ contract Governance is ReentrancyGuard {
     /// @notice 内部：创建多步骤提案的核心逻辑；供外部接口与扩展合约复用
     /// @param targets 目标合约地址数组
     /// @param callDataArray 调用数据数组（与 targets 长度一致）
-    /// @param merkleRoot 活跃集的默克尔根
-    /// @param activeCount 活跃集地址数量
+    /// @param snapshotId 引用的活跃集快照编号（必须已由管理员发布）
     function _createMultiStepProposal(
         address[] calldata targets,
         bytes[] calldata callDataArray,
-        bytes32 merkleRoot,
-        uint256 activeCount
+        uint256 snapshotId
     ) internal returns (uint256 proposalId) {
         require(targets.length > 0, "Governance: empty targets");
         require(targets.length == callDataArray.length, "Governance: length mismatch");
         require(targets.length <= 10, "Governance: too many steps"); // 限制最多 10 步
-        require(merkleRoot != bytes32(0), "Governance: zero root");
-        require(activeCount > 0, "Governance: zero active");
+        (bytes32 merkleRoot, uint256 activeCount) = _snapshotRootCount(snapshotId);
 
         // 检查冷却期（使用第一个 target 和 callData 的哈希）
         // Gas优化：缓存时间窗口计算
@@ -147,30 +200,30 @@ contract Governance is ReentrancyGuard {
             executed: false,
             isMultiStep: true,
             targets: storedTargets,
-            callDataArray: storedCallDataArray
+            callDataArray: storedCallDataArray,
+            snapshotId: snapshotId
         });
 
         emit MultiStepProposalCreated(proposalId, targets, activeCount);
     }
 
-    /// @notice 创建提案；任意 (target, callData) 均可，如手续费、上币、流通链等
+    /// @notice 创建提案；任意 (target, callData) 均可，如手续费、上币、流通链等。
+    /// @notice 第 61 轮起只接受快照编号：活跃集 root/人数取自管理员已发布快照，调用者不得自带。
     function createProposal(
         address target,
         bytes calldata callData,
-        bytes32 merkleRoot,
-        uint256 activeCount
+        uint256 snapshotId
     ) external returns (uint256 proposalId) {
-        return _createProposal(target, callData, merkleRoot, activeCount);
+        return _createProposal(target, callData, snapshotId);
     }
 
     /// @notice 创建多步骤提案；支持在一个提案中执行多个操作（如先设置 A，再设置 B）
     function createMultiStepProposal(
         address[] calldata targets,
         bytes[] calldata callDataArray,
-        bytes32 merkleRoot,
-        uint256 activeCount
+        uint256 snapshotId
     ) external returns (uint256 proposalId) {
-        return _createMultiStepProposal(targets, callDataArray, merkleRoot, activeCount);
+        return _createMultiStepProposal(targets, callDataArray, snapshotId);
     }
 
     /// @notice 设置委托投票

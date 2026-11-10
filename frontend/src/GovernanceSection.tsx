@@ -26,7 +26,6 @@ export function GovernanceSection({ account }: { account: string | null }) {
   const [error, setError] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [proposalsPerPage] = useState(10)
-  const [votingWeights, setVotingWeights] = useState<Map<number, { yes: bigint; no: bigint }>>(new Map())
   // Vote form
   const [voteProposalId, setVoteProposalId] = useState('0')
   const [voteSupport, setVoteSupport] = useState(true)
@@ -37,8 +36,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
   const [loadingExec, setLoadingExec] = useState(false)
   // Create form (setFeeBps preset)
   const [createFeePercent, setCreateFeePercent] = useState('0.08') // 手续费%，如 0.08 = 0.08%
-  const [createMerkleRoot, setCreateMerkleRoot] = useState('')
-  const [createActiveCount, setCreateActiveCount] = useState('1')
+  const [createSnapshotId, setCreateSnapshotId] = useState('')
   const [loadingCreate, setLoadingCreate] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
 
@@ -115,19 +113,6 @@ export function GovernanceSection({ account }: { account: string | null }) {
     }
   }, [account, fetchProposals, autoRefresh])
 
-  // 计算投票权重
-  useEffect(() => {
-    if (!proposals.length) return
-    const weights = new Map<number, { yes: bigint; no: bigint }>()
-    proposals.forEach((p, i) => {
-      weights.set(i, {
-        yes: BigInt(p.yesCount),
-        no: BigInt(p.noCount),
-      })
-    })
-    setVotingWeights(weights)
-  }, [proposals])
-
   const withSigner = useCallback(async <T,>(fn: (gov: Contract) => Promise<T>): Promise<T> => {
     return withSignerUtil((signer) => {
       const gov = new Contract(GOVERNANCE_ADDRESS, GOVERNANCE_ABI, signer)
@@ -175,22 +160,11 @@ export function GovernanceSection({ account }: { account: string | null }) {
 
   const handleCreate = useCallback(async () => {
     if (!account || !isGovDeployed()) return
-    const root = createMerkleRoot.trim().toLowerCase()
-    if (!root) {
-      setError('请填写活跃集 Merkle 根（merkleRoot）。活跃集名单的产出路径在节点退役后正在重整，当前暂无可用名单，创建提案暂时不可用（见页面上方「当前状态」说明）')
-      return
-    }
-    if (!/^0x[0-9a-f]{64}$/.test(root)) {
-      setError('merkleRoot 格式错误，应为 0x 开头的 64 位十六进制字符串')
-      return
-    }
-    const activeCount = parseInt(createActiveCount, 10)
-    if (Number.isNaN(activeCount) || activeCount < 1) {
-      setError('活跃集人数至少为 1，且必须为有效数字')
-      return
-    }
-    if (activeCount > 10000) {
-      setError('活跃集人数不能超过 10000')
+    // 第 61 轮起：提案只能引用治理管理员已发布上链的活跃集快照编号，
+    // 前端不再接受自填 Merkle 根/人数（合约侧同样拒绝自带名单）。
+    const snapshotId = parseInt(createSnapshotId.trim(), 10)
+    if (createSnapshotId.trim() === '' || Number.isNaN(snapshotId) || snapshotId < 0) {
+      setError('请填写活跃集快照编号（治理管理员发布快照后会公布编号）。没有可用快照时创建提案不可用（见页面上方「当前状态」说明）')
       return
     }
     const feeBps = feePercentToBps(createFeePercent)
@@ -206,17 +180,28 @@ export function GovernanceSection({ account }: { account: string | null }) {
     setError(null)
     setLoadingCreate(true)
     try {
+      // 提交前先链上核对快照存在，避免对未发布编号白付 gas
+      const provider = getProvider()
+      if (provider) {
+        const govRead = new Contract(GOVERNANCE_ADDRESS, GOVERNANCE_ABI, provider)
+        const snap = await govRead.getSnapshot(snapshotId)
+        if (!snap || !snap[4]) {
+          setError(`快照 #${snapshotId} 尚未发布，请向治理管理员确认本期快照编号后再提交`)
+          setLoadingCreate(false)
+          return
+        }
+      }
       const iface = new Interface(['function setFeeBps(uint16)'])
       const callData = iface.encodeFunctionData('setFeeBps', [feeBps])
-      await withSigner((gov) => gov.createProposal(SETTLEMENT_ADDRESS, callData, root, activeCount).then((tx) => tx.wait()))
+      await withSigner((gov) => gov.createProposal(SETTLEMENT_ADDRESS, callData, snapshotId).then((tx) => tx.wait()))
       await fetchProposals()
-      setCreateMerkleRoot('')
+      setCreateSnapshotId('')
     } catch (e) {
       setError(formatError(e))
     } finally {
       setLoadingCreate(false)
     }
-  }, [account, createFeePercent, createMerkleRoot, createActiveCount, fetchProposals, withSigner])
+  }, [account, createFeePercent, createSnapshotId, fetchProposals, withSigner])
 
   if (!isGovDeployed()) {
     return (
@@ -230,8 +215,8 @@ export function GovernanceSection({ account }: { account: string | null }) {
   return (
     <div className="card vault-section governance-section">
       <h2>治理</h2>
-      <p className="hint">治理用于调整交易手续费等协议参数。流程：创建提案 → 投票期 7 天 → 支持票超过活跃集人数一半即通过 → 经过 2 天时间锁 → 执行生效。活跃集是按贡献选出的投票成员名单，以 Merkle 根的形式记录在链上；只有名单内成员可以投票，投票时需提交一份证明（proof）向合约证明自己在名单内——链上只保存名单的 Merkle 根、不保存完整名单，所以需要这份证明。</p>
-      <p className="hint">当前状态：暂无提案。节点已于阶段 5 退役，原先由节点产出的活跃集名单与投票证明暂时没有新的产出路径，正在重整中；在此之前，创建提案与需要证明的投票暂时不可用。提案列表查看、已通过提案的执行不受影响。</p>
+      <p className="hint">治理用于调整交易手续费等协议参数。流程：创建提案 → 投票期 7 天 → 支持票超过活跃集人数一半即通过 → 经过 2 天时间锁 → 执行生效。活跃集是按贡献选出的投票成员名单。名单由治理管理员按周期在链下统计后折成 Merkle 根、连同人数一起发布为链上「快照」并固定下来；提案只能引用已发布快照的编号，不能自带名单（防止有人自选一份只有自己的名单把提案投过）。只有名单内成员可以投票（一人一票），投票时需提交一份证明（proof）向合约证明自己在名单内——链上只保存名单的 Merkle 根、不保存完整名单，所以需要这份证明。</p>
+      <p className="hint">当前状态：暂无提案。活跃集名单的新产出路径为「链下贡献计量 → 治理管理员发布快照」：本期快照尚未发布前，创建提案不可用；成员投票用的 proof 仍需由名单产出方随快照一并发放，目前暂不能自助生成。提案列表查看、已通过提案的执行不受影响。</p>
 
       <h3 className="gov-sub">
         提案列表
@@ -254,7 +239,6 @@ export function GovernanceSection({ account }: { account: string | null }) {
               .slice((currentPage - 1) * proposalsPerPage, currentPage * proposalsPerPage)
               .map((p, i) => {
                 const actualIndex = (currentPage - 1) * proposalsPerPage + i
-                const weight = votingWeights.get(actualIndex)
                 const now = Date.now()
                 const votingEnds = Number(p.votingEndsAt) * 1000
                 const executableAt = Number(p.executableAt) * 1000
@@ -302,14 +286,6 @@ export function GovernanceSection({ account }: { account: string | null }) {
                         {isPassed && !p.executed && <span style={{ color: 'green' }}> ✓</span>}
                       </span>
                     </div>
-                    {weight && (
-                      <div className="row">
-                        <span className="label">投票权重</span>
-                        <span className="value">
-                          赞成：{weight.yes.toString()} | 反对：{weight.no.toString()}
-                        </span>
-                      </div>
-                    )}
                     <div className="row">
                       <span className="label">目标</span>
                       <span className="value mono">{shortAddress(p.target, 10, 8)}</span>
@@ -444,7 +420,7 @@ export function GovernanceSection({ account }: { account: string | null }) {
       </div>
 
       <h3 className="gov-sub">创建提案</h3>
-      <p className="hint">当前模板：调整交易手续费。创建提案需要当前活跃集的人数与 Merkle 根；活跃集名单的产出路径在节点退役后正在重整，当前暂无可用名单，创建提案暂时不可用（见上方「当前状态」说明）。路径恢复后的规则不变：提案提交后进入 7 天投票期，内容不可修改；同一参数在提案执行后一周内不可重复创建。</p>
+      <p className="hint">当前模板：调整交易手续费。前提：治理管理员已发布本期活跃集快照并公布编号（没有快照就无法创建，这是为了防止自选投票名单）。步骤：填新手续费比例 → 填快照编号 → 提交并在钱包确认。注意：提案会绑定所填快照的名单与人数，提交后进入 7 天投票期、内容不可修改；同一参数在提案执行后一周内不可重复创建。</p>
       <div className="proposal-create-form">
         <div className="form-group">
           <label>新手续费比例（%）</label>
@@ -462,27 +438,18 @@ export function GovernanceSection({ account }: { account: string | null }) {
         {createFeePercent && !Number.isNaN(parseFloat(createFeePercent)) && parseFloat(createFeePercent) > 0 && parseFloat(createFeePercent) <= 100 && (
           <p className="proposal-preview">本提案将把交易手续费调整为 {createFeePercent}%</p>
         )}
-        <details className="proposal-create-advanced">
-          <summary>高级：活跃集设置（人数与 Merkle 根）</summary>
-          <div className="input-row">
-            <input
-              type="number"
-              placeholder="活跃集人数"
-              value={createActiveCount}
-              onChange={(e) => setCreateActiveCount(e.target.value)}
-              className="input"
-            />
-          </div>
-          <div className="input-row">
-            <input
-              type="text"
-              placeholder="merkleRoot（0x + 64 位十六进制）"
-              value={createMerkleRoot}
-              onChange={(e) => setCreateMerkleRoot(e.target.value)}
-              className="input"
-            />
-          </div>
-        </details>
+        <div className="form-group">
+          <label>活跃集快照编号</label>
+          <input
+            type="number"
+            min="0"
+            step="1"
+            placeholder="如 0（以治理管理员公布的本期编号为准）"
+            value={createSnapshotId}
+            onChange={(e) => setCreateSnapshotId(e.target.value)}
+            className="input"
+          />
+        </div>
         <button className="btn primary" onClick={handleCreate} disabled={loadingCreate || !account}>
           {loadingCreate ? '处理中…' : '提交提案'}
         </button>
