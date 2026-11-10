@@ -39,11 +39,11 @@ contract GovernanceTest is Test {
         // Create proposal: set Settlement feeBps to 8
         bytes memory callData = abi.encodeWithSelector(Settlement.setFeeBps.selector, uint16(8));
         bytes32 root = _singleAddressRoot(alice);
+        uint256 snapshotId = gov.publishSnapshot(root, 1);
         uint256 pid = gov.createProposal(
             address(settlement),
             callData,
-            root,
-            1 // activeCount
+            snapshotId
         );
 
         assertEq(settlement.feeBps(), 1);
@@ -74,7 +74,8 @@ contract GovernanceTest is Test {
 
         vm.warp(8 days);
         bytes memory callData = abi.encodeWithSelector(Settlement.setFeeBps.selector, uint16(10));
-        uint256 pid = gov.createProposal(address(settlement), callData, root, 2);
+        uint256 snapshotId = gov.publishSnapshot(root, 2);
+        uint256 pid = gov.createProposal(address(settlement), callData, snapshotId);
 
         // Alice 的 proof：兄弟节点是 Bob 的叶子
         bytes32[] memory proofA = new bytes32[](1);
@@ -109,7 +110,8 @@ contract GovernanceTest is Test {
         bytes32 root = _singleAddressRoot(alice);
 
         vm.warp(8 days);
-        uint256 pid = gov.createProposal(address(fd), callData, root, 1);
+        uint256 snapshotId = gov.publishSnapshot(root, 1);
+        uint256 pid = gov.createProposal(address(fd), callData, snapshotId);
 
         vm.prank(alice);
         gov.vote(pid, true, _singleAddressProof(alice));

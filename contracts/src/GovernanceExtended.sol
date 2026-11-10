@@ -40,7 +40,8 @@ contract GovernanceExtended is Governance {
     );
     event ProposalCancelled(uint256 indexed proposalId, address cancelledBy);
     event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
-    event VoteWeighted(uint256 indexed proposalId, address indexed voter, uint256 weight);
+    // 第 61 轮：VoteWeighted 事件随 voteWithWeight 一并摘除——该入口只 emit 权重、
+    // 实际计票恒为 1，属假功能；真加权计票等治理模型定案后再议。
 
     modifier whenNotCancelled(uint256 proposalId) {
         require(!cancelled[proposalId], "Governance: proposal cancelled");
@@ -51,17 +52,16 @@ contract GovernanceExtended is Governance {
         contributorReward = _contributorReward;
     }
 
-    /// @notice 创建带元数据的提案
+    /// @notice 创建带元数据的提案（第 61 轮起引用已发布快照编号）
     function createProposalWithMetadata(
         address target,
         bytes calldata callData,
-        bytes32 merkleRoot,
-        uint256 activeCount,
+        uint256 snapshotId,
         string memory title,
         string memory description,
         string memory category
     ) external returns (uint256 proposalId) {
-        proposalId = _createProposal(target, callData, merkleRoot, activeCount);
+        proposalId = _createProposal(target, callData, snapshotId);
         
         proposalMetadata[proposalId] = ProposalMetadata({
             title: title,
@@ -74,17 +74,16 @@ contract GovernanceExtended is Governance {
         emit ProposalMetadataSet(proposalId, title, category, msg.sender);
     }
 
-    /// @notice 创建带 IPFS 哈希的提案
+    /// @notice 创建带 IPFS 哈希的提案（第 61 轮起引用已发布快照编号）
     function createProposalWithIPFS(
         address target,
         bytes calldata callData,
-        bytes32 merkleRoot,
-        uint256 activeCount,
+        uint256 snapshotId,
         string memory title,
         string memory ipfsHash,
         string memory category
     ) external returns (uint256 proposalId) {
-        proposalId = _createProposal(target, callData, merkleRoot, activeCount);
+        proposalId = _createProposal(target, callData, snapshotId);
         
         proposalMetadata[proposalId] = ProposalMetadata({
             title: title,
@@ -97,17 +96,16 @@ contract GovernanceExtended is Governance {
         emit ProposalMetadataSet(proposalId, title, category, msg.sender);
     }
 
-    /// @notice 创建多步骤提案（带元数据）
+    /// @notice 创建多步骤提案（带元数据；第 61 轮起引用已发布快照编号）
     function createMultiStepProposalWithMetadata(
         address[] calldata targets,
         bytes[] calldata callDataArray,
-        bytes32 merkleRoot,
-        uint256 activeCount,
+        uint256 snapshotId,
         string memory title,
         string memory description,
         string memory category
     ) external returns (uint256 proposalId) {
-        proposalId = _createMultiStepProposal(targets, callDataArray, merkleRoot, activeCount);
+        proposalId = _createMultiStepProposal(targets, callDataArray, snapshotId);
         
         proposalMetadata[proposalId] = ProposalMetadata({
             title: title,
@@ -179,85 +177,10 @@ contract GovernanceExtended is Governance {
         }
     }
 
-    /// @notice 带权重的投票（基于贡献分和信誉分）
-    function voteWithWeight(
-        uint256 proposalId,
-        bool support,
-        bytes32[] calldata proof
-    ) external whenNotCancelled(proposalId) {
-        // 先执行基础投票
-        vote(proposalId, support, proof);
-
-        // 计算投票权重
-        uint256 weight = getVotingWeight(msg.sender, proposalId);
-        
-        if (weight > 0) {
-            emit VoteWeighted(proposalId, msg.sender, weight);
-        }
-    }
-
-    /// @notice 获取投票权重（基于贡献分和信誉分）
-    function getVotingWeight(address voter, uint256 proposalId) public view returns (uint256) {
-        if (contributorReward == address(0)) {
-            return 1; // 默认权重为 1
-        }
-
-        // 获取当前周期（使用提案创建时的周期）
-        Proposal storage p = proposals[proposalId];
-        string memory proposalPeriod = getPeriodForTimestamp(p.createdAt);
-        
-        // 查询贡献分
-        uint256 contributionScore = ContributorReward(contributorReward)
-            .getContributionScore(proposalPeriod, voter);
-        
-        // 查询信誉分
-        uint256 reputation = ContributorReward(contributorReward)
-            .reputationScore(voter);
-        
-        // 如果贡献分为 0，返回 0（无投票权）
-        if (contributionScore == 0) {
-            return 0;
-        }
-        
-        // 计算权重：贡献分 × (信誉分 / 10000)
-        // 如果信誉分为 0，使用贡献分（最低权重）
-        if (reputation == 0) {
-            return contributionScore;
-        }
-        
-        return (contributionScore * reputation) / 10000;
-    }
-
-    /// @notice 根据时间戳获取周期（简化实现）
-    function getPeriodForTimestamp(uint256 timestamp) public pure returns (string memory) {
-        // 简化实现：返回周数
-        uint256 weekNumber = timestamp / (7 days);
-        return string(abi.encodePacked("week-", _uint2str(weekNumber)));
-    }
-
-
-    /// @notice 整数转字符串（辅助函数）
-    function _uint2str(uint256 _i) internal pure returns (string memory) {
-        if (_i == 0) {
-            return "0";
-        }
-        uint256 j = _i;
-        uint256 len;
-        while (j != 0) {
-            len++;
-            j /= 10;
-        }
-        bytes memory bstr = new bytes(len);
-        uint256 k = len;
-        while (_i != 0) {
-            k = k - 1;
-            uint8 temp = (48 + uint8(_i - _i / 10 * 10));
-            bytes1 b1 = bytes1(temp);
-            bstr[k] = b1;
-            _i /= 10;
-        }
-        return string(bstr);
-    }
+    // 第 61 轮摘除：voteWithWeight / getVotingWeight 及其辅助函数
+    // （getPeriodForTimestamp / _uint2str）已整体 removal——原实现调用基类
+    // vote()（计票恒为 1）后仅 emit 计算权重，是“假计票”。真实加权计票
+    // 须待治理模型定案（见整改方案第 61 轮与轮次文档），不在本轮实现。
 
     /// @notice 获取提案元数据
     function getProposalMetadata(uint256 proposalId) external view returns (
