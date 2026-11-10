@@ -136,7 +136,7 @@ export interface Stage4Config {
  * 一律抛错拒绝启动——原实现把空项静默滤掉、全空时回落缺省，等于把
  * 「只跑一条链」的配置笔误放大成双链执行，与本节失败关闭口径相悖。
  */
-function parseCsvList(raw: string | undefined, envName: string): string[] | null {
+export function parseCsvList(raw: string | undefined, envName: string): string[] | null {
   if (raw === undefined) return null
   const parts = raw.split(',').map((s) => s.trim())
   if (parts.some((s) => s.length === 0)) {
@@ -153,7 +153,7 @@ function parseCsvList(raw: string | undefined, envName: string): string[] | null
  * 的测试网，非法值直接抛错拒绝启动（失败关闭，不静默回落）——
  * 单链补测靠它保证另一条链零动作，解析含糊比不跑更危险。
  */
-function parseChains(raw: string | undefined): number[] {
+export function parseChains(raw: string | undefined): number[] {
   const items = parseCsvList(raw, 'S4_CHAINS')
   if (!items) return [...CHAINS]
   return items.map((s) => {
@@ -172,7 +172,7 @@ function parseChains(raw: string | undefined): number[] {
  * 顺序；缺省 TRADE_PAIRS 全 8 对与既有行为逐字一致。只接受已登记
  * 交易对，非法值抛错拒绝启动（同 S4_CHAINS 口径）。
  */
-function parsePairs(raw: string | undefined): string[] {
+export function parsePairs(raw: string | undefined): string[] {
   const items = parseCsvList(raw, 'S4_PAIRS')
   if (!items) return [...TRADE_PAIRS]
   for (const p of items) {
@@ -183,6 +183,17 @@ function parsePairs(raw: string | undefined): string[] {
     }
   }
   return items
+}
+
+/**
+ * 「代表对」选择规则（第 55 轮回落对 + 第 58 轮预检探针对共用同一条）：
+ * 本次配置子集含 DEFAULT_PAIR 用它，否则用子集首对——任何情况下都
+ * 不许落到 S4_PAIRS 子集之外。第 59 轮块 5 起抽为单一导出纯函数，
+ * 两处调用点（cycle 回落 / runCheck 预检）共用，config.test.mjs 钉住，
+ * 杜绝两处口径日后漂移。语义与抽取前逐字一致，缺省配置行为不变。
+ */
+export function pickCheckPair(cfg: { pairs: string[] }): string {
+  return cfg.pairs.includes(DEFAULT_PAIR) ? DEFAULT_PAIR : cfg.pairs[0]
 }
 
 export function loadConfig(): Stage4Config {
@@ -2625,9 +2636,9 @@ async function runChainCycle(
   }
   let usedPair = pair
   let makerGens = await tryMakers(pair)
-  // 回落对限本次配置子集内：子集含 DEFAULT_PAIR 用它（缺省配置行为
-  // 不变），否则用子集首对——不许发到 S4_PAIRS 之外（第 55 轮）。
-  const fallbackPair = cfg.pairs.includes(DEFAULT_PAIR) ? DEFAULT_PAIR : cfg.pairs[0]
+  // 回落对限本次配置子集内（第 55 轮规则，第 59 轮起与预检探针
+  // 共用 pickCheckPair 单一实现）：不许发到 S4_PAIRS 之外。
+  const fallbackPair = pickCheckPair(cfg)
   if (makerGens.length === 0 && pair !== fallbackPair) {
     // 该对在该链未登记或钱包无可落锁余额：回落保产出（与 soak 的预检跳过口径一致，差别是阶段 4 有计数目标）
     log(`chain ${ctx.chainId} cycle ${cycle}: ${pair} 无单可发，回落 ${fallbackPair}`)
@@ -2903,8 +2914,8 @@ export async function runCheck(cfg: Stage4Config): Promise<number> {
   if (!hardFail) {
     // 预检探针的交易对跟随本次配置子集（第 58 轮，第 55 轮审查半 B 第 2 条）：
     // 此前写死 DEFAULT_PAIR，子集不含它时只读探针仍会访问子集外的对——
-    // 与回落对同一规则：子集含 DEFAULT_PAIR 用它，否则用子集首对。
-    const checkPair = cfg.pairs.includes(DEFAULT_PAIR) ? DEFAULT_PAIR : cfg.pairs[0]
+    // 与回落对同一规则（第 59 轮起共用 pickCheckPair）。
+    const checkPair = pickCheckPair(cfg)
     for (const chainId of cfg.chains) {
       const ctx = buildChainCtx(cfg, chainId, wallets, deployer!)
       const info: Record<string, unknown> = {
