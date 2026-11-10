@@ -224,14 +224,43 @@ export interface ExecuteDeps {
 }
 
 /**
+ * 加载时批量复验（第 63 轮桥-1）：对全部 pending-decision 记录按当前披露版本
+ * 复验确认有效性，失效的立即迁移回 suspended-disclosure 并落盘——让升版挂起
+ * 在用户点「发起交付」之前就如实呈现。执行时复验（executeDelivery 内）保留作
+ * 最终防线，双层同口径（骑既有 hasValidConfirmation）。
+ * 返回复验后的全部记录（未变更时不写盘）。
+ */
+export function revalidatePendingDisclosures(
+  account: string,
+  settings: DefaultBridgeSettings,
+  now: number = Date.now()
+): DeliveryRecord[] {
+  const records = loadDeliveries(account)
+  let changed = false
+  const next = records.map((r) => {
+    if (r.status === 'pending-decision' && r.channel && !hasValidConfirmation(settings, r.channel)) {
+      changed = true
+      return transition(r, { type: 'disclosure-invalidated', at: now })
+    }
+    return r
+  })
+  if (changed) saveDeliveries(account, next)
+  return next
+}
+
+/**
  * 发起一笔交付（记录须为 pending-decision 且已定通道）：
  * Vault 提款（资金在钱包时跳过）→ 桥存入，全程骑 bridgeExecutors 的既有实现。
  * 桥费由收款方承担（§5 定版）：桥存入的原生币费用由收款方钱包支付——正是本人签名
  * 支付；结算 gas 的对半分摊已在结算时按第 21 轮规则扣过，与此处无关、两笔账分开。
+ *
+ * 第 63 轮桥-1（P1-②）：发起前先按**当前** settings 复验披露确认——披露升版后
+ * 升版前生成的 pending-decision 记录不得按旧披露执行；失效即迁移回挂起并中止。
  */
 export async function executeDelivery(
   account: string,
   recordId: string,
+  settings: DefaultBridgeSettings,
   deps: ExecuteDeps = {}
 ): Promise<DeliveryRecord> {
   const withSignerFn = deps.withSignerFn ?? withSigner
@@ -240,6 +269,11 @@ export async function executeDelivery(
   if (!record) throw new Error('交付记录不存在')
   if (!record.channel) throw new Error('交付记录尚未选定通道')
   const channel = record.channel
+  if (record.status === 'pending-decision' && !hasValidConfirmation(settings, channel)) {
+    record = transition(record, { type: 'disclosure-invalidated', at: Date.now() })
+    persist(account, record)
+    throw new Error('披露已更新，请重新确认后继续')
+  }
   const settleChain = getChainConfig(record.settleChainId)
   const homeChain = getChainConfig(record.homeChainId)
   if (!settleChain || !homeChain) throw new Error('链配置缺失，无法发起交付')
@@ -331,7 +365,10 @@ export async function refreshDelivery(
         record = transition(record, {
           type: 'channel-failure-confirmed',
           at: now,
-          note: 'LayerZero 桥合约状态为失败。等额款项将按预登记落点退回你成交链的 Vault 余额（平台侧记回后资产页可见）；记回前请勿重复发起同一笔交付。',
+          // 如实口径（第 63 轮 P2）：第一期没有平台记回机制，旧文案「将退回 Vault」
+          // 是不存在的承诺，已删。资金确切位置 = 桥侧失败状态，用户实际路径 = 桥的
+          // 重试投递 / 人工中继入口，追踪链接就在本记录里。
+          note: 'LayerZero 桥合约状态为失败。款项停留在桥侧失败状态，未到账主场链，也不会自动退回成交链 Vault（平台没有自动记回机制）。请凭下方追踪链接到 LayerZero Scan 核对状态，并通过桥的重试投递或无许可 lzReceive 人工中继处理；确认最终结果前请勿重复发起同一笔交付。',
         })
         persist(account, record)
         return record

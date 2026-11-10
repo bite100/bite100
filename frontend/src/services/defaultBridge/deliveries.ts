@@ -64,12 +64,13 @@ export type DeliveryEvent =
   | { type: 'channel-failure-confirmed'; at: number; note: string }
   | { type: 'resolve-settle-chain-only'; at: number }
   | { type: 'reconfirmed'; at: number }
+  | { type: 'disclosure-invalidated'; at: number }
   | { type: 'retry'; at: number }
   | { type: 'choose-temp-channel'; at: number; channel: NonNullable<DeliveryRecord['channel']> }
 
 const LEGAL: Record<DeliveryStatus, DeliveryEvent['type'][]> = {
   'not-needed': [],
-  'pending-decision': ['initiate', 'resolve-settle-chain-only'],
+  'pending-decision': ['initiate', 'resolve-settle-chain-only', 'disclosure-invalidated'],
   'suspended-disclosure': ['reconfirmed'],
   'ask-required': ['choose-temp-channel', 'resolve-settle-chain-only'],
   initiating: ['initiated', 'initiation-failed'],
@@ -127,6 +128,10 @@ export function transition(record: DeliveryRecord, event: DeliveryEvent): Delive
       break
     case 'reconfirmed':
       next.status = 'pending-decision'
+      break
+    case 'disclosure-invalidated':
+      // 披露升版后旧确认失效：待发起记录回挂起（与 reconfirmed 回路成对，第 63 轮桥-1）
+      next.status = 'suspended-disclosure'
       break
     case 'retry':
       next.status = 'pending-decision'

@@ -1,8 +1,27 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { computeReceipts, fillFromLocalTrade, planDelivery, symbolForToken } from './orchestrator'
+import {
+  computeReceipts,
+  executeDelivery,
+  fillFromLocalTrade,
+  planDelivery,
+  revalidatePendingDisclosures,
+  symbolForToken,
+} from './orchestrator'
 import { confirmDisclosure, factorySettings } from './settings'
+import { getDelivery } from './deliveries'
+import { withSigner } from '../../utils'
 import type { SettledFillInput } from './orchestrator'
 import type { DefaultBridgeSettings } from './types'
+
+/** 可计数的 withSigner 桩：被调用即计数并抛指定错误（不触碰真实钱包）。 */
+function throwingSigner(error: Error) {
+  let calls = 0
+  const fn = (async () => {
+    calls++
+    throw error
+  }) as unknown as typeof withSigner
+  return { fn, calls: () => calls }
+}
 
 const SEPOLIA = 11155111
 const BASE_SEPOLIA = 84532
@@ -115,5 +134,48 @@ describe('交付规划（§1.2 判定 + §7.1 幂等）', () => {
   it('成交与我无关 → 无记录', () => {
     const out = planDelivery('0x0000000000000000000000000000000000000001', fill(), settings())
     expect(out.record).toBeNull()
+  })
+})
+
+describe('第 63 轮桥-1：披露执行复验（P1-②）', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('升版前的 pending 记录执行时被复验拦下：转挂起、抛错、零执行尝试', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    expect(out.record?.status).toBe('pending-decision')
+    // 模拟升版：当前版本已不是确认时记下的版本
+    const stale = settings()
+    stale.confirmations = [{ channel: 'layerzero', disclosureVersion: 1, confirmedAt: 0 }]
+    const stub = throwingSigner(new Error('不应被调用'))
+    await expect(executeDelivery(TAKER, out.record!.id, stale, { withSignerFn: stub.fn })).rejects.toThrow(
+      '披露已更新，请重新确认后继续'
+    )
+    expect(stub.calls()).toBe(0)
+    expect(getDelivery(TAKER, 'trade-x', TAKER)?.status).toBe('suspended-disclosure')
+  })
+
+  it('确认仍有效时复验放行（执行进入发起阶段）', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    const stub = throwingSigner(new Error('halt-at-signer'))
+    // executeDelivery 内部吞错落异常记录：放行后签名器被调用且错误进入异常注记
+    const result = await executeDelivery(TAKER, out.record!.id, settings(), { withSignerFn: stub.fn })
+    expect(stub.calls()).toBe(1)
+    expect(result.status).toBe('anomaly')
+    expect(result.anomalyKind).toBe('initiation-failed')
+    expect(result.anomalyNote).toContain('halt-at-signer')
+  })
+
+  it('加载批量复验：只挂起失效通道的 pending 记录，其余不动', () => {
+    planDelivery(TAKER, fill(), settings())
+    const ccipSettings = confirmDisclosure(settings({ defaultChannel: 'ccip' }), 'ccip')
+    const ccipOut = planDelivery(TAKER, fill({ tradeId: 'trade-ccip' }), ccipSettings)
+    expect(ccipOut.record?.status).toBe('pending-decision')
+    expect(ccipOut.record?.channel).toBe('ccip')
+    // 复验时只给 LZ 的有效确认 → CCIP 记录应挂起，LZ 记录不动
+    const onlyLz = settings()
+    const records = revalidatePendingDisclosures(TAKER, onlyLz, 99)
+    expect(records.find((r) => r.tradeId === 'trade-x')?.status).toBe('pending-decision')
+    expect(records.find((r) => r.tradeId === 'trade-ccip')?.status).toBe('suspended-disclosure')
+    expect(getDelivery(TAKER, 'trade-ccip', TAKER)?.status).toBe('suspended-disclosure')
   })
 })

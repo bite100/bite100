@@ -25,6 +25,7 @@ import {
   fillFromLocalTrade,
   planDelivery,
   refreshDelivery,
+  revalidatePendingDisclosures,
 } from '../../services/defaultBridge/orchestrator'
 import { loadSettings } from '../../services/defaultBridge/settings'
 import { hasValidConfirmation, supportedChannelsFor } from '../../services/defaultBridge/support'
@@ -76,6 +77,8 @@ export function DeliveryRecords({ account, refreshSignal = 0 }: { account: strin
     } catch {
       // 本地成交历史不可用时，只展示已有交付记录
     }
+    // 加载时批量复验（第 63 轮桥-1）：披露升版后，旧 pending-decision 先如实转挂起
+    revalidatePendingDisclosures(account, s)
     setRecords(loadDeliveries(account).slice().sort((a, b) => b.createdAt - a.createdAt))
   }, [account])
 
@@ -163,7 +166,7 @@ export function DeliveryRecords({ account, refreshSignal = 0 }: { account: strin
             </div>
 
             {rec.status === 'pending-decision' && (
-              <button type="button" className="btn primary drec-btn" disabled={busy} onClick={() => void run(rec, () => executeDelivery(account, rec.id))}>
+              <button type="button" className="btn primary drec-btn" disabled={busy} onClick={() => void run(rec, () => executeDelivery(account, rec.id, settings))}>
                 {busy ? '发起中…' : '发起交付（钱包签名确认）'}
               </button>
             )}
@@ -247,7 +250,7 @@ export function DeliveryRecords({ account, refreshSignal = 0 }: { account: strin
                       onClick={() =>
                         void run(rec, async () => {
                           applyEvent(account, rec, { type: 'retry', at: Date.now() })
-                          await executeDelivery(account, rec.id)
+                          await executeDelivery(account, rec.id, settings)
                         })
                       }
                     >

@@ -105,4 +105,16 @@ describe('交付状态机（§1.2 / §7.3）', () => {
   it('executor 字段第一期恒为 bridge（§8 选项 C 预留）', () => {
     expect(rec().executor).toBe('bridge')
   })
+
+  it('第 63 轮桥-1：披露失效只允许从 pending-decision 迁移回挂起', () => {
+    let r = rec()
+    r = transition(r, { type: 'disclosure-invalidated', at: 2 })
+    expect(r.status).toBe('suspended-disclosure')
+    // 挂起后重新确认仍走既有回路
+    r = transition(r, { type: 'reconfirmed', at: 3 })
+    expect(r.status).toBe('pending-decision')
+    // 非 pending 态不许用该事件（在途记录不受披露升版影响）
+    expect(() => transition(rec({ status: 'in-flight' }), { type: 'disclosure-invalidated', at: 2 })).toThrow()
+    expect(() => transition(rec({ status: 'initiating' }), { type: 'disclosure-invalidated', at: 2 })).toThrow()
+  })
 })

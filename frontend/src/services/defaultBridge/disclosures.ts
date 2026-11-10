@@ -8,6 +8,11 @@
  * 口径纪律（设计 §3）：主网与测试网时效分开写、禁止混写；费率只写结构与计费方式，
  * 具体数字一律在设置/发起时实时读取，禁止把费率写死进文案。事实与桥页现行披露
  * （第 19/20 轮）保持一致：LZ 1-of-1 DVN 白话、CCIP DON+RMN、Wormhole 13-of-19。
+ *
+ * 版本史：v2（第 63 轮）——失败去向文案如实化：第一期并无平台记回机制，v1 中
+ * 「确认失败后记回 Vault」的表述是不存在的承诺，三通道 failureDestination 与
+ * failureGuide.destinationIssue 已按实情改写（款项停留在桥侧、用户走桥的重试/
+ * 人工入口），版本 +1 使 v1 确认自动失效（§2.3 机制本意）。
  */
 import type { DefaultChannelId } from './types'
 
@@ -47,7 +52,7 @@ export function isTestnetChain(chainId: number): boolean {
 export const CHANNEL_DISCLOSURES: Record<DefaultChannelId, ChannelDisclosure> = {
   layerzero: {
     channel: 'layerzero',
-    version: 1,
+    version: 2,
     name: 'LayerZero',
     feeStructure:
       '两部分：跨链消息费在发送时以源链原生币（ETH）实时报价支付；另有 0.1 TKA 桥费从到账数量中扣除。具体金额以每次交付发起前的实时报价为准，报价会显示在桥页与交付记录中，本页不写死数字。桥费由收款方（就是你）从成交款里承担，与结算 gas 的双方对半分摊是两笔分开的账。',
@@ -62,20 +67,20 @@ export const CHANNEL_DISCLOSURES: Record<DefaultChannelId, ChannelDisclosure> = 
     ],
     irreversibility: '交付一旦发起不可取消、必然走完：消息桥没有撤销概念，发起后无法改道、无法退款，只能等它投递完成。',
     failureDestination:
-      '发起失败时钱一分未动，留在你成交链的 Vault 余额里；在途消息确认终局失败时，等额款项按预登记落点退回你成交链的 Vault 余额，不会凭空消失。',
+      '发起失败时钱一分未动，留在你成交链的 Vault 余额里；在途消息确认终局失败时，款项停留在桥侧的失败状态，不会自动退回你的 Vault 余额——平台没有自动记回机制，你需要凭追踪链接按本通道的重试投递 / 人工中继入口自行处理（见下方失败指南）。',
     failureGuide: {
       initiationFailure:
         '交付发起失败：钱还在你成交链的 Vault 余额里，一分未动。你可以在订单历史的交付记录里点「重试交付」，或点「提取到钱包」自行处理。',
       inTransitTimeout:
         '在途超时：先凭交付记录里的追踪链接到 LayerZero Scan 查消息状态。多数情况只是投递延迟；超过时效上限仍未到账，交付记录会转为异常并提示，运营侧可经无许可的 lzReceive 补投递兜底。',
       destinationIssue:
-        '目标侧入账异常：只有在通道侧确认这条消息终局失败后，等额款项才会记回你成交链的 Vault 余额（资产页可见，带来源标注），确认前不会双记账。记回后你可以重试交付或提取到钱包。',
+        '目标侧入账异常：只有在通道侧确认这条消息终局失败后，才能确定款项停留在桥侧失败状态；它不会自动记回你的 Vault 余额，平台侧也没有记回机制。凭交付记录里的追踪链接到 LayerZero Scan 核对状态后，可通过桥的重试投递（retryBridge）或无许可的 lzReceive 人工中继完成投递；确认最终结果前请勿重复发起同一笔交付，避免双记账。',
     },
     timeoutMs: { mainnet: 15 * 60_000, testnet: 30 * 60_000 },
   },
   ccip: {
     channel: 'ccip',
-    version: 1,
+    version: 2,
     name: 'Chainlink CCIP',
     feeStructure:
       '费用在发送前由 Chainlink 报价、发送时锁定（固定价，中途不补差价），以源链原生币（ETH）支付，不另收桥费。具体金额以每次交付发起前的实时报价为准。桥费由收款方（就是你）从成交款里承担，与结算 gas 分开记账。',
@@ -90,20 +95,20 @@ export const CHANNEL_DISCLOSURES: Record<DefaultChannelId, ChannelDisclosure> = 
     ],
     irreversibility: '交付一旦发起不可取消、必然走完：消息桥没有撤销概念，发起后无法改道、无法退款，只能等它投递完成。',
     failureDestination:
-      '发起失败时钱一分未动，留在你成交链的 Vault 余额里；在途消息确认终局失败时，等额款项按预登记落点退回你成交链的 Vault 余额，不会凭空消失。',
+      '发起失败时钱一分未动，留在你成交链的 Vault 余额里；在途消息确认终局失败时，款项停留在桥侧的失败状态，不会自动退回你的 Vault 余额——平台没有自动记回机制，你需要凭消息 ID 按 Chainlink 官方的人工执行口径自行处理（见下方失败指南）。',
     failureGuide: {
       initiationFailure:
         '交付发起失败：钱还在你成交链的 Vault 余额里，一分未动。你可以在订单历史的交付记录里点「重试交付」，或点「提取到钱包」自行处理。',
       inTransitTimeout:
         '在途超时：先凭交付记录里的消息 ID 到 Chainlink CCIP 页面查状态。多数情况是源链终局等待或投递排队；超过时效上限仍未到账，交付记录会转为异常并提示，后续按 Chainlink 官方人工执行口径处理。',
       destinationIssue:
-        '目标侧入账异常：只有在通道侧确认这条消息终局失败后，等额款项才会记回你成交链的 Vault 余额（资产页可见，带来源标注），确认前不会双记账。记回后你可以重试交付或提取到钱包。',
+        '目标侧入账异常：只有在通道侧确认这条消息终局失败后，才能确定款项停留在桥侧失败状态；它不会自动记回你的 Vault 余额，平台侧也没有记回机制。凭交付记录里的消息 ID 到 Chainlink CCIP 页面核对状态，并按 Chainlink 官方人工执行口径完成或处理该消息；确认最终结果前请勿重复发起同一笔交付，避免双记账。',
     },
     timeoutMs: { mainnet: 40 * 60_000, testnet: 60 * 60_000 },
   },
   wormhole: {
     channel: 'wormhole',
-    version: 1,
+    version: 2,
     name: 'Wormhole（NTT）',
     feeStructure:
       '只需付消息费与发送交易的 gas，以源链原生币（ETH）支付，不另收桥费；测试网消息费为 0。具体金额以每次交付发起前的实时读取为准。桥费由收款方（就是你）从成交款里承担，与结算 gas 分开记账。',
@@ -118,14 +123,14 @@ export const CHANNEL_DISCLOSURES: Record<DefaultChannelId, ChannelDisclosure> = 
     ],
     irreversibility: '交付一旦发起不可取消、必然走完：消息桥没有撤销概念，发起后无法改道、无法退款，只能等它投递完成（或按说明手动完成投递）。',
     failureDestination:
-      '发起失败时钱一分未动，留在你成交链的 Vault 余额里；在途消息确认终局失败时，等额款项按预登记落点退回你成交链的 Vault 余额，不会凭空消失。',
+      '发起失败时钱一分未动，留在你成交链的 Vault 余额里；在途消息确认终局失败时，款项停留在桥侧状态，不会自动退回你的 Vault 余额——平台没有自动记回机制，你需要凭消息证明（VAA）按本通道的手动投递入口自行处理（见下方失败指南）。',
     failureGuide: {
       initiationFailure:
         '交付发起失败：钱还在你成交链的 Vault 余额里，一分未动。你可以在订单历史的交付记录里点「重试交付」，或点「提取到钱包」自行处理。',
       inTransitTimeout:
         '在途超时：先凭交付记录里的链接到 WormholeScan 查状态，并可在该页面取得消息证明（VAA）后按指引手动完成投递——这是本通道既有的兜底路径，测试网一直如此。',
       destinationIssue:
-        '目标侧入账异常：只有在通道侧确认这条消息终局失败后，等额款项才会记回你成交链的 Vault 余额（资产页可见，带来源标注），确认前不会双记账。记回后你可以重试交付或提取到钱包。',
+        '目标侧入账异常：只有在通道侧确认终局状态后，才能确定款项停留在桥侧状态；它不会自动记回你的 Vault 余额，平台侧也没有记回机制。凭交付记录里的链接到 WormholeScan 取得消息证明（VAA）后，可在目标链手动完成投递；确认最终结果前请勿重复发起同一笔交付，避免双记账。',
     },
     timeoutMs: { mainnet: 40 * 60_000, testnet: 120 * 60_000 },
   },
