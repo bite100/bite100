@@ -17,7 +17,7 @@ import { assertAllowedChain, assertAllowedPair, chainConfig } from '../config'
 import { loadSignerForRole } from '../signers'
 import { ToolError } from '../errors'
 import { chainIdField, digestField, parseArgs, type ToolContext, type ToolDef } from './common'
-import { buildAndSign, placeOrderSchema } from './orderBuild'
+import { buildAndSign, deliverOrder, placeOrderSchema } from './orderBuild'
 
 const VAULT_CANCEL_ABI = [
   'function lockers(address) view returns (bool)',
@@ -40,25 +40,24 @@ export const writeTools: ToolDef[] = [
       const input = parseArgs(placeOrderSchema, args)
       // 护栏先行：白名单与限额在构建/签名之前判定，拒绝不产生任何链上/中继副作用。
       // 第 59 轮记账协议：check 即预留（频率当场落账、每日名义额当场计入）；
-      // 中继接受（200）后预留转为正式记账；投递失败才 release 回滚每日预留。
+      // 中继接受（200）后预留转为正式记账；投递明确失败才 release 回滚
+      // 每日预留；投递结果不确定（响应丢失）先对账再决定（见 deliverOrder）。
       assertAllowedChain(input.chainId)
       assertAllowedPair(input.pair)
       const notional = Number(input.price) * Number(input.amount)
       await ctx.guard.check(ctx.agent, notional)
 
       let built
-      let res
       try {
         built = await buildAndSign(ctx, input)
-        res = await ctx.relay.postOrder(built.body)
       } catch (e) {
+        // 构建/签名失败：中继从未被接触，预留直接回滚（口径不变）
         await ctx.guard.release(ctx.agent, notional)
         throw e
       }
-      if (res.status !== 200) {
-        await ctx.guard.release(ctx.agent, notional)
-        throw new ToolError('relay_rejected', `中继拒单 HTTP ${res.status}: ${res.text}`)
-      }
+      const delivery = await deliverOrder(ctx, built, () =>
+        ctx.guard.release(ctx.agent, notional),
+      )
       return {
         orderId: built.data.orderId,
         digest: built.digest,
@@ -68,8 +67,11 @@ export const writeTools: ToolDef[] = [
         price: input.price,
         amount: input.amount,
         expiresAt: built.data.expiresAt,
-        relayStatus: res.status,
-        note: '订单已挂入中继订单簿（未落锁）；被撮合时由结算提交方落锁并结算。',
+        relayStatus: 200,
+        ...(delivery.reconciled ? { deliveryReconciled: true } : {}),
+        note: delivery.reconciled
+          ? '投递响应在网络中丢失，但已按摘要向中继对账确认订单在簿（未落锁），每日额度预留保留；被撮合时由结算提交方落锁并结算。'
+          : '订单已挂入中继订单簿（未落锁）；被撮合时由结算提交方落锁并结算。',
       }
     },
   },

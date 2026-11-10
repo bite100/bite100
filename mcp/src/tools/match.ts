@@ -8,10 +8,9 @@
  * 只有参数校验、护栏与结果整形。
  */
 import { assertAllowedChain, assertAllowedPair, relayUrl } from '../config'
-import { ToolError } from '../errors'
 import { loadSignerForRole } from '../signers'
 import { parseArgs, type ToolDef } from './common'
-import { buildAndSign, placeOrderSchema } from './orderBuild'
+import { buildAndSign, deliverOrder, placeOrderSchema } from './orderBuild'
 
 // —— 前端生产代码 ——
 import { createRelayBookAdapter } from '../../../frontend/src/services/dualread/adapters'
@@ -37,25 +36,24 @@ export const matchTools: ToolDef[] = [
       const notional = Number(input.price) * Number(input.amount)
       // 第 59 轮记账协议（修第 57 轮 P1-①）：check 即预留；记账时点 =
       // 中继接受。中继 200 之后无论最终成交与否（no-match 留簿同样
-      // 消耗）都不回滚；投递失败（组单/签名抛错、中继非 200）才
+      // 消耗）都不回滚；投递明确失败（组单/签名抛错、中继非 200）才
       // release——旧实现只在 outcome=submitted 时 record，未成交单
-      // 零成本，本条即关闭该绕行。
+      // 零成本，本条即关闭该绕行。投递结果不确定（响应丢失）先对账
+      // 再决定回滚与否（deliverOrder，审查修复批 P1 与 place 同口径）。
       await ctx.guard.check(ctx.agent, notional)
 
       let built
-      let res
       try {
         built = await buildAndSign(ctx, input)
-        res = await ctx.relay.postOrder(built.body)
       } catch (e) {
+        // 构建/签名失败：中继从未被接触，预留直接回滚（口径不变）
         await ctx.guard.release(ctx.agent, notional)
         throw e
       }
-      if (res.status !== 200) {
-        await ctx.guard.release(ctx.agent, notional)
-        throw new ToolError('relay_rejected', `中继拒单 HTTP ${res.status}: ${res.text}`)
-      }
-      // —— 中继已接受：预留转为正式记账，下方撮合结果不再影响记账 ——
+      const delivery = await deliverOrder(ctx, built, () =>
+        ctx.guard.release(ctx.agent, notional),
+      )
+      // —— 中继已接受（或对账确认已在簿）：预留转为正式记账，下方撮合结果不再影响记账 ——
 
       const signer = loadSignerForRole(ctx.agent.role)
       const ethSigner = signer.connect(ctx.chain.provider(input.chainId))
@@ -95,6 +93,7 @@ export const matchTools: ToolDef[] = [
         takerDigest: built.digest,
         chainId: input.chainId,
         pair: input.pair,
+        ...(delivery.reconciled ? { deliveryReconciled: true } : {}),
         status: outcome.status,
         message: outcome.message,
         txHash: outcome.txHash ?? null,

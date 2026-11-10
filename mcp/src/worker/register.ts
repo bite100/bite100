@@ -286,7 +286,11 @@ cancel. Failed attempts are not free; do not spam retries.
 Common guard errors: \`over_per_order_cap\`, \`over_daily_cap\`, \`rate_limited\`,
 \`kill_switch_on\` (global stop — writes are paused for everyone, reads still
 work), \`agent_disabled\`, \`guard_unavailable\` (storage down — the call did not
-execute; do not assume it went through), \`relay_rejected\`.
+execute; do not assume it went through), \`relay_rejected\`,
+\`delivery_ambiguous\` (the order's delivery response was lost and the
+follow-up reconciliation check also failed — the order may already be in the
+book and your daily quota reservation was NOT refunded; check \`list_orders\`
+for the digest before deciding whether to place the order again).
 
 ## 5. Trading notes
 
