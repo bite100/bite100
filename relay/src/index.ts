@@ -321,12 +321,20 @@ async function handleGetOrders(url: URL, env: Env): Promise<Response> {
   // 小写 hex；带此参数时按列精确匹配，与 chain/pair/user 自由组合。
   // 投递对账走此路——命中与否只取决于订单在不在库，不受列表 limit
   // 与排序位置影响（旧列表扫描对账在同对订单超 200 时有截断竞态）。
+  // 纳米修复批：带 digest 时改走「存在性」语义——不套过期过滤
+  // （摘要回答的是「这单在不在库」，对账发生在订单过期之后也须命中；
+  // 终审 P2：微修复批重部署时以 120 秒 TTL 冒烟单现场复现）。
   const digest = (url.searchParams.get('digest') ?? '').trim().toLowerCase()
   const now = Math.floor(Date.now() / 1000)
 
-  let sql =
-    'SELECT * FROM orders WHERE expires_at > ?' // 过期下架：查询时过滤
-  const binds: unknown[] = [now]
+  let sql: string
+  const binds: unknown[] = []
+  if (digest !== '') {
+    sql = 'SELECT * FROM orders WHERE 1 = 1' // 存在性查：不按过期过滤
+  } else {
+    sql = 'SELECT * FROM orders WHERE expires_at > ?' // 过期下架：查询时过滤
+    binds.push(now)
+  }
   if (chainParam !== null) {
     sql += ' AND chain_id = ?'
     binds.push(chainParam)
