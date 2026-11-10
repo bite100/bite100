@@ -179,6 +179,44 @@ describe('GET /orders 查询', () => {
     const upper = await getJson(`/orders?digest=${ra.digest.toUpperCase()}`)
     expect((upper.data as unknown[]).length).toBe(1)
   })
+
+  it('digest 精确查是存在性语义：已过期订单按摘要仍可查到，无摘要列表仍过滤过期（纳米修复批）', async () => {
+    // 入库口会拒已过期订单，只能像存量过期行那样直接插库模拟
+    // （微修复批重部署时以 120 秒 TTL 冒烟单现场复现了此语义错位：
+    // 单已过期、对账按摘要查回 [] 被误判未入库）
+    const now = Math.floor(Date.now() / 1000)
+    const expiredDigest = '0x' + 'ab'.repeat(32)
+    await env.DB.prepare(
+      `INSERT INTO orders (digest, chain_id, order_id, user_address, pair, side, price, amount,
+         amount_out, token_in, token_out, filled, status, nonce, created_at, expires_at,
+         signature, raw_json, received_at)
+       VALUES (?, 11155111, 'expired-digest-row', ?, 'BTC/USDT', 'buy', '1', '1', '0', ?, ?, '0', 'open',
+         0, ?, ?, '0x00', '{}', ?)`,
+    )
+      .bind(
+        expiredDigest,
+        TEST_ADDRESS.toLowerCase(),
+        BUILTIN_CHAINS[11155111].tokens.BTC,
+        BUILTIN_CHAINS[11155111].tokens.USDT,
+        now - 100000,
+        now - 10,
+        now,
+      )
+      .run()
+
+    // (1) 按摘要查：过期不影响存在性，命中
+    const byDigest = await getJson(`/orders?digest=${expiredDigest}`)
+    expect(byDigest.status).toBe(200)
+    expect((byDigest.data as { orderId: string }[]).map((r) => r.orderId)).toEqual([
+      'expired-digest-row',
+    ])
+
+    // (2) 无摘要的普通列表查：同一行仍被过期过滤挡住
+    const list = await getJson('/orders?pair=BTC/USDT&limit=200')
+    expect((list.data as { orderId: string }[]).map((r) => r.orderId)).not.toContain(
+      'expired-digest-row',
+    )
+  })
 })
 
 describe('GET /orderbook 聚合', () => {
