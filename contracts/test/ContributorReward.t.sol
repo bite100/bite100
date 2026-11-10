@@ -15,42 +15,82 @@ contract ContributorRewardTest is Test {
     uint256 aliceKey;
     uint256 bobKey;
 
+    // 第 61 轮计量人（按线分权注册；密钥与被计量账户分离）
+    address relayMeasurer;
+    uint256 relayMeasurerKey;
+    address postingMeasurer;
+    uint256 postingMeasurerKey;
+    address submitterMeasurer;
+    uint256 submitterMeasurerKey;
+    address gasMeasurer;
+    uint256 gasMeasurerKey;
+    uint256 nonceSeq;
+    bytes32 internal constant EVIDENCE = bytes32(uint256(0xE17DE7CE));
+
     function setUp() public {
         owner = address(this);
         (alice, aliceKey) = makeAddrAndKey("alice");
         (bob, bobKey) = makeAddrAndKey("bob");
+        (relayMeasurer, relayMeasurerKey) = makeAddrAndKey("relayMeasurer");
+        (postingMeasurer, postingMeasurerKey) = makeAddrAndKey("postingMeasurer");
+        (submitterMeasurer, submitterMeasurerKey) = makeAddrAndKey("submitterMeasurer");
+        (gasMeasurer, gasMeasurerKey) = makeAddrAndKey("gasMeasurer");
         reward = new ContributorReward();
+        reward.setMeasurer(0, relayMeasurer, true);
+        reward.setMeasurer(1, postingMeasurer, true);
+        reward.setMeasurer(2, submitterMeasurer, true);
+        reward.setMeasurer(3, gasMeasurer, true);
         token = new MockERC20("Reward", "RWD", 1_000_000e18);
         token.transfer(owner, 1000e18);
     }
 
-    /// @notice 以指定 nodeType、uptime=1e18、无附加计量为 signer 提交一期证明
-    /// （四线等基准夹具：各线 base 同为 SCALE，分数应只由定版权重决定）
-    function _submitBareProof(string memory period, uint256 key, address who, uint8 nodeType) internal {
-        bytes32 digest = keccak256(abi.encodePacked(
-            period, uint256(1e18), uint256(0), uint256(0), uint256(0), nodeType
-        ));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
-        vm.prank(who);
-        reward.submitProof(period, 1e18, 0, 0, 0, nodeType, abi.encodePacked(r, s, v));
+    function _measurerKeyFor(uint8 nodeType) internal view returns (uint256) {
+        if (nodeType == 0) return relayMeasurerKey;
+        if (nodeType == 1) return postingMeasurerKey;
+        if (nodeType == 2) return submitterMeasurerKey;
+        return gasMeasurerKey;
     }
 
-    /// @notice 以 gas 库存款人身份提交存款证明（submitLiquidityProof，nodeType=3）
-    function _submitGasVaultProof(string memory period, uint256 key, address who, uint256 amount) internal {
-        bytes32 digest = keccak256(abi.encodePacked(period, amount, uint8(3)));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
-        vm.prank(who);
-        reward.submitLiquidityProof(period, amount, abi.encodePacked(r, s, v));
+    /// @notice 由对应线的注册计量人签发 EIP-712 计量证明并提交（提交者 = 测试合约，与签名者分离）
+    function _attestAndSubmit(
+        string memory period,
+        address account,
+        uint256 uptime,
+        uint256 postingMetric,
+        uint256 storageTotalGB,
+        uint256 bytesRelayed,
+        uint8 nodeType
+    ) internal {
+        bytes32 pid = keccak256(abi.encodePacked(period));
+        uint256 nonce = ++nonceSeq;
+        uint256 deadline = block.timestamp + 1 days;
+        bytes32 digest = reward.metricAttestationDigest(
+            account, pid, nodeType, uptime, postingMetric, storageTotalGB, bytesRelayed, 0, 0, EVIDENCE, nonce, deadline
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(_measurerKeyFor(nodeType), digest);
+        reward.submitProof(period, account, uptime, postingMetric, storageTotalGB, bytesRelayed, nodeType, EVIDENCE, nonce, deadline, abi.encodePacked(r, s, v));
     }
 
-    /// @notice 以 relay 节点（nodeType=0、uptime=1e18）身份为 signer 提交一期证明，返回签名者地址
-    function _submitRelayProof(string memory period, uint256 key, address who) internal {
-        bytes32 digest = keccak256(abi.encodePacked(
-            period, uint256(1e18), uint256(0), uint256(0), uint256(0), uint8(0)
-        ));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
-        vm.prank(who);
-        reward.submitProof(period, 1e18, 0, 0, 0, 0, abi.encodePacked(r, s, v));
+    /// @notice 以指定 nodeType、uptime=1e18、无附加计量提交一期证明（计量人签发）
+    /// （四线等基准夹具：各线 base 同为 SCALE，分数应只由定版权重决定；
+    ///   第 61 轮起 key 参数废弃——签名者恒为该线注册计量人，保留形参仅为少改调用点）
+    function _submitBareProof(string memory period, uint256, address who, uint8 nodeType) internal {
+        _attestAndSubmit(period, who, 1e18, 0, 0, 0, nodeType);
+    }
+
+    /// @notice gas 库存款证明（submitLiquidityProof，metricType=3 线计量人签发）
+    function _submitGasVaultProof(string memory period, uint256, address who, uint256 amount) internal {
+        bytes32 pid = keccak256(abi.encodePacked(period));
+        uint256 nonce = ++nonceSeq;
+        uint256 deadline = block.timestamp + 1 days;
+        bytes32 digest = reward.liquidityAttestationDigest(who, pid, amount, EVIDENCE, nonce, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(gasMeasurerKey, digest);
+        reward.submitLiquidityProof(period, who, amount, EVIDENCE, nonce, deadline, abi.encodePacked(r, s, v));
+    }
+
+    /// @notice 中继线（nodeType=0、uptime=1e18）证明，中继线计量人签发
+    function _submitRelayProof(string memory period, uint256, address who) internal {
+        _attestAndSubmit(period, who, 1e18, 0, 0, 0, 0);
     }
 
     /// @notice 反复领取直到 claimable 归零（单次受奖池 10% 上限）
@@ -62,13 +102,15 @@ contract ContributorRewardTest is Test {
         }
     }
 
-    function test_SignatureRecoversToAlice() public {
-        bytes32 digest = keccak256(abi.encodePacked(
-            "2025-02-01_2025-02-07", uint256(0.95e18), uint256(10), uint256(100), uint256(1e9), uint8(1)
-        ));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(aliceKey, digest);
+    /// @notice 第 61 轮：计量证明摘要（EIP-712）由计量人签名后可恢复出计量人地址
+    function test_AttestationDigestRecoversMeasurer() public view {
+        bytes32 pid = keccak256(abi.encodePacked("2025-02-01_2025-02-07"));
+        bytes32 digest = reward.metricAttestationDigest(
+            alice, pid, 1, 0.95e18, 10, 100, 1e9, 0, 0, EVIDENCE, 1, block.timestamp + 1 days
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(postingMeasurerKey, digest);
         address recovered = ecrecover(digest, v, r, s);
-        assertEq(recovered, alice, "recovered should be alice");
+        assertEq(recovered, postingMeasurer, "recovered should be the posting measurer");
     }
 
     function test_SubmitProofAndClaim() public {
@@ -79,15 +121,7 @@ contract ContributorRewardTest is Test {
         uint256 bytesRelayed = 1e9;
         uint8 nodeType = 1; // storage
 
-        bytes32 digest = keccak256(abi.encodePacked(
-            period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType
-        ));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(aliceKey, digest);
-        bytes memory sig = abi.encodePacked(r, s, v);
-
-        vm.startPrank(alice);
-        reward.submitProof(period, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType, sig);
-        vm.stopPrank();
+        _attestAndSubmit(period, alice, uptime, storageUsedGB, storageTotalGB, bytesRelayed, nodeType);
 
         assertEq(reward.getContributionScore(period, alice) > 0, true);
         assertEq(reward.getPeriodTotalScore(period) > 0, true);
@@ -326,12 +360,7 @@ contract ContributorRewardTest is Test {
         string memory period = "2026-11-16_2026-11-29";
         (address poster, uint256 posterKey) = makeAddrAndKey("poster");
         // uptime=1e18、postingMetric=CAP/2 → part=SCALE/2 → score = 1.5e18 * 35
-        bytes32 digest = keccak256(abi.encodePacked(
-            period, uint256(1e18), uint256(5e23), uint256(0), uint256(0), uint8(1)
-        ));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(posterKey, digest);
-        vm.prank(poster);
-        reward.submitProof(period, 1e18, 5e23, 0, 0, 1, abi.encodePacked(r, s, v));
+        _attestAndSubmit(period, poster, 1e18, 5e23, 0, 0, 1);
         assertEq(reward.getContributionScore(period, poster), 52.5e18, "posting score = 1.5 * 35 SCALE");
     }
 }

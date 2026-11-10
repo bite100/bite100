@@ -297,3 +297,132 @@ contract Round61ExtendedTest is Test {
         assertEq(proposer, address(this));
     }
 }
+
+/// @notice 第 61 轮块 4 验收：ContributorReward 计量人证明 + 周期冻结
+contract Round61RewardTest is Test {
+    ContributorReward reward;
+    MockERC20 token;
+    address alice;
+    uint256 aliceKey;
+    address relayMeasurer;
+    uint256 relayMeasurerKey;
+    address postingMeasurer;
+    uint256 postingMeasurerKey;
+    bytes32 internal constant EVIDENCE = bytes32(uint256(0xE17DE7CE));
+    string internal constant PERIOD = "2026-11-02_2026-11-15";
+
+    function setUp() public {
+        (alice, aliceKey) = makeAddrAndKey("alice");
+        (relayMeasurer, relayMeasurerKey) = makeAddrAndKey("relayMeasurer");
+        (postingMeasurer, postingMeasurerKey) = makeAddrAndKey("postingMeasurer");
+        reward = new ContributorReward();
+        reward.setMeasurer(0, relayMeasurer, true);
+        reward.setMeasurer(1, postingMeasurer, true);
+        token = new MockERC20("Reward", "RWD", 1000e18);
+    }
+
+    /// @dev 以指定密钥对一期中继线证明签名，返回完整提交参数的签名
+    function _signRelay(uint256 key, uint256 nonce, uint256 deadline) internal view returns (bytes memory) {
+        bytes32 pid = keccak256(abi.encodePacked(PERIOD));
+        bytes32 digest = reward.metricAttestationDigest(
+            alice, pid, 0, 1e18, 0, 0, 0, 0, 0, EVIDENCE, nonce, deadline
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _submitRelay(bytes memory sig, uint256 nonce, uint256 deadline) internal {
+        reward.submitProof(PERIOD, alice, 1e18, 0, 0, 0, 0, EVIDENCE, nonce, deadline, sig);
+    }
+
+    /// @notice 自签自证已废除：被计量账户自己签的证明回滚
+    function test_SelfSignedProofReverts() public {
+        bytes memory sig = _signRelay(aliceKey, 1, block.timestamp + 1 days);
+        vm.expectRevert("ContributorReward: unregistered measurer");
+        _submitRelay(sig, 1, block.timestamp + 1 days);
+    }
+
+    /// @notice 跨线签名无效：中继线计量人签的证明不能用于挂单线（metricType 不符即非该线计量人）
+    function test_WrongCategoryMeasurerReverts() public {
+        bytes32 pid = keccak256(abi.encodePacked(PERIOD));
+        uint256 deadline = block.timestamp + 1 days;
+        // 用中继计量人密钥签一份【挂单线】证明（metricType=1）
+        bytes32 digest = reward.metricAttestationDigest(
+            alice, pid, 1, 1e18, 0, 0, 0, 0, 0, EVIDENCE, 7, deadline
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(relayMeasurerKey, digest);
+        vm.expectRevert("ContributorReward: unregistered measurer");
+        reward.submitProof(PERIOD, alice, 1e18, 0, 0, 0, 1, EVIDENCE, 7, deadline, abi.encodePacked(r, s, v));
+    }
+
+    /// @notice 同一份证明（同 nonce）只能消费一次：重放回滚
+    function test_ReplayedAttestationReverts() public {
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory sig = _signRelay(relayMeasurerKey, 3, deadline);
+        _submitRelay(sig, 3, deadline);
+        assertGt(reward.getContributionScore(PERIOD, alice), 0);
+        vm.expectRevert("ContributorReward: attestation replayed");
+        _submitRelay(sig, 3, deadline);
+    }
+
+    /// @notice 过期证明回滚
+    function test_ExpiredAttestationReverts() public {
+        vm.warp(100 days);
+        bytes memory sig = _signRelay(relayMeasurerKey, 1, 50 days);
+        vm.expectRevert("ContributorReward: attestation expired");
+        _submitRelay(sig, 1, 50 days);
+    }
+
+    /// @notice 计量人被注销后，其证明立即失效
+    function test_RevokedMeasurerReverts() public {
+        reward.setMeasurer(0, relayMeasurer, false);
+        bytes memory sig = _signRelay(relayMeasurerKey, 1, block.timestamp + 1 days);
+        vm.expectRevert("ContributorReward: unregistered measurer");
+        _submitRelay(sig, 1, block.timestamp + 1 days);
+    }
+
+    /// @notice gas 库存款线同理：挂单线计量人签的存款证明回滚（metricType=3 独立注册）
+    function test_LiquidityProof_WrongCategoryReverts() public {
+        bytes32 pid = keccak256(abi.encodePacked(PERIOD));
+        uint256 deadline = block.timestamp + 1 days;
+        bytes32 digest = reward.liquidityAttestationDigest(alice, pid, 100e18, EVIDENCE, 1, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(postingMeasurerKey, digest);
+        vm.expectRevert("ContributorReward: unregistered measurer");
+        reward.submitLiquidityProof(PERIOD, alice, 100e18, EVIDENCE, 1, deadline, abi.encodePacked(r, s, v));
+    }
+
+    /// @notice 冻结：提交与改分全部关闭、重复冻结回滚、但领取照常（冻结即定版）
+    function test_Freeze_BlocksWritesButNotClaims() public {
+        uint256 deadline = block.timestamp + 1 days;
+        _submitRelay(_signRelay(relayMeasurerKey, 1, deadline), 1, deadline);
+        uint256 scoreAtFreeze = reward.getContributionScore(PERIOD, alice);
+        assertGt(scoreAtFreeze, 0);
+
+        token.approve(address(reward), 100e18);
+        reward.setPeriodReward(PERIOD, address(token), 100e18);
+
+        bytes32 scoresRoot = keccak256(abi.encodePacked("final-scores-root"));
+        reward.freezePeriod(PERIOD, scoresRoot);
+        assertTrue(reward.periodFrozen(keccak256(abi.encodePacked(PERIOD))));
+        assertEq(reward.periodScoresRoot(keccak256(abi.encodePacked(PERIOD))), scoresRoot);
+        assertEq(reward.periodFrozenTotalScore(keccak256(abi.encodePacked(PERIOD))), scoreAtFreeze);
+
+        // 冻结后再交新证明（新 nonce）→ 回滚
+        bytes memory sig2 = _signRelay(relayMeasurerKey, 2, deadline);
+        vm.expectRevert("ContributorReward: period frozen");
+        _submitRelay(sig2, 2, deadline);
+
+        // 冻结后 owner 直接改分 → 回滚
+        vm.expectRevert("ContributorReward: period frozen");
+        reward.setContributionScore(PERIOD, alice, 999);
+
+        // 重复冻结 → 回滚
+        vm.expectRevert("ContributorReward: already frozen");
+        reward.freezePeriod(PERIOD, scoresRoot);
+
+        // 领取不受冻结影响：单次上限 = 奖池 10% = 10e18
+        vm.prank(alice);
+        reward.claimReward(PERIOD, address(token));
+        assertEq(token.balanceOf(alice), 10e18);
+    }
+}
