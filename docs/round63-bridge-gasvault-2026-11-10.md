@@ -143,4 +143,58 @@ CR 删除后须重新部署接线——属部署步（§12），本轮只改代�
 5. **Envio 轮换**：随上述推送/部署按现行轮换纪律执行（新端点 _meta 双链 isReady 核对后再更新 CONNECTOR 记录）。
 6. **ChatGPT 复核**：按站规，合并推送后送审本轮并回交裁决结果。
 
+## 14. 审查裁决与修复批（2026-11-10）
+
+**审查**：ChatGPT 紧凑审查，对话 https://chatgpt.com/c/6af2ba78-22cc-83ee-9585-88c2b9d02f9a ，总评**有条件通过**。主聊天逐项裁决如下，修复批在分支 `round63-fix`（基线 main `9cfd024`）本地完成，未合并、未推送、未部署、未动链上。
+
+**范围变更（Ren 2026-11-10 17:01，17:03 标为暂定工作方向）**：Ren 提出桥子系统整体删除——LayerZero/CCIP/Wormhole 三桥 + 默认桥编排 + 中继投递登记由后续删除轮整体移除，跨链只走 LI.FI 快速兑换。该方向目前为**暂定**，删除轮执行前须 Ren 最终确认，此前不做任何不可逆动作。第 1、2 项在范围变更到达前已经写完并提交，按指令保留提交（无害）；两条 P1 的风险即便不修，也随桥子系统在删除轮整体移除而消解，删除轮完成前测试网桥路径维持现状（测试币、无真实资金）。第 3、4 项与桥无关，是钱面，按原指令全额完成。
+
+### 14.1 P1-1 对账 missing 判定收紧 —— 裁决：成立（已修，提交 `8e351d4`）
+
+- `txKnownToNode` 改三态（`'known' | 'not-found' | 'error'`）：RPC 抛错/超时返回 `'error'`，绝不冒充查无此交易喂给「超 1 小时判 missing」规则。
+- `reconcileDelivery`：无 attemptId 的旧版本遗留 anomaly 记录对账结论一律 `unknown`（人工处理），永不判 missing，旧的直判 missing 兼容分支删除；missing 只在健康查询明确 not-found 且记录超 1 小时时成立（发送 hash 与提款 hash 两路同口径）。
+- 回归测试 +8（前端）：遗留 anomaly→unknown 且重试被拒 / txKnown 'error'+2h→unknown / 'known'→unknown / 'not-found'+超 1h→missing 正路 / 'not-found' 未满 1h→unknown / txKnownToNode 三态 3 例。
+
+### 14.2 P1-2 中继占位释放收紧 —— 裁决：成立（已修，提交 `a1b4978` + 跟进 `d378672`）
+
+- **迁移 0004**（`relay/migrations/0004_delivery_release_tightening.sql`；已应用的 0003 未动）：deliveries 表加 `last_reconcile`、`broadcast_evidence` 两列。注：0004 在范围变更到达前已创建并提交；投递登记表本身将随桥删除轮一并处理。
+- anomaly 行再 claim 的前提 = 行内已落前端报备的对账结论 `missing`（report 载荷扩展 `reconcile` 并落行）；无结论或结论为 found/unknown 保持占用（409 `delivery_in_flight`）；closed 行不变。
+- supersede 接管 claimed/initiated 行：保留陈旧 ≥1800s 条件，新增**零广播证据**要求——`send_tx_hash`/`tracking_id` 任一非空或 `broadcast_evidence=1` 即永不接管（JS 检查与 UPDATE 的 WHERE 双层同口径）。
+- 前端：广播已发后报 anomaly 必带广播证据（发送 hash / 预取 trackingId / 显式 `broadcastEvidence` 标记，任一即可，只置位不清零）；未广播的失败报 `reconcile: 'missing'`；anomaly 对账得 missing 时同步把结论报回中继行以便再 claim。
+- 回归测试：中继 workers +5（无结论/unknown 结论 anomaly 再 claim 被拒、missing 结论可再 claim 且字段清零；双发窗口——A 广播后报 anomaly 带发送 hash，B 的 claim 与 supersede 均 409 且行未动；带发送 hash 的陈旧 initiated 行永不被接管；零证据陈旧 claimed 行接管正路仍通；仅显式 broadcastEvidence 标记亦锁接管），前端 +4（汇报载荷三态：未广播→missing 结论、已广播→证据字段、anomaly 对账 missing→同步落行）。
+
+### 14.3 GasVault P2 —— 裁决：部分成立，按三项收紧（已修，提交 `fff6851`）
+
+- ① **授权清零**：`triggerConversion` 路由调用成功后 `forceApprove(router, 0)`，路由只许在本次调用内拉款，残额不留。
+- ② **(router, selector) 允许表**：新增 `routerSelectors` 映射 + `setRouterSelector`（onlyOwner）+ `RouterSelectorSet` 事件；执行点在水位/间隔/熔断等既有检查之后、`forceApprove` 之前校验 calldata 前 4 字节，短于 4 字节或不在表内回滚（`"GasVault: selector not allowed"` / `"GasVault: calldata too short"`），既有回滚文案预期不受影响。
+- ③ **价格时效**：`IGasPriceSource` 扩展 `priceUpdatedAt(token)`；GasVault 加 `maxPriceAge`（出厂 3600 秒，`setMaxPriceAge` onlyOwner + `MaxPriceAgeSet` 事件）；`triggerConversion` 取到参考价后校验未超龄，超龄回滚 `"GasVault: stale reference price"`。`absorbShortfall`（形态 A）不消费参考价，故无此时效面——审查原问及 absorb 路径，此为如实口径：该路径的价格风险不在喂价新鲜度，而在证明绑定的结算台账本身。
+- 测试 22 → 27（+5）：只拉半款替身验证换汇后授权残额 = 0；未列 selector 回滚 + 短 calldata 回滚；路由进了白名单但未列任何 selector 时其 swap 亦回滚、补列后放行；价格超龄回滚、刷新后放行；maxPriceAge 出厂值与 owner 门。`MockPriceSource` 同步支持可调更新时间（`setUpdatedAt`）。
+
+### 14.4 CR P2 旁路关闭 —— 裁决：成立（已修，提交 `b7f2188`；推翻 §11 遗留 5 的缓议——CR 本轮本来就要随部署步重部署，缓议的前提不成立）
+
+- 整函数删除外部 onlyOwner 入口 `updateReputationAndRecalculateWeightedScore(address,uint256,string[])`：它绕过第 61 轮计量人签名直接写 `reputationScore` 并重算各周期加权总数；重算逻辑内联于该函数本身、无任何内部调用方，随函数一并删除。删除后 `reputationScore` 无写入方（恒 0；现行各配置 `reputationThreshold = 0`，行为不变），映射与 `ReputationScoreSet` 事件声明保留作接口兼容。
+- **零调用核实证据**（2026-11-10，cast logs 实测）：全仓 grep 无任何调用方（合约/测试/前端/索引器/MCP 均无）；双链 4 个 CR 实例全生命周期 `ReputationScoreSet`（topic `0x1cec7922…6b65e`）事件全部 **0 条**——Sepolia 第一对 `0x10226fD9…3967` 自部署块 12101703、现行 `0x42a1719A…BE19` 自部署块 12102379 扫至链头 12103328；Base Sepolia 第一对 `0x154C9e02…2358` 与现行 `0xe39A77A9…f07` 自块 56750000（早于第 61 轮部署）扫至链头 56877967。
+- 测试 +1：以原签名低层调用该选择器必须回滚且信誉分恒 0；既有 ContributorReward 11 例与 Round61（18）/Round61Fix（6）套件行为不回归。
+
+### 14.5 编码 P3 —— 裁决：通过
+
+审查认可本轮编码器处理，并明确背书 LZ options 的偏离（§4 实测 `'0x0003'` 构造在现行已部署桥 quote 上回滚，options 保持 `'0x'` 单常量）——与本轮文档口径一致，无动作。
+
+### 14.6 Web Locks P2 —— 裁决：措辞项（扫描完成，无改动）
+
+全仓扫描 nonce 分配器相关用户可见文案与注释（`nonceAllocator.ts`、`orderSigning.ts`、本文件 §7）：分配器头部已有如实边界段（Web Locks 只能缩小不能根除、中继 409 与链上位图兜底），未发现「保证不撞号」类过强表述，无行为与文案改动。
+
+### 14.7 修复批门禁实测（2026-11-10，基线为第 63 轮收口数）
+
+| 门禁 | 基线 | 修复批 | 增量 |
+|---|---|---|---|
+| forge | 245 | **251 全过** | +6（GasVault 5、CR 1） |
+| 前端 vitest | 511 | **523 全过** | +12（P1-1 8、P1-2 4） |
+| 前端 tsc / vite build | 过 | **过** | — |
+| 中继 workers | 40 | **45 全过** | +5（P1-2） |
+| 中继 unit | 52 | 52 | 0 |
+| MCP | 89 | 89（零文件改动） | 0 |
+
+`Settlement.sol` / `Vault.sol` 相对 main 零 diff（已核）。部署步（§12）不受本修复批影响，仍待主聊天后续执行；其中 CR 重部署将带上本批删除后的字节码，GasVault 首次部署即带上收紧后的调用面。
+
 （完）
