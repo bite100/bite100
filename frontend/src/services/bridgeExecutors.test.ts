@@ -5,7 +5,9 @@ import {
   buildCcipMessage,
   buildNttSingleTransceiverInstructions,
   LAYERZERO_OPTIONS_EMPTY,
+  txKnownToNode,
 } from './bridgeExecutors'
+import type { Provider } from 'ethers'
 import { getChainConfig } from '../config/chains'
 
 /**
@@ -48,5 +50,34 @@ describe('桥-4 编码器迁移字节对拍', () => {
 
   it('Wormhole NTT 指令：SDK layout 编码 === 旧常量 0x010000', () => {
     expect(buildNttSingleTransceiverInstructions()).toBe('0x010000')
+  })
+})
+
+/**
+ * 第 63 轮修复批 P1-1：txKnownToNode 三态——'not-found' 只许来自一次健康查询
+ * 的明确空结果；RPC 报错/超时必须单独成 'error'，绝不冒充 not-found 喂给
+ * 对账的超时判 missing 规则（旧实现 catch 后返回 false 即此漏洞）。
+ */
+describe('对账原语 txKnownToNode 三态（第 63 轮修复批 P1-1）', () => {
+  const fakeProvider = (impl: () => Promise<unknown>) =>
+    ({ getTransaction: impl }) as unknown as Provider
+
+  it('节点返回交易对象 → known', async () => {
+    await expect(txKnownToNode(fakeProvider(async () => ({ hash: '0x1' })), '0x1')).resolves.toBe('known')
+  })
+
+  it('健康查询明确返回 null → not-found', async () => {
+    await expect(txKnownToNode(fakeProvider(async () => null), '0x1')).resolves.toBe('not-found')
+  })
+
+  it('RPC 抛错 → error（不冒充 not-found）', async () => {
+    await expect(
+      txKnownToNode(
+        fakeProvider(async () => {
+          throw new Error('RPC timeout')
+        }),
+        '0x1'
+      )
+    ).resolves.toBe('error')
   })
 })

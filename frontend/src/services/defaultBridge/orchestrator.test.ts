@@ -328,7 +328,7 @@ describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
       retryDelivery(TAKER, out.record!.id, settings(), {
         provider: fakeProvider,
         checkReceiptFn: async () => 'pending',
-        txKnownFn: async () => true,
+        txKnownFn: async () => 'known',
         executeBridgeFn: bridge.fn,
       })
     ).rejects.toThrow('对账未定')
@@ -421,6 +421,98 @@ describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
     })
     expect(settled2.lastReconcile).toBe('missing')
     expect(settled2.fundsLocation).toBe('vault')
+  })
+})
+
+describe('第 63 轮修复批 P1-1：对账 missing 判定收紧', () => {
+  beforeEach(() => localStorage.clear())
+
+  const fakeProvider = {} as unknown as Provider
+  const T0 = 1_700_000_000_000
+
+  function stuckInitiating(patch: Record<string, unknown> = {}) {
+    const out = planDelivery(TAKER, fill(), settings())
+    upsertDelivery(TAKER, {
+      ...out.record!,
+      status: 'initiating',
+      attemptId: `${out.record!.id}#1`,
+      attemptCount: 1,
+      initiatedTxPending: true,
+      sendTxHash: '0xsend',
+      initiatedAt: T0,
+      ...patch,
+    })
+    return out.record!.id
+  }
+
+  it('遗留 anomaly（无 attemptId、无任何 hash）→ 一律 unknown 待人工，重试被拒', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    upsertDelivery(TAKER, {
+      ...out.record!,
+      status: 'anomaly',
+      anomalyKind: 'initiation-failed',
+      attemptId: undefined,
+      initiatedTxPending: undefined,
+    })
+    const settled = await reconcileDelivery(TAKER, out.record!.id, { provider: fakeProvider })
+    expect(settled.status).toBe('anomaly')
+    expect(settled.lastReconcile).toBe('unknown')
+    // unknown 不是 missing：状态机不许重试（旧口径直接判 missing 放行，本批收回）
+    await expect(
+      retryDelivery(TAKER, out.record!.id, settings(), { provider: fakeProvider })
+    ).rejects.toThrow('未确认')
+    expect(getDelivery(TAKER, 'trade-x', TAKER)?.lastReconcile).toBe('unknown')
+  })
+
+  it('getTransaction 抛错（RPC 故障）→ 即使超时 2 小时也不判 missing，走 unknown', async () => {
+    const id = stuckInitiating()
+    const settled = await reconcileDelivery(TAKER, id, {
+      provider: fakeProvider,
+      now: T0 + 2 * 60 * 60 * 1000,
+      checkReceiptFn: async () => 'pending',
+      txKnownFn: async () => 'error',
+    })
+    expect(settled.lastReconcile).toBe('unknown')
+    expect(settled.status).toBe('initiating')
+    expect(settled.initiatedTxPending).toBe(true)
+  })
+
+  it('节点仍认识该交易（known）→ 超时也不判 missing', async () => {
+    const id = stuckInitiating()
+    const settled = await reconcileDelivery(TAKER, id, {
+      provider: fakeProvider,
+      now: T0 + 2 * 60 * 60 * 1000,
+      checkReceiptFn: async () => 'pending',
+      txKnownFn: async () => 'known',
+    })
+    expect(settled.lastReconcile).toBe('unknown')
+    expect(settled.status).toBe('initiating')
+  })
+
+  it('健康查询明确 not-found + 超过 1 小时 → missing 仍成立（正路不堵）', async () => {
+    const id = stuckInitiating()
+    const settled = await reconcileDelivery(TAKER, id, {
+      provider: fakeProvider,
+      now: T0 + 2 * 60 * 60 * 1000,
+      checkReceiptFn: async () => 'pending',
+      txKnownFn: async () => 'not-found',
+    })
+    expect(settled.lastReconcile).toBe('missing')
+    expect(settled.status).toBe('anomaly')
+    expect(settled.anomalyKind).toBe('initiation-failed')
+    expect(settled.initiatedTxPending).toBe(false)
+  })
+
+  it('not-found 但未满 1 小时 → 仍 unknown（时长门不降）', async () => {
+    const id = stuckInitiating()
+    const settled = await reconcileDelivery(TAKER, id, {
+      provider: fakeProvider,
+      now: T0 + 30 * 60 * 1000,
+      checkReceiptFn: async () => 'pending',
+      txKnownFn: async () => 'not-found',
+    })
+    expect(settled.lastReconcile).toBe('unknown')
+    expect(settled.status).toBe('initiating')
   })
 })
 
