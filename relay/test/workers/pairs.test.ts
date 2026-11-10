@@ -49,6 +49,22 @@ async function seedPairRow() {
 }
 
 describe('GET /pairs', () => {
+  it('分页：第 59 轮 X-Pairs-Total / X-Pairs-Truncated 头与 limit/offset 生效', async () => {
+    await seedPairRow()
+    const res = await SELF.fetch(`${BASE}/pairs?chain=11155111&limit=1`)
+    expect(res.status).toBe(200)
+    const rows = (await res.json()) as unknown[]
+    expect(rows).toHaveLength(1)
+    expect(res.headers.get('X-Pairs-Total')).toBe('1')
+    expect(res.headers.get('X-Pairs-Truncated')).toBe('false')
+    // offset 越过全部行：空数组但 total 仍报真实总数
+    const res2 = await SELF.fetch(`${BASE}/pairs?chain=11155111&limit=1&offset=1`)
+    const rows2 = (await res2.json()) as unknown[]
+    expect(rows2).toHaveLength(0)
+    expect(res2.headers.get('X-Pairs-Total')).toBe('1')
+    expect(res2.headers.get('X-Pairs-Truncated')).toBe('false')
+  })
+
   it('返回数组；落库后包含该对（字段齐全）', async () => {
     await seedPairRow()
     const res = await SELF.fetch(`${BASE}/pairs?chain=11155111`)

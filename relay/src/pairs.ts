@@ -160,6 +160,46 @@ export class PairRequestError extends Error {
 export const MAX_PAIRS_PER_CREATOR_PER_DAY = 50
 export const MAX_PAIRS_PER_CHAIN_PER_HOUR = 200
 
+/**
+ * 代币 decimals 支持上限（第 59 轮块 4，审计 P2-2）：中继旧口径放行
+ * 0–255，但前端定价精度 = 18 + quoteDecimals − baseDecimals 必须
+ * ≥ 0 且 parseUnits 可用——注册进来却没法交易是更坏的体验。口径：
+ * 单币 decimals ≤ 36（覆盖现实 ERC-20 的 0/6/8/18/24 全部常见值并留
+ * 余量），且 18 + quote − base ≥ 0。前端 pairRegistry 同步同口径。
+ */
+export const MAX_TOKEN_DECIMALS = 36
+
+/** creator 限流计数（含匿名桶口径）与链级计数；registerPair 的前置检查与条件 INSERT 共用 */
+async function countCreatorBucket(
+  db: D1Database,
+  chainId: number,
+  creator: string | null,
+  dayStart: number,
+): Promise<number> {
+  const row = creator
+    ? await db
+        .prepare('SELECT COUNT(*) AS n FROM pairs WHERE chain_id = ? AND creator = ? AND created_at >= ?')
+        .bind(chainId, creator, dayStart)
+        .first<{ n: number }>()
+    : await db
+        .prepare('SELECT COUNT(*) AS n FROM pairs WHERE chain_id = ? AND creator IS NULL AND created_at >= ?')
+        .bind(chainId, dayStart)
+        .first<{ n: number }>()
+  return row?.n ?? 0
+}
+
+async function countChainHour(
+  db: D1Database,
+  chainId: number,
+  hourStart: number,
+): Promise<number> {
+  const row = await db
+    .prepare('SELECT COUNT(*) AS n FROM pairs WHERE chain_id = ? AND created_at >= ?')
+    .bind(chainId, hourStart)
+    .first<{ n: number }>()
+  return row?.n ?? 0
+}
+
 export interface RegisterPairInput {
   baseToken: string
   quoteToken: string
@@ -190,17 +230,42 @@ export async function getPair(
   return row ? rowToPair(row) : null
 }
 
-/** 列某链全部自助上架对（按创建时间升序，封顶 500 行防表被灌爆时拖垮响应） */
-export async function listPairs(db: D1Database, chainId: number): Promise<PairRow[]> {
-  const { results } = await db
-    .prepare('SELECT * FROM pairs WHERE chain_id = ? ORDER BY created_at ASC LIMIT 500')
-    .bind(chainId)
-    .all<PairDbRow>()
-  return (results ?? []).map(rowToPair)
+export interface ListPairsResult {
+  rows: PairRow[]
+  /** 该链注册表总行数（不受分页影响） */
+  total: number
+  /** 本页之后是否还有行（= 调用方看到的不是全集） */
+  truncated: boolean
 }
 
 /**
- * 注册一个自助上架对：校验 → 幂等查存 → 链上复读元数据 → 限流 → 落库。
+ * 列某链自助上架对（按创建时间升序）。第 59 轮块 4（审计 P3-1）：
+ * 旧实现写死 LIMIT 500 且不报截断，第 501 个对起静默不可见。现为
+ * limit/offset 分页 + total/truncated 显性返回（端点层再落到响应头）。
+ */
+export async function listPairs(
+  db: D1Database,
+  chainId: number,
+  opts: { limit?: number; offset?: number } = {},
+): Promise<ListPairsResult> {
+  const limit = Math.min(Math.max(opts.limit ?? 500, 1), 500)
+  const offset = Math.max(opts.offset ?? 0, 0)
+  const totalRow = await db
+    .prepare('SELECT COUNT(*) AS n FROM pairs WHERE chain_id = ?')
+    .bind(chainId)
+    .first<{ n: number }>()
+  const total = totalRow?.n ?? 0
+  const { results } = await db
+    .prepare('SELECT * FROM pairs WHERE chain_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?')
+    .bind(chainId, limit, offset)
+    .all<PairDbRow>()
+  const rows = (results ?? []).map(rowToPair)
+  return { rows, total, truncated: offset + rows.length < total }
+}
+
+/**
+ * 注册一个自助上架对：校验 → 幂等查存 → 限流预检（先于任何 RPC）→
+ * 链上复读元数据 → decimals 范围 → 带门 INSERT 原子落库。
  * 元数据以链上复读为准，入参只有地址（+自报 creator）。
  */
 export async function registerPair(
@@ -230,12 +295,36 @@ export async function registerPair(
   const existing = await getPair(db, chain.chainId, pairKey)
   if (existing) return { row: existing, duplicate: true }
 
+  const now = (deps.nowSec ?? (() => Math.floor(Date.now() / 1000)))()
+  const dayStart = Math.floor(now / 86400) * 86400
+  const hourStart = now - 3600
+
+  // 基础限流前置检查（第 59 轮块 4 两条）：
+  // ① 顺序（审计 P1-1）：限流判定必须在任何链上 RPC 读取之前——旧
+  //    顺序先 getCode+读元数据再 COUNT，未鉴权调用方零成本就能烧
+  //    中继的 RPC 配额；已超限的请求现在连一次 RPC 都不触发。
+  // ② 匿名桶（审计 ④）：creator 缺省时旧实现整段跳过日限，只剩链
+  //    级 200/小时兜底。现在无 creator 的注册统一计入「匿名桶」
+  //    （creator IS NULL），与实名 creator 同口径 50/日。
+  // 注：这里是快速预检（省 RPC）；硬性准入在下方条件 INSERT 内
+  // 原子完成，预检与落库之间被并发穿插也不会突破上限（审计 P2-1）。
+  if ((await countCreatorBucket(db, chain.chainId, creator, dayStart)) >= MAX_PAIRS_PER_CREATOR_PER_DAY) {
+    throw new PairRequestError(
+      429,
+      creator
+        ? 'daily pair registration limit for creator reached'
+        : 'daily pair registration limit for anonymous creators reached',
+    )
+  }
+  if ((await countChainHour(db, chain.chainId, hourStart)) >= MAX_PAIRS_PER_CHAIN_PER_HOUR) {
+    throw new PairRequestError(429, 'hourly pair registration limit for chain reached')
+  }
+
   const getReader = deps.getTokenReader ?? defaultGetTokenReader
   const reader = getReader(chain)
   if (!reader) {
     throw new PairRequestError(502, 'token metadata read unavailable for this chain')
   }
-  const now = (deps.nowSec ?? (() => Math.floor(Date.now() / 1000)))()
 
   const metas: TokenMetadata[] = []
   for (const token of [base, quote]) {
@@ -255,31 +344,33 @@ export async function registerPair(
     metas.push(meta)
   }
 
-  // 基础限流：同 creator 每 UTC 日、每链每小时的新增上限（COUNT 现有行）
-  if (creator) {
-    const dayStart = Math.floor(now / 86400) * 86400
-    const row = await db
-      .prepare('SELECT COUNT(*) AS n FROM pairs WHERE chain_id = ? AND creator = ? AND created_at >= ?')
-      .bind(chain.chainId, creator, dayStart)
-      .first<{ n: number }>()
-    if ((row?.n ?? 0) >= MAX_PAIRS_PER_CREATOR_PER_DAY) {
-      throw new PairRequestError(429, 'daily pair registration limit for creator reached')
-    }
-  }
-  const hourRow = await db
-    .prepare('SELECT COUNT(*) AS n FROM pairs WHERE chain_id = ? AND created_at >= ?')
-    .bind(chain.chainId, now - 3600)
-    .first<{ n: number }>()
-  if ((hourRow?.n ?? 0) >= MAX_PAIRS_PER_CHAIN_PER_HOUR) {
-    throw new PairRequestError(429, 'hourly pair registration limit for chain reached')
+  // decimals 范围（审计 P2-2）：超出前端可交易范围的对直接拒注册，
+  // 不留「注册成功但永远下不了单」的残对。
+  const priceDecimals = 18 + metas[1].decimals - metas[0].decimals
+  if (
+    metas[0].decimals > MAX_TOKEN_DECIMALS ||
+    metas[1].decimals > MAX_TOKEN_DECIMALS ||
+    priceDecimals < 0
+  ) {
+    throw new PairRequestError(
+      400,
+      `token decimals out of supported range (base ${metas[0].decimals}, quote ${metas[1].decimals}): ` +
+        `each token decimals must be <= ${MAX_TOKEN_DECIMALS} and 18 + quote - base must be >= 0`,
+    )
   }
 
+  // 原子落库（审计 P2-1）：带门 INSERT——两个限额谓词写进同一条
+  // 语句，COUNT 与 INSERT 在 D1 内原子完成；changes=0 表示被限额
+  // 谓词挡下（或主键冲突的并发幂等），随后按存量区分两者。
+  // creator 谓词用 COALESCE 把匿名行统一到 '' 桶，与预检口径一致。
   const res = await db
     .prepare(
       `INSERT OR IGNORE INTO pairs
          (chain_id, pair_key, base_token, quote_token, base_symbol, quote_symbol,
           base_name, quote_name, base_decimals, quote_decimals, creator, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM pairs WHERE chain_id = ? AND COALESCE(creator, '') = ? AND created_at >= ?) < ?
+         AND (SELECT COUNT(*) FROM pairs WHERE chain_id = ? AND created_at >= ?) < ?`,
     )
     .bind(
       chain.chainId,
@@ -294,11 +385,32 @@ export async function registerPair(
       metas[1].decimals,
       creator,
       now,
+      chain.chainId,
+      creator ?? '',
+      dayStart,
+      MAX_PAIRS_PER_CREATOR_PER_DAY,
+      chain.chainId,
+      hourStart,
+      MAX_PAIRS_PER_CHAIN_PER_HOUR,
     )
     .run()
   const row = await getPair(db, chain.chainId, pairKey)
-  if (!row) throw new PairRequestError(500, 'pair insert failed')
-  // INSERT OR IGNORE 未插入 = 并发下已被别人注册：按幂等返回既有行
+  if (!row) {
+    // 没落库：被条件 INSERT 的限额谓词挡下——复查两个桶报出准确原因
+    if ((await countCreatorBucket(db, chain.chainId, creator, dayStart)) >= MAX_PAIRS_PER_CREATOR_PER_DAY) {
+      throw new PairRequestError(
+        429,
+        creator
+          ? 'daily pair registration limit for creator reached'
+          : 'daily pair registration limit for anonymous creators reached',
+      )
+    }
+    if ((await countChainHour(db, chain.chainId, hourStart)) >= MAX_PAIRS_PER_CHAIN_PER_HOUR) {
+      throw new PairRequestError(429, 'hourly pair registration limit for chain reached')
+    }
+    throw new PairRequestError(500, 'pair insert failed')
+  }
+  // INSERT OR IGNORE 未插入但行已存在 = 并发下已被别人注册：按幂等返回既有行
   return { row, duplicate: (res.meta.changes ?? 0) === 0 }
 }
 

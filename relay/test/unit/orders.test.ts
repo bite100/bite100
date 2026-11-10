@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BUILTIN_CHAINS, pairTokens, type ChainRelayConfig } from '../../src/config'
 import {
+  _resetErc1271CodeCache,
   buildSignedOrder,
   orderDigest,
   sideStringToUint,
@@ -171,6 +172,47 @@ describe('verifyOrder ERC-1271 双路（合约账户 / MakerVault）', () => {
     const stub = stubClient(false)
     expect(await verifyOrder(sepolia, so, body.signature, stub)).toBe(true)
     expect(stub.verifyTypedData).not.toHaveBeenCalled()
+  })
+
+  it('第 59 轮：已知 EOA（getCode=0x）→ 跳过 ERC-1271 RPC 回退，本地直接拒绝', async () => {
+    _resetErc1271CodeCache()
+    const { body, so } = await makeVaultOrder()
+    const getCode = vi.fn(async (_args: { address: string }) => '0x' as const)
+    const verifyTypedData = vi.fn(async (_args: { address: string }) => true)
+    const deps = { getPublicClient: () => ({ getCode, verifyTypedData }) as never }
+    // 本地验签对金库订单必然失败（签名者 ≠ VAULT）；回退若被调用会
+    // 返回 true——结果必须是 false 且 verifyTypedData 从未被调用，
+    // 证明 EOA 短路生效（伪造订单不再逐张烧 eth_call）
+    expect(await verifyOrder(sepolia, so, body.signature, deps)).toBe(false)
+    expect(verifyTypedData).not.toHaveBeenCalled()
+    expect(getCode).toHaveBeenCalledTimes(1)
+    // 第二次同地址：命中 60 秒缓存，getCode 不再重复调用
+    expect(await verifyOrder(sepolia, so, body.signature, deps)).toBe(false)
+    expect(getCode).toHaveBeenCalledTimes(1)
+    expect(verifyTypedData).not.toHaveBeenCalled()
+  })
+
+  it('第 59 轮：有合约代码 → 照常走 ERC-1271 回退判定', async () => {
+    _resetErc1271CodeCache()
+    const { body, so } = await makeVaultOrder()
+    const getCode = vi.fn(async (_args: { address: string }) => '0x6001' as const)
+    const verifyTypedData = vi.fn(async (_args: { address: string }) => true)
+    const deps = { getPublicClient: () => ({ getCode, verifyTypedData }) as never }
+    expect(await verifyOrder(sepolia, so, body.signature, deps)).toBe(true)
+    expect(getCode).toHaveBeenCalledTimes(1)
+    expect(verifyTypedData).toHaveBeenCalledTimes(1)
+  })
+
+  it('第 59 轮：getCode 出错 → 未知，不短路（照常回退，RPC 错仍 fail-closed）', async () => {
+    _resetErc1271CodeCache()
+    const { body, so } = await makeVaultOrder()
+    const getCode = vi.fn(async (_args: { address: string }) => {
+      throw new Error('rpc down')
+    })
+    const verifyTypedData = vi.fn(async (_args: { address: string }) => true)
+    const deps = { getPublicClient: () => ({ getCode, verifyTypedData }) as never }
+    expect(await verifyOrder(sepolia, so, body.signature, deps)).toBe(true)
+    expect(verifyTypedData).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -18,11 +18,15 @@
 import { DEFAULT_CHAIN_ID, resolveChains, type ChainRelayConfig } from './config'
 import {
   buildSignedOrderWithTokens,
+  MAX_CREATED_AT_FUTURE_SEC,
+  MAX_CREATED_AT_PAST_SEC,
+  MAX_ORDER_TTL_SEC,
   orderDigest,
   validateBody,
   verifyOrder,
   type NodeOrderBody,
 } from './orders'
+import { FixedWindowRateLimiter } from './rateLimit'
 import {
   PairRequestError,
   listPairs,
@@ -48,6 +52,22 @@ export interface Env {
   NOSTR_POSTMAN_SECRET_HEX?: string
   NOSTR_RELAYS?: string
   NOSTR_KIND?: string
+  /** 可选：POST /orders 每 IP 每分钟限流覆盖（防滥用层，缺省 120） */
+  ORDER_POST_RATE_LIMIT_PER_MIN?: string
+}
+
+/**
+ * POST /orders 入口限流（第 59 轮块 4，审计 ③）：isolate 内存固定
+ * 窗口、按来源 IP 计数——只是防滥用削峰（让伪造订单在烧 RPC 验签
+ * 前先撞墙），不是额度账本（口径见 rateLimit.ts）。缺省 120/分钟：
+ * 远高于任何真人/正常 AI 的挂单速率，只挡机器化灌注。
+ */
+const orderPostLimiter = new FixedWindowRateLimiter()
+const DEFAULT_ORDER_POST_LIMIT = 120
+
+function orderPostLimit(env: Env): number {
+  const n = Number(env.ORDER_POST_RATE_LIMIT_PER_MIN)
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_ORDER_POST_LIMIT
 }
 
 interface OrderRow {
@@ -140,6 +160,11 @@ async function handlePostOrder(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  // 防滥用限流先行：连 JSON 都不解析就先计数（审计 ③ 的便宜墙）
+  const ip = request.headers.get('cf-connecting-ip') ?? 'unknown'
+  if (!orderPostLimiter.allow(`orders:${ip}`, orderPostLimit(env))) {
+    return textError('rate limited', 429)
+  }
   let raw: unknown
   try {
     raw = await request.json()
@@ -166,11 +191,32 @@ async function handlePostOrder(
   const now = Math.floor(Date.now() / 1000)
   // 过期防护（与节点 OrderExpired 同口径：now > expiresAt 即拒）
   if (now > Number(so.expiresAt)) return textError('order expired', 400)
+  // 时效上限（第 59 轮块 4，审计 ②）：TTL 超 30 天的订单会让清理
+  // 永远够不着、永久污染 D1 与订单簿——入库前拒。
+  if (Number(so.expiresAt) - now > MAX_ORDER_TTL_SEC) {
+    return textError('order ttl too long', 400)
+  }
+  // createdAt（签名字段 timestamp）窗口：太旧/太未来都拒（容时钟偏差）
+  if (
+    body.createdAt < now - MAX_CREATED_AT_PAST_SEC ||
+    body.createdAt > now + MAX_CREATED_AT_FUTURE_SEC
+  ) {
+    return textError('order timestamp out of window', 400)
+  }
+
+  // 去重前置（第 59 轮块 4，审计 ③）：digest 是纯本地计算，先查存
+  // 再验签——重复投递（便签多源重发的正常情形）不再重复烧验签 RPC。
+  const digest = orderDigest(chain, so)
+  const existing = await env.DB.prepare('SELECT digest FROM orders WHERE digest = ?')
+    .bind(digest)
+    .first()
+  if (existing) {
+    return json({ ok: true, orderId: body.orderId, digest, duplicate: true })
+  }
 
   const valid = await verifyOrder(chain, so, body.signature)
   if (!valid) return textError('invalid signature', 401)
 
-  const digest = orderDigest(chain, so)
   const rawJson = JSON.stringify(raw)
   const res = await env.DB.prepare(
     `INSERT OR IGNORE INTO orders
@@ -191,11 +237,19 @@ async function handlePostOrder(
       so.amountOut.toString(),
       so.tokenIn,
       so.tokenOut,
-      body.filled ?? '0',
-      body.status ?? 'open',
+      // 第 59 轮块 4（审计 ①，本轮最高优先）：status/filled 不在
+      // EIP-712 签名覆盖内，旧实现把请求体自报值原样落库——任何人
+      // 都能抢先投递他人已签订单并伪造 status='cancelled'，把订单
+      // 从订单簿（按 status 过滤）里藏掉且签名者无从修复。状态只
+      // 由服务端生成：入库恒为 open / '0'，请求体的同名字段忽略。
+      '0',
+      'open',
       body.nonce,
       body.createdAt,
       Number(so.expiresAt),
+      // execType 保留为非权威提示（round 17 的 market/limit 语义由
+      // 投递方自报、撮合方自行判断），不参与订单簿过滤——过滤只看
+      // 上面服务端生成 status，这一点由回归测试钉住。
       body.execType ?? null,
       body.signature,
       rawJson,
@@ -370,13 +424,29 @@ async function handleRegisterPair(request: Request, env: Env): Promise<Response>
   }
 }
 
-/** 列某链的自助上架对（种子 8 对不在此列，前端本地合并） */
+/**
+ * 列某链的自助上架对（种子 8 对不在此列，前端本地合并）。
+ * 第 59 轮块 4（审计 P3-1）：支持 limit/offset 分页；响应体保持数组
+ * 形状（前端既有解析不破），总数与是否截断走响应头
+ * X-Pairs-Total / X-Pairs-Truncated——超过单页上限不再静默消失。
+ */
 async function handleListPairs(url: URL, env: Env): Promise<Response> {
   const chainParam = parseChainParam(url)
   if (chainParam !== null && Number.isNaN(chainParam)) return textError('invalid chain', 400)
   const chainId = chainParam ?? DEFAULT_CHAIN_ID
-  const rows = await listPairs(env.DB, chainId)
-  return json(rows.map(pairRowJson))
+  const limit = parseLimit(url.searchParams.get('limit'), 500, 500)
+  const offsetRaw = Number(url.searchParams.get('offset') ?? 0)
+  const offset = Number.isInteger(offsetRaw) && offsetRaw > 0 ? offsetRaw : 0
+  const { rows, total, truncated } = await listPairs(env.DB, chainId, { limit, offset })
+  return new Response(JSON.stringify(rows.map(pairRowJson)), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      ...CORS,
+      'X-Pairs-Total': String(total),
+      'X-Pairs-Truncated': truncated ? 'true' : 'false',
+    },
+  })
 }
 
 async function handleHealth(env: Env): Promise<Response> {

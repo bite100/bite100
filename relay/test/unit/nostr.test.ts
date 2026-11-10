@@ -33,7 +33,7 @@ describe('parsePostmanSecret', () => {
 })
 
 describe('buildOrderEvent', () => {
-  it('事件可验签，标签含 d=digest / pair / chain / exp，content 为订单 JSON', () => {
+  it('事件可验签，标签含 d=digest / pair / chain / exp + NIP-40 expiration，content 为订单 JSON', () => {
     const ev = buildOrderEvent(INPUT, SECRET, 30078, 1700000000)
     expect(ev.kind).toBe(30078)
     expect(ev.pubkey).toBe(getPublicKey(SECRET))
@@ -43,6 +43,9 @@ describe('buildOrderEvent', () => {
       ['pair', 'BTC/USDT'],
       ['chain', '11155111'],
       ['exp', '1999999999'],
+      // 第 59 轮块 4（审计 ⑤）：NIP-40 标准过期标签与自有 exp 并存，
+      // 支持 NIP-40 的中继到期自删；值必须与 exp 一致
+      ['expiration', '1999999999'],
     ])
     expect(ev.content).toBe(INPUT.rawJson)
     expect(ev.id).toMatch(/^[0-9a-f]{64}$/)
