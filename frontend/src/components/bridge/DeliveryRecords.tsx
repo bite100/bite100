@@ -24,7 +24,9 @@ import {
   executeDelivery,
   fillFromLocalTrade,
   planDelivery,
+  reconcileDelivery,
   refreshDelivery,
+  retryDelivery,
   revalidatePendingDisclosures,
 } from '../../services/defaultBridge/orchestrator'
 import { loadSettings } from '../../services/defaultBridge/settings'
@@ -79,6 +81,17 @@ export function DeliveryRecords({ account, refreshSignal = 0 }: { account: strin
     }
     // 加载时批量复验（第 63 轮桥-1）：披露升版后，旧 pending-decision 先如实转挂起
     revalidatePendingDisclosures(account, s)
+    // 启动对账（第 63 轮桥-2）：卡在 initiating 或带未落定标记的记录先按链上事实
+    // 对账恢复/定性，绝不凭状态直接重发
+    for (const r of loadDeliveries(account)) {
+      if (r.status === 'initiating' || (r.status === 'anomaly' && r.initiatedTxPending)) {
+        try {
+          await reconcileDelivery(account, r.id)
+        } catch {
+          // 对账失败不阻塞列表展示（记录保持原状，重试入口仍有状态机兜底）
+        }
+      }
+    }
     setRecords(loadDeliveries(account).slice().sort((a, b) => b.createdAt - a.createdAt))
   }, [account])
 
@@ -248,10 +261,8 @@ export function DeliveryRecords({ account, refreshSignal = 0 }: { account: strin
                       className="btn primary drec-btn"
                       disabled={busy}
                       onClick={() =>
-                        void run(rec, async () => {
-                          applyEvent(account, rec, { type: 'retry', at: Date.now() })
-                          await executeDelivery(account, rec.id, settings)
-                        })
+                        // 第 63 轮桥-2：重试统一走 retryDelivery（先对账，非 missing 不许重发）
+                        void run(rec, async () => retryDelivery(account, rec.id, settings))
                       }
                     >
                       {busy ? '处理中…' : '重试交付'}

@@ -211,6 +211,18 @@ export interface BridgeExecResult {
 }
 
 /**
+ * 第 63 轮桥-2（P1-①）：广播瞬间回调钩子。发送交易一拿到 tx 对象（广播成功、
+ * 尚未等回执）就回调，调用方据此**先落盘 hash 再等结果**——进程崩溃/断网后，
+ * 恢复方凭落盘 hash 对账，而不是凭状态猜测是否已发送。
+ */
+export interface BridgeExecHooks {
+  /** 桥发送交易广播成功后、等待回执前回调（参数 = 发送交易 hash） */
+  onSendTxHash?: (hash: string) => void | Promise<void>
+  /** CCIP 静态预取到 messageId 后、正式发送前回调（恢复 initiating 时用作追踪 ID） */
+  onPrefetchTrackingId?: (trackingId: string) => void | Promise<void>
+}
+
+/**
  * 执行一条消息桥转移（钱包余额 → 目标链同地址）。
  * tokenAddress 仅 LayerZero 用（直转该代币）；CCIP / Wormhole 固定经 wTKA 1:1 转换（源链 TKA）。
  * 与桥页原执行逻辑逐行同构（授权不足才批、静态调用取 CCIP 消息 ID 等口径不变）。
@@ -220,7 +232,8 @@ export async function executeMessageBridge(
   ctx: BridgeRouteContext,
   signer: Signer,
   tokenAddress: string,
-  amountWei: bigint
+  amountWei: bigint,
+  hooks?: BridgeExecHooks
 ): Promise<BridgeExecResult> {
   const { account, sourceChain, targetChain } = ctx
   if (channel === 'layerzero') {
@@ -237,6 +250,7 @@ export async function executeMessageBridge(
     if (!dstEid) throw new Error(`目标链 ${targetChain.chainId} 暂不支持跨链（无 LayerZero EID 配置）`)
     const [nativeFee] = await bridge.quoteBridgeFee(tokenAddress, amountWei, dstEid, account, '0x')
     const tx = await bridge.bridgeToken(tokenAddress, amountWei, dstEid, '0x', { value: nativeFee })
+    await hooks?.onSendTxHash?.(tx.hash)
     const receipt = await tx.wait()
     if (!receipt || receipt.status !== 1) throw new Error('跨链交易未成功')
     let guid = ''
@@ -269,7 +283,9 @@ export async function executeMessageBridge(
     const fee: bigint = await router.getFee(selector, message)
     // 先用静态调用取消息 ID（与真实发送同一状态下计算，结果一致），再正式发送
     const messageId: string = await router.ccipSend.staticCall(selector, message, { value: fee })
+    await hooks?.onPrefetchTrackingId?.(messageId)
     const tx = await router.ccipSend(selector, message, { value: fee })
+    await hooks?.onSendTxHash?.(tx.hash)
     const receipt = await tx.wait()
     if (!receipt || receipt.status !== 1) throw new Error('跨链交易未成功')
     return { channel, txHash: receipt.hash, trackingId: messageId, nativeFeeWei: fee }
@@ -297,23 +313,78 @@ export async function executeMessageBridge(
     NTT_SINGLE_TRANSCEIVER_INSTRUCTIONS,
     { value: fee }
   )
+  await hooks?.onSendTxHash?.(tx.hash)
   const receipt = await tx.wait()
   if (!receipt || receipt.status !== 1) throw new Error('跨链交易未成功')
   return { channel, txHash: receipt.hash, trackingId: receipt.hash, nativeFeeWei: fee }
 }
 
-/** 从成交链 Vault 提出余额到钱包（交付发起的第一步；VAULT_ABI 与资产页同源） */
+/** 从成交链 Vault 提出余额到钱包（交付发起的第一步；VAULT_ABI 与资产页同源）。
+ * onTxHash：第 63 轮桥-2——广播瞬间（等回执前）回调，调用方先落盘提款 hash。 */
 export async function withdrawFromVault(
   signer: Signer,
   chain: ChainConfig,
   token: string,
-  amountWei: bigint
+  amountWei: bigint,
+  onTxHash?: (hash: string) => void | Promise<void>
 ): Promise<string> {
   const vault = new Contract(chain.contracts.vault, VAULT_ABI, signer)
   const tx = await vault.withdraw(token, amountWei)
+  await onTxHash?.(tx.hash)
   const receipt = await tx.wait()
   if (!receipt || receipt.status !== 1) throw new Error('从 Vault 提取成交款失败')
   return receipt.hash as string
+}
+
+/** 交易回执事实（第 63 轮桥-2 对账原语）：无回执 = pending（不等于不存在） */
+export async function checkTxReceipt(
+  provider: Provider,
+  hash: string
+): Promise<'success' | 'reverted' | 'pending'> {
+  try {
+    const receipt = await provider.getTransactionReceipt(hash)
+    if (!receipt) return 'pending'
+    return receipt.status === 1 ? 'success' : 'reverted'
+  } catch {
+    return 'pending'
+  }
+}
+
+/** 节点是否还认识这笔交易（已广播未打包时为 true；被丢弃/从未广播为 false） */
+export async function txKnownToNode(provider: Provider, hash: string): Promise<boolean> {
+  try {
+    return (await provider.getTransaction(hash)) != null
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 从发送交易回执解析 LayerZero BridgeInitiated 的 guid（第 63 轮桥-2：恢复卡住的
+ * initiating 记录时重建追踪信息用）。解析不出返回 null，调用方降级用 txHash 追踪。
+ */
+export async function fetchLayerZeroGuidByTxHash(
+  provider: Provider,
+  sourceChain: ChainConfig,
+  txHash: string,
+  bridgeAddressOverride?: string
+): Promise<string | null> {
+  try {
+    const receipt = await provider.getTransactionReceipt(txHash)
+    if (!receipt || receipt.status !== 1) return null
+    const bridge = new Contract(resolveBridgeAddress(sourceChain, bridgeAddressOverride), CROSS_CHAIN_BRIDGE_ABI, provider)
+    for (const log of receipt.logs) {
+      try {
+        const parsed = bridge.interface.parseLog(log)
+        if (parsed?.name === 'BridgeInitiated') return parsed.args[0] as string
+      } catch {
+        // 非本合约日志，跳过
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 /** 通道追踪链接（§4.2 交付记录字段） */

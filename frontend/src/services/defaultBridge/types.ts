@@ -77,6 +77,30 @@ export interface DeliveryRecord {
    * 第一期前端不自动置 true——记回由平台侧执行后回填。
    */
   fallbackCredited?: boolean
+  // —— 第 63 轮桥-2（P1-① 重复投递防护）：发起意图凭证与对账 ——
+  /** 本次发起序号（从 1 起），每次进入 initiating +1 */
+  attemptCount?: number
+  /** 本次发起的意图凭证 ID：`${record.id}#${attemptCount}`，发起前先落盘 */
+  attemptId?: string
+  /** 桥发送交易 hash：广播瞬间经执行器钩子落盘（先于等回执），崩溃后可据此对账 */
+  sendTxHash?: string
+  /** Vault 提款交易 hash：广播瞬间落盘（先于等回执） */
+  withdrawTxHash?: string
+  /** CCIP 静态预取的消息 ID：正式发送前落盘，恢复 initiating 记录时用作追踪 ID */
+  prefetchTrackingId?: string
+  /**
+   * 是否存在「可能已广播但结果未落定」的发起：发起前置 true；确认上链（initiated）
+   * 或对账判定 missing 后置 false。为 true 的记录重试前必须先对账。
+   */
+  initiatedTxPending?: boolean
+  /**
+   * 最近一次对账结论：found = 发送交易已上链成功；missing = 确认未上链（可安全
+   * 重试的唯一依据）；unknown = 证据不足，禁止重试。第一方事实（本会话内未发生
+   * 任何广播即失败）也可直接记 missing。
+   */
+  lastReconcile?: 'missing' | 'found' | 'unknown'
+  /** 最近一次对账时间 */
+  lastReconcileAt?: number
   createdAt: number
   updatedAt: number
 }

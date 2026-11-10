@@ -4,12 +4,16 @@ import {
   executeDelivery,
   fillFromLocalTrade,
   planDelivery,
+  reconcileDelivery,
+  retryDelivery,
   revalidatePendingDisclosures,
   symbolForToken,
 } from './orchestrator'
 import { confirmDisclosure, factorySettings } from './settings'
-import { getDelivery } from './deliveries'
+import { getDelivery, upsertDelivery } from './deliveries'
 import { withSigner } from '../../utils'
+import type { Provider } from 'ethers'
+import type { executeMessageBridge, BridgeExecHooks, BridgeExecResult } from '../bridgeExecutors'
 import type { SettledFillInput } from './orchestrator'
 import type { DefaultBridgeSettings } from './types'
 
@@ -177,5 +181,164 @@ describe('第 63 轮桥-1：披露执行复验（P1-②）', () => {
     expect(records.find((r) => r.tradeId === 'trade-x')?.status).toBe('pending-decision')
     expect(records.find((r) => r.tradeId === 'trade-ccip')?.status).toBe('suspended-disclosure')
     expect(getDelivery(TAKER, 'trade-ccip', TAKER)?.status).toBe('suspended-disclosure')
+  })
+})
+
+describe('第 63 轮桥-2：意图凭证落盘与对账（P1-①）', () => {
+  beforeEach(() => localStorage.clear())
+
+  const passthroughSigner = (async (cb: (s: unknown) => Promise<unknown>) =>
+    cb({})) as unknown as typeof withSigner
+  const fakeProvider = {} as unknown as Provider
+
+  function okWithdraw() {
+    return (async (_s: unknown, _c: unknown, _t: unknown, _a: unknown, onTxHash?: (h: string) => Promise<void>) => {
+      await onTxHash?.('0xwithdraw')
+      return '0xwithdraw'
+    }) as unknown as typeof import('../bridgeExecutors').withdrawFromVault
+  }
+
+  function bridgeFake(impl: (hooks?: BridgeExecHooks) => Promise<BridgeExecResult>) {
+    let calls = 0
+    const fn = (async (
+      _ch: unknown,
+      _ctx: unknown,
+      _signer: unknown,
+      _token: unknown,
+      _amt: unknown,
+      hooks?: BridgeExecHooks
+    ) => {
+      calls++
+      return impl(hooks)
+    }) as unknown as typeof executeMessageBridge
+    return { fn, calls: () => calls }
+  }
+
+  it('广播瞬间 hash 已落盘；广播后失败保留 pending 且不记 missing', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    let persistedDuringSend: string | undefined
+    const bridge = bridgeFake(async (hooks) => {
+      await hooks?.onSendTxHash?.('0xsend')
+      // 钩子返回后、执行器抛错前：hash 必须已经在存储里（崩溃窗口凭据）
+      persistedDuringSend = getDelivery(TAKER, 'trade-x', TAKER)?.sendTxHash
+      throw new Error('wait blew up')
+    })
+    const result = await executeDelivery(TAKER, out.record!.id, settings(), {
+      withSignerFn: passthroughSigner,
+      withdrawFn: okWithdraw(),
+      executeBridgeFn: bridge.fn,
+    })
+    expect(persistedDuringSend).toBe('0xsend')
+    expect(result.status).toBe('anomaly')
+    expect(result.sendTxHash).toBe('0xsend')
+    expect(result.withdrawTxHash).toBe('0xwithdraw')
+    expect(result.initiatedTxPending).toBe(true)
+    expect(result.lastReconcile).toBeUndefined()
+    expect(result.attemptCount).toBe(1)
+    expect(result.attemptId).toBe(`${out.record!.id}#1`)
+  })
+
+  it('任何广播前失败 = 第一方 missing：直接落章，重试可放行并成功', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    const rejectingWithdraw = (async () => {
+      throw new Error('user rejected')
+    }) as unknown as typeof import('../bridgeExecutors').withdrawFromVault
+    const failed = await executeDelivery(TAKER, out.record!.id, settings(), {
+      withSignerFn: passthroughSigner,
+      withdrawFn: rejectingWithdraw,
+      executeBridgeFn: bridgeFake(async () => {
+        throw new Error('不应到达桥存入')
+      }).fn,
+    })
+    expect(failed.status).toBe('anomaly')
+    expect(failed.lastReconcile).toBe('missing')
+    expect(failed.initiatedTxPending).toBe(false)
+
+    const bridge = bridgeFake(async () => ({ channel: 'layerzero', txHash: '0xnew', trackingId: 'guid-2', nativeFeeWei: 5n }))
+    const retried = await retryDelivery(TAKER, out.record!.id, settings(), {
+      withSignerFn: passthroughSigner,
+      withdrawFn: okWithdraw(),
+      executeBridgeFn: bridge.fn,
+    })
+    expect(retried.status).toBe('in-flight')
+    expect(retried.trackingId).toBe('guid-2')
+    expect(retried.attemptCount).toBe(2)
+    expect(retried.initiatedTxPending).toBe(false)
+  })
+
+  it('对账 unknown 时重试被拒；对账 found 时恢复在途且绝不重发', async () => {
+    const out = planDelivery(TAKER, fill(), confirmDisclosure(settings({ defaultChannel: 'wormhole' }), 'wormhole'))
+    // 手工构造一笔卡住的 initiating（模拟崩溃在广播后）
+    upsertDelivery(TAKER, {
+      ...out.record!,
+      status: 'initiating',
+      channel: 'wormhole',
+      attemptId: `${out.record!.id}#1`,
+      attemptCount: 1,
+      initiatedTxPending: true,
+      sendTxHash: '0xsend',
+      initiatedAt: Date.now(),
+    })
+    const bridge = bridgeFake(async () => {
+      throw new Error('绝不允许重发')
+    })
+    await expect(
+      retryDelivery(TAKER, out.record!.id, settings(), {
+        provider: fakeProvider,
+        checkReceiptFn: async () => 'pending',
+        txKnownFn: async () => true,
+        executeBridgeFn: bridge.fn,
+      })
+    ).rejects.toThrow('对账未定')
+    expect(getDelivery(TAKER, 'trade-x', TAKER)?.lastReconcile).toBe('unknown')
+
+    const recovered = await retryDelivery(TAKER, out.record!.id, settings(), {
+      provider: fakeProvider,
+      checkReceiptFn: async () => 'success',
+      executeBridgeFn: bridge.fn,
+    })
+    expect(recovered.status).toBe('in-flight')
+    expect(recovered.trackingId).toBe('0xsend') // Wormhole 追踪 ID = 发送 txHash
+    expect(recovered.initiatedTxPending).toBe(false)
+    expect(bridge.calls()).toBe(0)
+  })
+
+  it('对账 reverted → missing 落定 initiating；CCIP 恢复用预取 messageId', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    upsertDelivery(TAKER, {
+      ...out.record!,
+      status: 'initiating',
+      attemptId: `${out.record!.id}#1`,
+      attemptCount: 1,
+      initiatedTxPending: true,
+      sendTxHash: '0xdead',
+      initiatedAt: Date.now(),
+    })
+    const settled = await reconcileDelivery(TAKER, out.record!.id, {
+      provider: fakeProvider,
+      checkReceiptFn: async () => 'reverted',
+    })
+    expect(settled.status).toBe('anomaly')
+    expect(settled.anomalyKind).toBe('initiation-failed')
+    expect(settled.lastReconcile).toBe('missing')
+    expect(settled.initiatedTxPending).toBe(false)
+
+    const ccipOut = planDelivery(TAKER, fill({ tradeId: 'trade-ccip2' }), confirmDisclosure(settings({ defaultChannel: 'ccip' }), 'ccip'))
+    upsertDelivery(TAKER, {
+      ...ccipOut.record!,
+      status: 'initiating',
+      attemptId: `${ccipOut.record!.id}#1`,
+      attemptCount: 1,
+      initiatedTxPending: true,
+      sendTxHash: '0xccipsend',
+      prefetchTrackingId: 'msg-42',
+      initiatedAt: Date.now(),
+    })
+    const recovered = await reconcileDelivery(TAKER, ccipOut.record!.id, {
+      provider: fakeProvider,
+      checkReceiptFn: async () => 'success',
+    })
+    expect(recovered.status).toBe('in-flight')
+    expect(recovered.trackingId).toBe('msg-42')
   })
 })

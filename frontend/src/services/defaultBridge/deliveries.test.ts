@@ -60,16 +60,26 @@ describe('交付状态机（§1.2 / §7.3）', () => {
     ).toThrow()
   })
 
-  it('发起失败 → 异常，可重试回 pending；重试后可再次发起', () => {
+  it('发起失败 → 异常，对账 missing 后可重试回 pending；重试后可再次发起', () => {
     let r = rec()
     r = transition(r, { type: 'initiate', at: 2 })
     r = transition(r, { type: 'initiation-failed', at: 3, note: '用户拒签' })
     expect(r.status).toBe('anomaly')
     expect(r.anomalyKind).toBe('initiation-failed')
+    // 第 63 轮桥-2：没有对账结论时 retry 被状态机拒绝
+    expect(() => transition(r, { type: 'retry', at: 4 })).toThrow()
+    r = { ...r, lastReconcile: 'missing' as const }
     r = transition(r, { type: 'retry', at: 4 })
     expect(r.status).toBe('pending-decision')
     r = transition(r, { type: 'initiate', at: 5 })
     expect(r.status).toBe('initiating')
+  })
+
+  it('第 63 轮桥-2：对账结论 unknown / found 时 retry 一律拒绝（防双投递）', () => {
+    const base = rec({ status: 'anomaly', anomalyKind: 'initiation-failed' })
+    expect(() => transition({ ...base, lastReconcile: 'unknown' }, { type: 'retry', at: 2 })).toThrow()
+    expect(() => transition({ ...base, lastReconcile: 'found' }, { type: 'retry', at: 2 })).toThrow()
+    expect(() => transition(base, { type: 'retry', at: 2 })).toThrow()
   })
 
   it('在途超时 → 异常（超时），且绝不置 fallbackCredited（§7.3 防双记账）', () => {

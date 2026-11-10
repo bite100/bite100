@@ -19,10 +19,14 @@ import { VAULT_ABI } from '../../config'
 import { formatError, getProvider, withSigner } from '../../utils'
 import {
   bridgeTrackingUrl,
+  checkTxReceipt,
   executeMessageBridge,
+  fetchLayerZeroGuidByTxHash,
   fetchLayerZeroStatus,
+  txKnownToNode,
   withdrawFromVault,
 } from '../bridgeExecutors'
+import type { ChainConfig } from '../../config/chains'
 import { getDisclosure, isTestnetChain } from './disclosures'
 import {
   deliveryKey,
@@ -221,7 +225,26 @@ function persist(account: string, record: DeliveryRecord): void {
 export interface ExecuteDeps {
   withSignerFn?: typeof withSigner
   provider?: Provider | null
+  /** 第 63 轮桥-2：执行器注入点（默认真实实现；测试用桩验证 hash 落盘时序） */
+  executeBridgeFn?: typeof executeMessageBridge
+  withdrawFn?: typeof withdrawFromVault
 }
+
+/** 第 63 轮桥-2 对账依赖（原语可注入，默认骑 bridgeExecutors 的链上读取） */
+export interface ReconcileDeps {
+  provider?: Provider | null
+  now?: number
+  checkReceiptFn?: (provider: Provider, hash: string) => Promise<'success' | 'reverted' | 'pending'>
+  txKnownFn?: (provider: Provider, hash: string) => Promise<boolean>
+  fetchGuidFn?: (provider: Provider, chain: ChainConfig, txHash: string) => Promise<string | null>
+}
+
+/**
+ * 发送交易「节点不认识 + 发起已超过此时长」才可由对账判定 missing（第 63 轮桥-2）。
+ * 取 1 小时：远大于常规打包时间，又远小于交付超时口径；判定错了（交易其实还在
+ * 别的节点内存池）会导致双投递风险，故同时要求节点不认识该 hash 才成立。
+ */
+const RECONCILE_MISSING_AFTER_MS = 60 * 60 * 1000
 
 /**
  * 加载时批量复验（第 63 轮桥-1）：对全部 pending-decision 记录按当前披露版本
@@ -264,6 +287,8 @@ export async function executeDelivery(
   deps: ExecuteDeps = {}
 ): Promise<DeliveryRecord> {
   const withSignerFn = deps.withSignerFn ?? withSigner
+  const executeBridgeFn = deps.executeBridgeFn ?? executeMessageBridge
+  const withdrawFn = deps.withdrawFn ?? withdrawFromVault
   const provider = deps.provider ?? getProvider()
   let record = loadDeliveries(account).find((r) => r.id === recordId)
   if (!record) throw new Error('交付记录不存在')
@@ -279,7 +304,35 @@ export async function executeDelivery(
   if (!settleChain || !homeChain) throw new Error('链配置缺失，无法发起交付')
 
   record = transition(record, { type: 'initiate', at: Date.now() })
+  // 第 63 轮桥-2（P1-①）：先落意图凭证再执行——attemptId/序号 + pending 标记在任何
+  // 链上动作之前落盘；之后每次广播的 hash 都经钩子即时落盘。这样进程在任意点
+  // 崩溃，恢复方都有凭证对账，而不是只剩一个无出口的 initiating 状态。
+  const attemptNo = (record.attemptCount ?? 0) + 1
+  record = {
+    ...record,
+    attemptCount: attemptNo,
+    attemptId: `${record.id}#${attemptNo}`,
+    initiatedTxPending: true,
+    sendTxHash: undefined,
+    withdrawTxHash: undefined,
+    prefetchTrackingId: undefined,
+  }
   persist(account, record)
+
+  // 本次发起是否发生过任何广播（第一方事实，供失败时判定可否直接记 missing）
+  let withdrawBroadcast = false
+  let sendBroadcast = false
+  const hooks = {
+    onSendTxHash: async (hash: string) => {
+      sendBroadcast = true
+      record = { ...record, sendTxHash: hash, updatedAt: Date.now() }
+      persist(account, record)
+    },
+    onPrefetchTrackingId: async (id: string) => {
+      record = { ...record, prefetchTrackingId: id, updatedAt: Date.now() }
+      persist(account, record)
+    },
+  }
 
   let stage: 'withdraw' | 'bridge' = record.fundsLocation === 'wallet' ? 'bridge' : 'withdraw'
   try {
@@ -297,18 +350,23 @@ export async function executeDelivery(
         }
         const token = settleChain.tokens?.[record!.asset]
         if (!token) throw new Error(`成交链未登记资产 ${record!.asset}`)
-        await withdrawFromVault(signer, settleChain, token, amount)
+        await withdrawFn(signer, settleChain, token, amount, async (hash: string) => {
+          withdrawBroadcast = true
+          record = { ...record, withdrawTxHash: hash, updatedAt: Date.now() }
+          persist(account, record)
+        })
         stage = 'bridge'
       }
       const tokenAddress = settleChain.tokens?.[record!.asset] ?? ''
       return {
         amount,
-        res: await executeMessageBridge(
+        res: await executeBridgeFn(
           channel,
           { account, sourceChain: settleChain, targetChain: homeChain },
           signer,
           tokenAddress,
-          amount
+          amount,
+          hooks
         ),
       }
     })
@@ -320,7 +378,7 @@ export async function executeDelivery(
       trackingUrl: bridgeTrackingUrl(channel, result.res.trackingId, isTestnetChain(record.settleChainId)),
       feeNativeWei: result.res.nativeFeeWei.toString(),
     })
-    record = { ...record, amountWei: result.amount.toString(), fundsLocation: undefined }
+    record = { ...record, amountWei: result.amount.toString(), fundsLocation: undefined, initiatedTxPending: false }
     persist(account, record)
     return record
   } catch (e) {
@@ -330,9 +388,145 @@ export async function executeDelivery(
         : `交付发起失败，成交款仍在成交链 Vault：${formatError(e)}`
     record = transition(record, { type: 'initiation-failed', at: Date.now(), note })
     record = { ...record, fundsLocation: stage === 'bridge' ? 'wallet' : 'vault' }
+    // 第 63 轮桥-2 对账口径：
+    // - 桥发送已广播（sendBroadcast）：结果未知——保留 pending 标记且不下 missing
+    //   结论，重试必须先过对账（reconcileDelivery / retryDelivery）。
+    // - 未发生桥发送广播（拒签/报价失败/提款失败，或提款已广播但桥发送未广播）：
+    //   桥发起确定未上链是第一方事实，直接记 missing 并清 pending，重试可放行。
+    if (sendBroadcast) {
+      record = { ...record, initiatedTxPending: true }
+    } else {
+      record = { ...record, initiatedTxPending: false, lastReconcile: 'missing', lastReconcileAt: Date.now() }
+    }
     persist(account, record)
     return record
   }
+}
+
+/**
+ * 对账（第 63 轮桥-2，P1-①）：对卡住的 initiating 记录与「已广播但结果未落定」的
+ * anomaly 记录，按既有链上事实面判定上一笔发起的真实结果：
+ * - 发送回执 success → found：重建追踪信息（LZ 解析 guid / CCIP 用预取 messageId /
+ *   Wormhole 用 txHash），记录恢复为 in-flight，**不重发**；
+ * - 发送回执 reverted，或提款已终局而桥发送从未广播，或发送交易节点不认识且发起
+ *   已超 RECONCILE_MISSING_AFTER_MS → missing：initiating 转发起失败，pending 清除，
+ *   此后才允许重试；
+ * - 其余 → unknown：只盖章，不动状态，重试继续被状态机拒绝。
+ * 无 provider 时只能盖 unknown 章。第 62 轮前的老 anomaly 记录（无 attemptId、
+ * 无任何 hash）：旧流程是全程等待回执后才落异常，其失败是本会话内已观察的事实，
+ * 直接记 missing 放行重试；老 initiating 记录无 hash 可查，保持 unknown 待人工处理。
+ */
+export async function reconcileDelivery(
+  account: string,
+  recordId: string,
+  deps: ReconcileDeps = {}
+): Promise<DeliveryRecord> {
+  const now = deps.now ?? Date.now()
+  let record = loadDeliveries(account).find((r) => r.id === recordId)
+  if (!record) throw new Error('交付记录不存在')
+  const active =
+    record.status === 'initiating' || (record.status === 'anomaly' && record.initiatedTxPending === true)
+  if (!active) {
+    // 第 63 轮前老记录的兼容判定（见函数头注）
+    if (
+      record.status === 'anomaly' &&
+      record.anomalyKind === 'initiation-failed' &&
+      record.attemptId === undefined &&
+      !record.sendTxHash &&
+      !record.withdrawTxHash &&
+      record.lastReconcile === undefined
+    ) {
+      record = { ...record, lastReconcile: 'missing', lastReconcileAt: now, updatedAt: now }
+      persist(account, record)
+    }
+    return record
+  }
+  const provider = deps.provider ?? getProvider()
+  if (!provider) {
+    record = { ...record, lastReconcile: 'unknown', lastReconcileAt: now, updatedAt: now }
+    persist(account, record)
+    return record
+  }
+  const checkReceiptFn = deps.checkReceiptFn ?? checkTxReceipt
+  const txKnownFn = deps.txKnownFn ?? txKnownToNode
+  const age = now - (record.initiatedAt ?? record.updatedAt)
+  let verdict: 'found' | 'missing' | 'unknown' = 'unknown'
+  if (record.sendTxHash) {
+    const r = await checkReceiptFn(provider, record.sendTxHash)
+    if (r === 'success') verdict = 'found'
+    else if (r === 'reverted') verdict = 'missing'
+    else if (!(await txKnownFn(provider, record.sendTxHash)) && age > RECONCILE_MISSING_AFTER_MS) verdict = 'missing'
+  } else if (record.withdrawTxHash) {
+    const r = await checkReceiptFn(provider, record.withdrawTxHash)
+    // 提款已终局（成功=钱在钱包 / 失败=钱在 Vault）而桥发送从未广播 → 桥发起确定 missing
+    if (r === 'success' || r === 'reverted') verdict = 'missing'
+    else if (!(await txKnownFn(provider, record.withdrawTxHash)) && age > RECONCILE_MISSING_AFTER_MS) verdict = 'missing'
+  }
+  // 无任何 hash（崩溃在广播与钩子之间）：无法断言，保持 unknown 待人工处理。
+  record = { ...record, lastReconcile: verdict, lastReconcileAt: now, updatedAt: now }
+  if (verdict === 'found' && record.sendTxHash && record.channel) {
+    let trackingId = record.prefetchTrackingId ?? ''
+    if (record.channel === 'wormhole') trackingId = record.sendTxHash
+    if (record.channel === 'layerzero') {
+      const fetchGuidFn = deps.fetchGuidFn ?? fetchLayerZeroGuidByTxHash
+      const settleChain = getChainConfig(record.settleChainId)
+      trackingId =
+        (settleChain ? await fetchGuidFn(provider, settleChain, record.sendTxHash) : null) ?? record.sendTxHash
+    }
+    if (!trackingId) trackingId = record.sendTxHash
+    record = transition(record, {
+      type: 'initiated',
+      at: now,
+      txHash: record.sendTxHash,
+      trackingId,
+      trackingUrl: bridgeTrackingUrl(record.channel, trackingId, isTestnetChain(record.settleChainId)),
+      feeNativeWei: record.feeNativeWei ?? '0',
+    })
+    record = { ...record, initiatedTxPending: false, lastReconcile: 'found', lastReconcileAt: now }
+  } else if (verdict === 'missing' && record.status === 'initiating') {
+    record = transition(record, {
+      type: 'initiation-failed',
+      at: now,
+      note: '对账确认上一笔发起未上链（missing）：未发现发送交易上链事实，可安全重试。',
+    })
+    record = { ...record, initiatedTxPending: false, lastReconcile: 'missing', lastReconcileAt: now }
+  }
+  persist(account, record)
+  return record
+}
+
+/**
+ * 安全重试（第 63 轮桥-2）：重试前强制对账——记录在 initiating 或带 pending 标记的
+ * anomaly 先 reconcileDelivery；已恢复为 in-flight 的直接返回（不重发）；对账非
+ * missing 一律抛错拒绝；判定 missing 后才走状态机 retry（状态机再验一次 missing）
+ * 并重新执行。组件「重试交付」按钮统一走这里。
+ */
+export async function retryDelivery(
+  account: string,
+  recordId: string,
+  settings: DefaultBridgeSettings,
+  deps: ExecuteDeps & ReconcileDeps = {}
+): Promise<DeliveryRecord> {
+  let record = loadDeliveries(account).find((r) => r.id === recordId)
+  if (!record) throw new Error('交付记录不存在')
+  if (record.status === 'initiating' || record.status === 'anomaly') {
+    record = await reconcileDelivery(account, recordId, deps)
+    if (record.status === 'in-flight' || record.status === 'delivered') return record
+    if (record.status === 'initiating') {
+      throw new Error('上一笔发起对账未定（unknown），为避免重复投递暂不能重试；请稍后再试')
+    }
+    if (record.status === 'anomaly') {
+      if (record.anomalyKind !== 'initiation-failed') {
+        throw new Error('只有发起失败的交付可以重试；在途异常请先走追踪与人工中继兜底')
+      }
+      if (record.lastReconcile !== 'missing') {
+        throw new Error('上一笔发起结果未确认（对账未判定 missing），为避免重复投递暂不能重试；请稍后刷新对账')
+      }
+      record = transition(record, { type: 'retry', at: Date.now() })
+      persist(account, record)
+    }
+  }
+  return executeDelivery(account, recordId, settings, deps)
 }
 
 /**
