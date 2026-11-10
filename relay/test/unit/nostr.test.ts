@@ -114,8 +114,24 @@ describe('buildMirrorRecord（审查修复批 P2：镜像归一化）', () => {
       signature: '0x' + 'cd'.repeat(65),
       chainId: 11155111,
       digest,
-      execType: 'limit',
     })
+  })
+
+  it('请求体自报 execType 不进镜像（微修复批：镜像只承载签名事实+服务端状态）', () => {
+    // poisonedBody.execType = 'limit' 是自报值——记录里不得出现该键
+    const rec = buildMirrorRecord(poisonedBody, {
+      digest,
+      chainId: 11155111,
+      expiresAt: 1999999999,
+    })
+    expect(rec).not.toHaveProperty('execType')
+    const ev = buildOrderEvent(
+      { record: rec, digest, pair: 'BTC/USDT', chainId: 11155111, expiresAt: 1999999999 },
+      SECRET,
+      30078,
+      1700000000,
+    )
+    expect(ev.content).not.toContain('execType')
   })
 
   it('投毒提交产出的镜像事件 content 解析后 status=open、filled=0（不含请求原文的污染值）', () => {

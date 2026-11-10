@@ -14,7 +14,8 @@
  *         两者并存兼容；注意这仍不构成镜像侧的撤单墓碑——订单状态以
  *         链上为准（设计口径不变）。
  *   content = 服务端归一化记录 JSON（字段集与 D1 存储行 / GET 返回
- *         一致，见 buildMirrorRecord）。第 59 轮审查修复批：旧实现把
+ *         一致，唯一例外 execType 不进镜像，见 buildMirrorRecord）。
+ *         第 59 轮审查修复批：旧实现把
  *         请求原文当 content 转发，status/filled 不在签名覆盖内，
  *         提交方可夹带伪造状态污染镜像消费者（D1 正式行已在块 4
  *         净化、镜像却没有）——现只发服务端生成的记录，请求原文
@@ -74,6 +75,11 @@ export interface MirrorInput {
  * chainId，status/filled 恒为服务端生成值（'open'/'0'）。入参 body
  * 里自报的 status/filled 在此被丢弃：投毒提交（抢投他人订单并自报
  * status='cancelled'）污染不了镜像，与块 4 的 D1 入库净化同口径。
+ * 唯一与存储行不同的字段是 execType（第 59 轮微修复批删除）：
+ * execType 同样不在签名覆盖内、是请求体自报值——镜像只承载签名
+ * 事实 + 服务端生成状态，故不带它；D1 存储行与订单簿 API 保留
+ * execType 不变，那里它已声明为非权威提示（撮合预模拟会剪除
+ * stale 腿，不依赖它裁决）。
  * 键序固定构造，JSON.stringify 序列化结果确定。
  * trader 按入库同口径小写化；expiresAt 用重建后的生效值（缺省 TTL
  * 已展开），与存储行一致。
@@ -82,7 +88,7 @@ export function buildMirrorRecord(
   body: NodeOrderBody,
   resolved: { digest: string; chainId: number; expiresAt: number },
 ): Record<string, unknown> {
-  const record: Record<string, unknown> = {
+  return {
     orderId: body.orderId,
     trader: body.trader.toLowerCase(),
     pair: body.pair,
@@ -98,8 +104,6 @@ export function buildMirrorRecord(
     chainId: resolved.chainId,
     digest: resolved.digest,
   }
-  if (body.execType) record.execType = body.execType
-  return record
 }
 
 /** 组装并签名订单镜像事件（纯函数，可单测） */
