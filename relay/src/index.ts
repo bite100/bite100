@@ -457,6 +457,8 @@ function deliveryRowJson(r: DeliveryRow) {
     sendTxHash: r.sendTxHash,
     trackingId: r.trackingId,
     note: r.note,
+    lastReconcile: r.lastReconcile,
+    broadcastEvidence: r.broadcastEvidence,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   }
@@ -551,6 +553,8 @@ async function handleReportDelivery(request: Request, env: Env): Promise<Respons
         sendTxHash: b.sendTxHash,
         trackingId: b.trackingId,
         note: b.note,
+        reconcile: b.reconcile,
+        broadcastEvidence: b.broadcastEvidence,
       },
       now,
     )

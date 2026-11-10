@@ -27,6 +27,10 @@ export interface RegistryDeliveryRow {
   sendTxHash: string | null
   trackingId: string | null
   note: string | null
+  /** 第 63 轮修复批（P1-2）：行内最近一次对账结论；anomaly 行凭 missing 才释放 */
+  lastReconcile: 'found' | 'missing' | 'unknown' | null
+  /** 第 63 轮修复批（P1-2）：行内是否已有广播证据（有则永不被接管） */
+  broadcastEvidence: boolean
   createdAt: number
   updatedAt: number
 }
@@ -54,6 +58,10 @@ export interface ReportInput {
   sendTxHash?: string
   trackingId?: string
   note?: string
+  /** 第 63 轮修复批（P1-2）：链上对账结论，随汇报落中继行 last_reconcile */
+  reconcile?: 'found' | 'missing' | 'unknown'
+  /** 第 63 轮修复批（P1-2）：显式广播证据标记（预取追踪 ID 单独构成证据时） */
+  broadcastEvidence?: boolean
 }
 
 export interface DeliveryRegistry {

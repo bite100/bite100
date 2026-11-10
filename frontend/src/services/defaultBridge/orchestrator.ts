@@ -447,16 +447,26 @@ export async function executeDelivery(
       record = { ...record, initiatedTxPending: false, lastReconcile: 'missing', lastReconcileAt: Date.now() }
     }
     persist(account, record)
-    // 桥-3 记账：汇报本次尝试异常终局，释放中继占位（best-effort）。注意
-    // sendBroadcast 的情形桥发送可能已上链——汇报 anomaly 只释放「认领」，
-    // 不改变桥-2 的对账口径：本地恢复仍以链上回执为准，found 时会再汇报
-    // initiated 覆盖（中继状态机允许 anomaly ← initiated 的修正汇报）。
+    // 桥-3 记账：汇报本次尝试异常终局（best-effort）。第 63 轮修复批（P1-2）
+    // 起，中继 anomaly 行的释放要看随汇报落行的证据/结论，不再无条件释放：
+    // - 未广播：发送未上链是第一方事实 → 结论 missing 一并报备，中继行凭
+    //   此结论才可被再 claim；
+    // - 已广播：发送可能已上链 → 必须带广播证据（发送 hash / 预取追踪 ID /
+    //   显式标记），中继行进入不可释放态；本地恢复仍以链上对账为准，found
+    //   时再汇报 initiated 修正（状态机允许 anomaly ← initiated）。
     await reportBestEffort(registry, {
       deliveryId: record.id,
       account,
       attemptId,
       state: 'anomaly',
       note: record.anomalyNote,
+      ...(sendBroadcast
+        ? {
+            sendTxHash: record.sendTxHash,
+            trackingId: record.prefetchTrackingId,
+            broadcastEvidence: true,
+          }
+        : { reconcile: 'missing' as const }),
     })
     return record
   }
@@ -581,9 +591,21 @@ export async function reconcileDelivery(
         attemptId: record.attemptId,
         state: 'anomaly',
         note: 'reconcile: missing',
+        reconcile: 'missing',
       })
     }
     return record
+  } else if (verdict === 'missing' && record.status === 'anomaly' && record.attemptId) {
+    // 第 63 轮修复批（P1-2）：本地 anomaly 的 missing 结论同步落中继行——
+    // 该行此前是带广播证据的不可释放态，凭此结论才重新可被 claim。
+    await reportBestEffort(registry, {
+      deliveryId: record.id,
+      account,
+      attemptId: record.attemptId,
+      state: 'anomaly',
+      note: 'reconcile: missing',
+      reconcile: 'missing',
+    })
   }
   persist(account, record)
   return record

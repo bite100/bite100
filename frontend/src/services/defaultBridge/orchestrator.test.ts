@@ -32,6 +32,8 @@ function memRegistry() {
           sendTxHash: null,
           trackingId: null,
           note: null,
+          lastReconcile: null,
+          broadcastEvidence: false,
           createdAt: 0,
           updatedAt: 0,
         },
@@ -619,5 +621,76 @@ describe('第 63 轮桥-3：中继登记闸门（P1-③）', () => {
     })
     expect(result.status).toBe('anomaly')
     expect(mem.reports.some((r) => r.state === 'anomaly' && r.attemptId === result.attemptId)).toBe(true)
+  })
+
+  it('修复批 P1-2：未广播失败的 anomaly 汇报带 missing 结论（中继凭此才释放）', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    const mem = memRegistry()
+    const rejectingWithdraw = (async () => {
+      throw new Error('user rejected')
+    }) as unknown as typeof import('../bridgeExecutors').withdrawFromVault
+    const result = await executeDelivery(TAKER, out.record!.id, settings(), {
+      withSignerFn: passthroughSigner,
+      withdrawFn: rejectingWithdraw,
+      registry: mem.registry,
+    })
+    const report = mem.reports.find((r) => r.state === 'anomaly' && r.attemptId === result.attemptId)
+    expect(report?.reconcile).toBe('missing')
+    expect(report?.broadcastEvidence).toBeUndefined()
+    expect(report?.sendTxHash).toBeUndefined()
+  })
+
+  it('修复批 P1-2：广播后失败的 anomaly 汇报必须带广播证据（中继进入不可释放态）', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    const mem = memRegistry()
+    const bridge = (async (
+      _ch: unknown,
+      _ctx: unknown,
+      _signer: unknown,
+      _token: unknown,
+      _amt: unknown,
+      hooks?: BridgeExecHooks
+    ) => {
+      await hooks?.onPrefetchTrackingId?.('msg-7')
+      await hooks?.onSendTxHash?.('0xbroadcast')
+      throw new Error('wait blew up after broadcast')
+    }) as unknown as typeof executeMessageBridge
+    const result = await executeDelivery(TAKER, out.record!.id, settings(), {
+      withSignerFn: passthroughSigner,
+      withdrawFn: okWithdraw(),
+      executeBridgeFn: bridge,
+      registry: mem.registry,
+    })
+    expect(result.status).toBe('anomaly')
+    expect(result.initiatedTxPending).toBe(true)
+    const report = mem.reports.find((r) => r.state === 'anomaly' && r.attemptId === result.attemptId)
+    expect(report?.sendTxHash).toBe('0xbroadcast')
+    expect(report?.trackingId).toBe('msg-7') // 预取追踪 ID 同为广播证据
+    expect(report?.broadcastEvidence).toBe(true)
+    expect(report?.reconcile).toBeUndefined() // 结果未知：绝不冒报 missing
+  })
+
+  it('修复批 P1-2：带 pending 的 anomaly 对账判 missing → 结论同步落中继行', async () => {
+    const out = planDelivery(TAKER, fill(), settings())
+    const mem = memRegistry()
+    upsertDelivery(TAKER, {
+      ...out.record!,
+      status: 'anomaly',
+      anomalyKind: 'initiation-failed',
+      attemptId: `${out.record!.id}#1`,
+      attemptCount: 1,
+      initiatedTxPending: true,
+      sendTxHash: '0xdead',
+      initiatedAt: Date.now(),
+    })
+    const settled = await reconcileDelivery(TAKER, out.record!.id, {
+      provider: {} as unknown as Provider,
+      checkReceiptFn: async () => 'reverted',
+      registry: mem.registry,
+    })
+    expect(settled.lastReconcile).toBe('missing')
+    const report = mem.reports.find((r) => r.state === 'anomaly')
+    expect(report?.reconcile).toBe('missing')
+    expect(report?.attemptId).toBe(`${out.record!.id}#1`)
   })
 })
