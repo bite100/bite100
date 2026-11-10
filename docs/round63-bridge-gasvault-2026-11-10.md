@@ -197,4 +197,26 @@ CR 删除后须重新部署接线——属部署步（§12），本轮只改代�
 
 `Settlement.sol` / `Vault.sol` 相对 main 零 diff（已核）。部署步（§12）不受本修复批影响，仍待主聊天后续执行；其中 CR 重部署将带上本批删除后的字节码，GasVault 首次部署即带上收紧后的调用面。
 
+## 15. 紧凑复核裁决与残余 P1 微修复（2026-11-10）
+
+**复核**：ChatGPT 紧凑复核（对 §14 修复批、区间 `9cfd024..1625ecf`），对话 https://chatgpt.com/c/6af2d0b9-a09c-83e8-9013-c1d62b99057d ，总评**有条件通过**。逐项结果：
+
+- **P1-1（对账判定）通过**：三态 txKnownToNode 与遗留记录一律 unknown 的处置获认可。
+- **GasVault 通过**：授权清零、(router, selector) 允许表、价格时效三项收紧获认可。
+- **CR 通过**：旁路整函数删除与零调用证据获认可。
+- **回归面部分通过**：审查方未独立运行测试套件（其结论基于 diff 审读），故只给部分通过；门禁数字以主聊天亲跑实测为准（合并前主聊天亲跑 forge **251 全过**，与 §14.7 一致），不构成未决问题。
+- **残余 P1：P1-2 未彻底关闭**，两点：(a) `reportDelivery` 允许 initiated → closed，而 closed 行当时可无条件再 claim，绕过 anomaly 的 missing 结论门；(b) reconcile 结论由客户端自报、中继无服务端核验。
+
+### 15.1 (a) closed 通道绕过 —— 裁决：成立，必修（本微修复批已修，分支 `round63-fix2`，基线 main `1625ecf`；仅改 `relay/**` 与本文件）
+
+- **转入 closed 设门**（`reportDelivery`）：自 claimed/initiated/anomaly 转 closed，必须同时满足「有效对账结论 = missing（行内已存，或本次汇报同带）且零广播证据（行内证据与本次汇报新带证据都算）」，否则 409（预检给明确报错，UPDATE 的 WHERE 同条件作原子兜底防竞态）。delivered 为终局，不开放 report 转 closed（归档清理走既有定时 DELETE 终局行，本批比裁决例外口径更严，且现行无任何调用方走该路径）；closed 同态重报（幂等）不受门影响。
+- **自 closed 再 claim 同门**（`claimDelivery`）：closed 行留下过真实执行尝试痕迹（广播证据或对账结论任一存在）时，与 anomaly 同门——须 `last_reconcile = 'missing'` 才放行；两者皆无的纯占位 closed 行（认领后从未执行即释放的历史行）维持现状，可直接再 claim。状态机规则已同步写清于 `deliveries.ts` 文件头与迁移表注释处。
+- **回归测试（中继 workers）+5**：绕过复刻——A 广播后 initiated 带 hash、report closed 被拒（同带 missing 结论亦拒，行保持 initiated）；claimed 无结论转 closed 被拒、同带 missing 结论（零证据）放行；anomaly（missing + 零证据）→ closed → B 再 claim 正路；存量带广播证据的 closed 行（直写库播种模拟旧通道行）B claim 被拒、原 attempt 补报 missing 结论后放行；纯占位 closed 行再 claim 维持放行。workers 总数 45 → **50 全过**，中继 unit 52 不变，tsc 过；forge / 前端 / MCP 零改动未重跑（以 `git diff` 范围自查为据，本批只动 `relay/**` 与 `docs/**`）。
+
+### 15.2 (b) reconcile 结论无服务端核验 —— 裁决：部分成立，存档处置（本批不修）
+
+- 事实边界：中继无鉴权、account 自报是既定设计（§11 遗留 3 已记录），资金永远走用户钱包签名，中继登记只防重复执行、不作身份背书；且 missing 是否定性结论（「全网不存在这笔交易」），服务端同样无法证明——要求中继「核验」missing 在原理上只能做到多节点交叉查询级别的缓解，不是证明。
+- 实际风险处置：(b) 单独存在时只是「自报结论可信度」问题，其可被利用的路径正是 (a) 的状态机绕过；(a) 收紧后，任何带执行痕迹的行（含 closed）释放都须 missing 结论落行，绕过路径已消除，(b) 降为纵深防御话题。
+- 存档项：可信证明 / 服务端核验（如结论须附签名、或中继侧多 RPC 交叉核验 missing）列为**桥删除轮决策时的存档项**——删除轮若最终执行，投递登记子系统整体移除，本项随之消解；若保留登记，则届时再评估是否引入。不在本批为此新造机制（守「只做集成、不重复造轮子」与微修复批的范围纪律）。
+
 （完）
