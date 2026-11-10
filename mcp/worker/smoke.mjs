@@ -3,11 +3,13 @@
  * MCP 客户端实测。流程：
  *   生成一次性令牌 → 只把 SHA-256 哈希写进 D1 agents（临时 smoke agent）
  *   → 无令牌/错令牌各应 401 → 官方 SDK 客户端（Streamable HTTP）连接
- *   → listTools 应恰 7 个 → get_chain_config / get_orderbook /
+ *   → listTools 应恰 8 个 → get_chain_config / get_orderbook /
  *     get_balances 三个只读工具实测 → place_order 小额实单（120 秒过期）
- *     并在中继簿中查到 → D1 急停置 1 时写拒（kill_switch_on）读通、
- *     复位 → 审计落库计数 > 0 → 退役 smoke agent（停用 + 换掉哈希），
- *     旧令牌应 401。
+ *     并在中继簿中查到 → match_order 远价探针（应 no-match 留簿、
+ *     不产生结算；第 59 轮块 2 起公开入口也有撮合）→ D1 急停置 1 时
+ *     写拒（kill_switch_on）读通、复位 → 审计落库计数 > 0 → 退役
+ *     smoke agent（停用 + 换掉哈希），旧令牌应 401。
+ * 第 59 轮块 3 起另测自助注册全程（见脚本后半）。
  * 令牌明文只活在本进程内存；结束时 agent 已停用且哈希被替换，
  * 旧令牌不可再用。本脚本可重复执行（每次新建一个 smoke agent 行，
  * 退役行保留作审计痕迹）。
@@ -99,7 +101,7 @@ async function main() {
   const transport = new StreamableHTTPClientTransport(new URL(BASE), {
     requestInit: { headers: { Authorization: `Bearer ${token}` } },
   })
-  const client = new Client({ name: 'bit100-mcp-smoke', version: '0.57.0' })
+  const client = new Client({ name: 'bit100-mcp-smoke', version: '0.59.0' })
   await client.connect(transport)
 
   const tools = (await client.listTools()).tools.map((t) => t.name).sort()
@@ -110,9 +112,10 @@ async function main() {
     'hard_cancel_order',
     'list_orders',
     'get_order_status',
+    'match_order',
     'place_order',
   ].sort()
-  report(JSON.stringify(tools) === JSON.stringify(expected), 'listTools == 7 tools (no match_order)', tools.join(','))
+  report(JSON.stringify(tools) === JSON.stringify(expected), 'listTools == 8 tools (incl match_order)', tools.join(','))
 
   const cfg = parseToolResult(await client.callTool({ name: 'get_chain_config', arguments: { chainId: 11155111 } }))
   report(
@@ -151,6 +154,21 @@ async function main() {
     report(found, 'placed order visible in relay book')
   }
 
+  // match_order 远价探针：0.0001 的买单与簿上任何卖单（≈1.5）都不交叉，
+  // 应得 no-match（订单以 60 秒 TTL 留簿，不产生任何结算）。handler 内
+  // 含一次 10 秒重试窗口，本探针耗时约 10 秒属预期。
+  const matched = parseToolResult(
+    await client.callTool({
+      name: 'match_order',
+      arguments: { chainId: 11155111, pair: 'TKA/TKB', side: 'buy', price: '0.0001', amount: '0.1', ttlSeconds: 60 },
+    }),
+  )
+  report(
+    matched.ok === true && matched.data?.status === 'no-match',
+    'match_order far-price probe → no-match (Worker matching engine)',
+    matched.ok ? `status=${matched.data?.status}` : JSON.stringify(matched).slice(0, 200),
+  )
+
   // 限额：smoke agent 单笔上限 10（计价单位），挂 20 名义额应被拒且发生在签名之前
   const overCap = parseToolResult(
     await client.callTool({
@@ -177,7 +195,7 @@ async function main() {
   report(readWhileKilled.ok === true, 'kill_switch=1 → reads still work')
   sql(`UPDATE config SET value = '0' WHERE key = 'kill_switch'`)
 
-  // 审计落库（waitUntil 刷盘后应有本 agent 的多行记录）
+  // 审计落库（第 59 轮起在响应返回前刷盘，应有本 agent 的多行记录）
   await new Promise((r) => setTimeout(r, 3000))
   const auditRes = sql(`SELECT COUNT(*) AS n FROM audit_log WHERE agent_id = '${agentId}'`)
   const n = auditRes?.result?.[0]?.results?.[0]?.n ?? 0

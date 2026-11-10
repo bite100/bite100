@@ -19,6 +19,15 @@ export interface ToolContext {
   audit: Pick<AuditLog, 'append'>
   /** 本进程绑定的 agent 身份（启动时由令牌认证） */
   agent: AgentEntry
+  /**
+   * 第 59 轮（块 2）：撮合工具读订单簿用的中继地址与 fetch 注入点。
+   * Workers 形态必须经这两个字段把中继服务绑定喂给前端撮合引擎的
+   * 双读适配器（Worker 内直连另一个 workers.dev 会吃 1042）；
+   * stdio 形态不设，match 工具回落 config.relayUrl()（现行为不变，
+   * 阶段 4 运行器同口径）。
+   */
+  relayBaseUrl?: string
+  relayFetch?: (url: string, init?: RequestInit) => Promise<Response>
 }
 
 export interface ToolDef {

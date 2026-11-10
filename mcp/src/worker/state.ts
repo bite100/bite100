@@ -33,8 +33,9 @@
  *   视为不可用（入口 401）并留一条 auth 审计，绝不让 NaN 把护栏
  *   静默关掉。
  */
-import { QUOTE_AMOUNT_RE, type AgentEntry, type AgentRegistry, type WriteGuard } from '../agents'
+import type { AgentEntry, AgentRegistry, WriteGuard } from '../agents'
 import type { AuditEntry } from '../audit'
+import { QUOTE_AMOUNT_RE } from '../caps'
 import { ToolError } from '../errors'
 
 export interface WorkerEnv {
@@ -87,9 +88,13 @@ class PendingWrites {
 
   async flush(db: D1Database): Promise<void> {
     if (this.stmts.length === 0) return
-    const batch = this.stmts
-    this.stmts = []
+    const batch = [...this.stmts]
+    // 必须等 batch 成功后才出队：先清空再 await 的话，一次刷盘失败
+    // 就把语句弄丢了，入口的「重试一次」只会刷一个空队列然后假装
+    // 成功——那正是第 57 轮审计静默丢失的同款形状（第 59 轮验收
+    // 测试实测抓到）。
     await db.batch(batch)
+    this.stmts.splice(0, batch.length)
   }
 }
 

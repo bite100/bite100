@@ -9,10 +9,10 @@
  *   注册表/限额/审计 文件+内存 → D1（src/worker/state.ts）；
  *   签名钥 env 文件 → Worker secret 绑定（经 signers 的注入钩子）。
  *
- * 工具面（v1）：只读 5 + place_order + hard_cancel_order。
- * match_order 暂未移植：它骑的前端撮合引擎（dualread + matching）是
- * 为浏览器/Node 装配的整包，Workers 移植需单独评估打包体积与运行时
- * 差异，留待下一轮；在补齐前客户端看到的工具清单里没有它，不假装。
+ * 工具面：第 59 轮块 2 起与 stdio 全面对齐——只读 5 + place_order +
+ * hard_cancel_order + match_order（共 8）。match_order 骑的前端撮合
+ * 引擎经同一套 esbuild 打包进入 Worker（build-worker.mjs），双读的
+ * 中继适配器通过 ctx 注入服务绑定 fetch（见 tools/common.ts）。
  *
  * 全部请求（含只读）都要 Bearer 令牌，与 stdio 版「无令牌连工具都
  * 调不了」的口径一致。/health 例外（只回服务名与时间，无数据）。
@@ -21,6 +21,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { buildServer } from '../server'
 import { readTools } from '../tools/read'
 import { writeTools } from '../tools/write'
+import { matchTools } from '../tools/match'
 import { RelayClient } from '../relay'
 import { EthersChainReader } from '../chain'
 import { DEFAULT_RELAY_URL } from '../config'
@@ -69,18 +70,19 @@ export default {
     _setKeyTextProvider((role) => keyForRole(env, role))
 
     const relayBinding = env.RELAY
+    const relayFetch = relayBinding ? (url: string, init?: RequestInit) => relayBinding.fetch(url, init) : undefined
     const toolCtx: ToolContext = {
-      relay: new RelayClient(
-        env.RELAY_URL ?? DEFAULT_RELAY_URL,
-        relayBinding ? (url, init) => relayBinding.fetch(url, init) : undefined,
-      ),
+      relay: new RelayClient(env.RELAY_URL ?? DEFAULT_RELAY_URL, relayFetch),
       chain: new EthersChainReader(),
       registry: state.registry,
       guard: state.guard,
       audit: state.audit,
       agent: state.agent,
+      // 撮合工具的双读适配器同走服务绑定（块 2）
+      relayBaseUrl: env.RELAY_URL ?? DEFAULT_RELAY_URL,
+      relayFetch,
     }
-    const server = buildServer(toolCtx, [...readTools, ...writeTools])
+    const server = buildServer(toolCtx, [...readTools, ...writeTools, ...matchTools])
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // 无状态：每请求独立装配（Workers 口径）
       enableJsonResponse: true,

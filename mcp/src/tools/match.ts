@@ -60,7 +60,10 @@ export const matchTools: ToolDef[] = [
       const signer = loadSignerForRole(ctx.agent.role)
       const ethSigner = signer.connect(ctx.chain.provider(input.chainId))
       const deps = {
-        relayAdapter: createRelayBookAdapter(relayUrl()),
+        // 第 59 轮块 2（Workers 移植）：宿主经 ctx 注入中继地址与服务
+        // 绑定 fetch（适配器本就支持 (baseUrl, fetchFn) 注入，阶段 4
+        // 运行器同法）；stdio 不注入时回落 relayUrl()，行为不变。
+        relayAdapter: createRelayBookAdapter(ctx.relayBaseUrl ?? relayUrl(), ctx.relayFetch),
         chainReader: createChainStateReader(createViemChainTransport()),
       }
       let outcome = await executeFrontendMatch(

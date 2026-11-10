@@ -14,18 +14,13 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
+import { QUOTE_AMOUNT_RE } from './caps'
 import { ToolError } from './errors'
+
+export { QUOTE_AMOUNT_RE } from './caps'
 
 export const AGENT_ROLES = ['maker', 'taker', 'operator'] as const
 export type AgentRole = (typeof AGENT_ROLES)[number]
-
-/**
- * 金额上限字段的唯一合法格式：十进制数字字符串（至多一个小数点）。
- * 第 59 轮起 stdio 注册表（zod）与 Worker D1 行（buildRequestState）共用
- * 同一条规则——第 57 轮 Worker 侧漏了这层校验：非数字 TEXT 会让
- * Number(...) 变成 NaN、两道金额护栏比较恒假而静默失效（审计 ⑦）。
- */
-export const QUOTE_AMOUNT_RE = /^\d+(\.\d+)?$/
 
 const agentEntrySchema = z.object({
   id: z.string().min(1),
