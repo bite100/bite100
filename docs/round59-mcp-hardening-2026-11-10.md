@@ -1,0 +1,93 @@
+# 第五十九轮：MCP 加固 + AI 自助接入 + 审查骑乘项清扫（2026-11-10）
+
+> 派工简报：`docs/round59-brief-2026-11-10.md`（主聊天裁定版，未入仓）。
+> 基线 main `e6267a8`；分支 `round59-mcp-hardening`。**本轮红线：合约零改动、不部署、不合并、不推送、不对外发有效令牌**——全部交付为本地提交，部署与发令牌留待 Ren 拍板的后续轮次。
+> 素材来源：r57/r58 ChatGPT 审查裁定（3×P1）、第 60 轮审查裁定（1×P1+3×P2+1×P3）、Cloudflare 安全审计技能试跑确认项（7 条）、AI 自助接入调研报告（仓外 `~/workspace/research_notes/ai-agent-self-serve-onboarding-20261109-1651/report.md`，Ren 拍板「1+3」：方案 1 主路线 + 方案 3 预留）。
+
+## 1. 块 1 — MCP 记账协议重做（`837c67d`）
+
+修 r57 三条 P1 + 审计 ⑥⑦，stdio 与 Workers 两条路径同口径：
+
+- **记账点统一为「中继接受（HTTP 200）」**：守卫协议从 check/record 两段式改为 check（校验+预留）/ release（释放预留）。check 通过即落速率事件且永不回滚（每个通过 check 的尝试都计速率——关闭审计 ⑥：失败/早退路径零记账）；日额在 check 时预占，release 只回滚日额、只在「中继接受之前失败」（构造/签名抛错、中继非 200）时调用。place_order 与 match_order 同口径——无对手的 match 单从此消耗日额（关闭 P1-①）。旧 `record()` 删除。
+- **D1 原子额度（关闭 P1-②）**：日额 = 单条条件 upsert（`INSERT … ON CONFLICT DO UPDATE … WHERE total+excluded <= cap`，changes=0 即超限）；速率 = 单条带门 INSERT（`INSERT … SELECT … WHERE (SELECT COUNT(*) …) < limit`）。请求级预取快照整段删除，DB 即真相。check 中途 D1 失败 → `guard_unavailable` 失败关闭（不签任何单）+ 尽力回滚已落速率事件。stdio WriteGuard 同步实现同一协议（进程内预留语义）。
+- **审计先落库后返回（关闭 P1-③）**：Worker 入口改为先 `await flush()` 再返回响应，失败重试一次，仍失败返回 HTTP 500 JSON-RPC 错误（显式丢失、交易可按 digest 对账），waitUntil 异步刷盘删除。顺带修掉 flush 的一个真 bug：旧实现先抽干队列再 await batch，重试刷的是空队列 = 静默丢审计——改为 batch 成功后才出队。
+- **额度字段格式校验（审计 ⑦，本块提前落地——注册写入器在本轮块 3 落地，校验必须同轮先行）**：D1 行 per-order/daily 必须匹配金额正则、rate 必须为 1–600 整数，否则该代理视为不存在（401）+ 尽力写一条 `invalid_agent_config` 审计行。非数字 TEXT 让额度变 NaN 静默放行自此关闭。校验正则抽到零依赖叶子模块 `mcp/src/caps.ts`（两后端共用；顺带保住 Worker 打包图不被 node:crypto 污染，块 2 打包时验证了这条纪律的必要性）。
+
+验收测试（新文件 `mcp/test/fakeD1.ts` 内存 D1 + `worker-state.test.ts` + `guard-accounting.test.ts`）：日额并发恰一笔准入、速率并发 6 抢 3 恰 3 过、release 语义、D1 宕机守卫失败关闭、kill-switch/disabled/缺私钥时私钥加载次数与中继投递次数均为 0、match 无对手仍记账。
+
+## 2. 块 2 — match_order 移植 Workers 公开入口（`5921443`）
+
+- 公开入口 7 → **8 工具**：match_order 接入 `entry.ts`，撮合引擎直接骑前端生产代码（`frontend/src/services/matching/execute`），订单簿读取经 RELAY 服务绑定注入口（stdio 路径不变，阶段 4 行为逐字保留）。
+- 打包体积 gzip **377,281 B**（终测；含块 3 的注册+说明书），与 r57 的 373 KB 同量级——撮合引擎骑既有打包图、没有引入第二套实现。
+- `worker-entry.test.ts` 以真入口 fetch + FakeD1 + RELAY 绑定替身端到端驱动：8 工具清单、审计在响应返回时已落库、无/坏令牌 401、D1 宕机 503、kill-switch 下 place_order 零中继调用、审计落库失败 → HTTP 500。
+- `smoke.mjs` 同步 8 工具 + 无对手 match 探针，版本号 0.57.0 → 0.59.0（server/smoke 一致）。**smoke 本轮未运行**（无部署，见 §7）。
+
+## 3. 块 3 — AI 自助注册 + 托管说明书 + 接入页改版（`6d58d12` + `4800311`）
+
+方案 1 主路线（Ren 拍板「1+3」）：
+
+- **迁移 `0002_r59_register.sql`**（只写未应用，见 §7）：agents 加 `name / created_at / source / wallet_address` 四列；新表 `registration_events(ip, ts_ms)` + 索引；config 置 `registration_open='1'`。`deploy.mjs` 已更新为按序应用 0001+0002（0002 重跑仅容忍 duplicate column 错误）。
+- **POST /register（公开）**：令牌 = `b100_` + 64 hex（32 随机字节），只存 SHA-256；agent id = `agt_` + 16 hex，冲突重试 3 次。限额**只来自服务端常量，请求体自报限额一律忽略**（测试钉住：body 写 999999 落库仍是常量值）。角色：maker 缺省、taker 可选，**operator 及其它一切值 → 400**（operator 是 Vault 锁定人，审计明示绝不经自助发放）。`walletAddress` 只做格式校验后存档、**不验证、不授予任何东西**——SIWE/ERC-8004 仅预留数据结构与说明书章节，本轮不实现（方案 3 后续加固层）。
+- **GET /skill.md（托管说明书）**：与注册同源托管——frontmatter（name/version/api_base）、注册 curl、令牌只显示一次且不得发往其它域名的红线、MCP 配置样例、8 工具自检、限额与爬坡表、**记账口径明示**（中继接受即记账、投递失败计速率不计日额）、错误码、硬撤单锁定人诚实说明、令牌泄露处置、预留的钱包身份章节。
+- **防滥用数字与理由**（详见 §6）：默认限额 单笔 10 / 日 50 / 速率 10 每分钟——沿用 r57 冒烟代理在 D1 实读验证过的规模（'10'/'50'），泄露令牌的爆炸半径最小；**首 24 小时爬坡** 5/20/5（调研报告 Moltbook 式新号爬坡，减半起步）；注册端点 per-IP 10/小时、全局 100/小时——调研中 Firecrawl 式端点上限（60/IP/小时、全局千级/日）按本服务测试网规模等比缩小（÷6 / 约 ÷10）；**所有注册尝试（含被拒）先落事件行再判定**，探测本身也消耗预算；另有机会性 24h 旧事件清理、`registration_open` 急停开关、D1 故障 503 失败关闭。
+- **AI 接入页改版**（功能变更同轮带说明，项目规矩）：申请制全文删除，改为自助口径——「把这段话发给你的 AI」英文粘贴段 + 复制按钮（≥44px 触控）、接入前提、五步步骤（含手工 curl 兜底）、8 工具清单、新号限额与记账口径、安全护栏、注意事项（令牌丢失=重新注册、未锁定订单撤不掉、钱包身份为预留）。页面单测含负向断言（申请制/占位地址等旧文案不得出现）。`mcp/README.md` §7 同步新口径。
+
+## 4. 块 4 — 中继骑乘项清扫（`e860efa` 中继 + `223095a` 前端）
+
+- **审计 ①（本轮最高优先）状态服务端生成**：POST /orders 入库 status/filled 恒为 `'open'`/`'0'`，请求体自报值忽略——堵「未签名状态先写者胜、抢投他人订单伪造 cancelled 把单藏出订单簿」。execType 保留为非权威提示（不参与订单簿过滤，过滤只看服务端 status）。workers 回归测试钉住：投毒订单仍进订单簿、落库行状态干净。
+- **审计 ② 时效窗口**：TTL 上限 30 天（`order ttl too long`）+ createdAt 窗口（−1h/+15min，容时钟偏差）；过期检查仍最先（存量测试口径不变）。副作用如实记录：旧 orderbook 排序测试的固定历史/远未来时间戳夹具（2023/2033）被新窗口正当拒绝，夹具已改当前时刻相对值，排序语义不变。
+- **审计 ③ 验签放大削减**：digest 存在性检查前置于验签（重复投递零 RPC，垃圾签名重投已存订单 → duplicate 而非 401，测试钉住）；ERC-1271 回退前查地址代码存在性（60 秒/地址缓存，已知 EOA 本地拒绝不再烧 eth_call；getCode 出错按未知处理不短路）；POST /orders 每 IP 每分钟 120 次固定窗口限流（isolate 内存，**只是防滥用层、不是额度账本**——Cloudflare 平台 Rate Limiting 作账本的口径经裁定不采纳，理由同裁定记录：近似计数当不了额度）。
+- **pairs 四条**：限流预检移到任何 RPC 之前（第 60 轮 P1-1，超限请求零 RPC，计数替身钉住）；匿名 creator 共享 50/日桶（审计 ④）；落库改带门 `INSERT … SELECT … WHERE` 原子判定（P2-1，并发 49+2 恰一成一 429）；decimals ≤36 且 `18+quote−base ≥ 0`（P2-2，中继注册端 + 前端 readTokenMetadata 同口径）；listPairs 分页 limit/offset + total/truncated，端点数组形状不变、走 `X-Pairs-Total / X-Pairs-Truncated` 响应头，前端顺头翻页取全集（P3-1）。
+- **审计 P2-3 美元标注收紧**：行情页 DexScreener 参考价冠 $ 的条件从「符号像稳定币」改为 `isKnownUsdStableToken`（符号在名单内 + 地址与链配置登记的正牌地址逐字一致）；自助对仿冒 USDT 不再骗到美元标注，种子对行为不变。
+- **审计 ⑤ NIP-40**：Nostr 镜像事件并行带标准 `expiration` 标签（自有 `exp` 保留兼容）。如实口径：这仍不构成镜像侧撤单墓碑，订单状态以链上为准，不变。
+
+## 5. 块 5 — 审查骑乘测试补强（`87cd316`）
+
+- useTokenPrice 迟到**失败**回归测试：切换 token 后旧请求才 reject，新 token 的 error 保持 null、价格不污染（r58 只钉了迟到成功路径）。
+- 阶段 4 运行器：`parseCsvList/parseChains/parsePairs` 导出化；cycle 回落对与 runCheck 预检探针对两处重复规则抽为共用纯函数 `pickCheckPair`（语义逐字不变、缺省不变）；新增 `scripts/stage4/config.test.mjs`（沿 faults 的 esbuild 打包法）13 场景：缺省双链/全 8 对、子集保序去重、显式空/空项抛错、白名单外抛错、代表对三分支。`npm run test:stage4-config` 接线；faults 全套复跑通过。
+- D1Guard 单元测试已在块 1 随 `worker-state.test.ts` 交付，本块无欠账。
+
+## 6. 骑乘清单（每个新组件骑哪个既有件）
+
+| 新件 | 骑乘的既有件 |
+|---|---|
+| D1 原子额度 | D1/SQLite 单语句条件 upsert + 带门 INSERT…SELECT 语义（零新基础设施、零锁、零 KV） |
+| stdio 守卫协议 | 既有 WriteGuard 结构与 agents.json 口径，仅协议对齐 |
+| 额度格式校验 | 既有金额正则（抽到零依赖叶子 `caps.ts` 两后端共用） |
+| match_order Workers 版 | 前端生产撮合引擎 execute.ts + r57 的 build-worker 别名/桩图（零新撮合代码） |
+| 自助注册 | 既有 agents 表（迁移扩列）+ config 表急停开关 + state.ts 的 sha256Hex |
+| 托管说明书 skill.md | MCP Worker 同源静态路由（零新托管） |
+| pairs 带门落库 | SQLite INSERT OR IGNORE … SELECT … WHERE |
+| POST /orders 限流 | isolate 内存固定窗口小件（明示非账本；不引入平台 Rate Limiting 依赖） |
+| ERC-1271 代码缓存 | 既有 viem PublicClient 的 getCode |
+| 前端 pairs 翻页 | 中继新响应头 + 既有 listedCache/inflight 结构 |
+| 美元标注收紧 | 既有 CHAIN_TOKENS 链配置表 |
+| S4 配置自检 | 既有 esbuild + faults.entry 再导出模式 |
+
+## 7. 诚实遗留（未验证 / 未做，不冒充完成）
+
+1. **迁移 0002 只写未应用**：本轮红线不部署——生产 MCP Worker 仍是 r57 代码（7 工具、旧记账），/register、/skill.md、8 工具、全部新记账都要等 Ren 拍板的部署轮（部署脚本已按序应用迁移）。中继块 4 同理未部署，生产中继仍是第 60 轮代码。
+2. **smoke.mjs 已更新未运行**：运行需要已部署 Worker + 已应用迁移的 D1，留部署轮执行。注意 smoke 的注册段每次运行消耗 2 次 per-IP 注册预算（本机 IP 与真实用户共用时需留意节奏）。
+3. **没有对任何外部代理发放有效令牌**：注册全程只在 FakeD1 单元测试里演练；令牌明文从未进日志/文档/报告。
+4. 审计遗留的 oversize numeric strings（needs_validation）未动——本地 wrangler 实测仍欠，口径不变。
+5. 前端 readTokenMetadata 的 decimals ≤36 以代码对齐 + 中继侧测试验证，未单独写前端单测（ethers provider 替身成本过高），如实标注。
+6. 治理合约三条主网阻断项与 nonce 语义分别归第 61/62 轮（裁定计划不变），本轮未碰任何合约。
+7. GitHub CI 的前端 vitest 启动失败是已知环境瑕疵（非代码），本地门禁为准。
+
+## 8. 验证证据（终测，2026-11-10）
+
+| 门 | 命令 | 结果（基线 → 本轮） |
+|---|---|---|
+| mcp 测试 | `npm test` | 38/38 → **79/79**（10 文件） |
+| mcp 类型 | `npm run typecheck` | 干净 |
+| mcp 打包 | `npm run build:worker` | 通过，gzip 377,281 B |
+| 中继单测 | `npm run test:unit` | 36 → **49/49** |
+| 中继集成 | `npm run test:workers` | 19 → **24/24** |
+| 中继类型 | `npm run typecheck` | 干净 |
+| 前端测试 | `npx vitest run` | 462/462 → **474/474**（40 文件） |
+| 前端类型/构建 | `npx tsc -b` / `npm run build` | 干净 / 通过 |
+| S4 配置自检 | `npm run test:stage4-config` | 13/13 场景 |
+| S4 故障自检 | `node scripts/stage4/faults.test.mjs` | 全过（F4-slow 按其自有口径 SKIP） |
+| 合约 | `git diff` contracts/ | **零改动** |
+
+提交链：`837c67d`（块 1）→ `5921443`（块 2）→ `6d58d12` + `4800311`（块 3）→ `e860efa` + `223095a`（块 4）→ `87cd316`（块 5）→ 本文档提交。
