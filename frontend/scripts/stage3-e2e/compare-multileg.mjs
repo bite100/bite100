@@ -19,9 +19,11 @@
  * 5) 净额分解：用各路径自己的 gas 事件重算四方 Vault 余额并与链上
  *    读数逐字比对（每条路径内部自洽），跨路径余额差应恰等于跨路径
  *    gas 扣减差——由 1)+3)+5) 联合保证，此处只做逐路径自洽断言。
- * 6) nonce 水位：节点路径 {maker 55, taker 4, owner 1}；前端路径因
- *    单方场景 S4 多消耗 maker 60 / taker 4 两枚 nonce，为 {61, 5, 1}，
- *    差额恰为 S4，逐项断言并注明。
+ * 6) nonce 消耗（第 62 轮起位图口径）：nonces 字段为 nonceBitmap 的
+ *    word 0。两路分配均为从 0 起顺序发放，消耗 n 枚 ⇔ word0 = 2^n − 1：
+ *    节点路径 {maker 55, taker 4, owner 1} 枚；前端路径因单方场景 S4
+ *    多消耗 maker 60 / taker 4 两枚，为 {61, 5, 1} 枚，差额恰为 S4，
+ *    逐项按 2^n − 1 断言并注明。
  */
 import { readFileSync } from 'node:fs'
 
@@ -202,13 +204,14 @@ const gasDeltaNote = ['S1-multilevel', 'S2-partial-remainder', 'S3-stale-leg', '
   .map((n) => `${n}: 节点 ${scN[n].settleGasUsedTotal} / 前端 ${scF[n].settleGasUsedTotal}`).join('；')
 rows.push(`| 计量 gasUsed 跨路径差（入口计量范围不同，仅报告） | — | ${gasDeltaNote} |`)
 
-// 6) nonce 水位
-check('nonce 水位（节点路径）',
-  eq(N.nonces.maker, '55') && eq(N.nonces.taker, '4') && eq(N.nonces.owner, '1'),
-  `maker ${N.nonces.maker} / taker ${N.nonces.taker} / owner ${N.nonces.owner}`)
-check('nonce 水位（前端路径，含单方 S4 的 +6/+1）',
-  eq(F.nonces.maker, '61') && eq(F.nonces.taker, '5') && eq(F.nonces.owner, '1'),
-  `maker ${F.nonces.maker} / taker ${F.nonces.taker} / owner ${F.nonces.owner}；差额恰为 S4 的 x1(60)/t5(4)`)
+// 6) nonce 消耗（位图口径：nonces = nonceBitmap word 0；从 0 顺序
+// 消耗 n 枚 ⇔ word0 = 2^n − 1，期望值按此换算，枚数注在文案里）
+check('nonce 消耗位图（节点路径，55/4/1 枚）',
+  eq(N.nonces.maker, '36028797018963967') && eq(N.nonces.taker, '15') && eq(N.nonces.owner, '1'),
+  `word0 maker ${N.nonces.maker} / taker ${N.nonces.taker} / owner ${N.nonces.owner}`)
+check('nonce 消耗位图（前端路径，含单方 S4 的 +6/+1，为 61/5/1 枚）',
+  eq(F.nonces.maker, '2305843009213693951') && eq(F.nonces.taker, '31') && eq(F.nonces.owner, '1'),
+  `word0 maker ${F.nonces.maker} / taker ${F.nonces.taker} / owner ${F.nonces.owner}；差额恰为 S4 的 x1(60)/t5(4)`)
 
 // 前端单方断言回显
 check('S5 合约硬顶（51 腿 staticCall revert）', typeof F.s5CapRevert === 'string' && F.s5CapRevert.length > 0,
