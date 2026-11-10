@@ -31,16 +31,27 @@ contract MockToken is ERC20 {
     }
 }
 
-/// @dev 可设价的参考价源替身（生产中只许指向已准入价格面）
+/// @dev 可设价的参考价源替身（生产中只许指向已准入价格面）；第 63 轮修复批
+///      起同步支持时效面：setPrice 盖当前时间戳，setUpdatedAt 可单独拨时间。
 contract MockPriceSource is IGasPriceSource {
     mapping(address => uint256) public prices;
+    mapping(address => uint256) public updatedAts;
 
     function setPrice(address token, uint256 priceE18) external {
         prices[token] = priceE18;
+        updatedAts[token] = block.timestamp;
+    }
+
+    function setUpdatedAt(address token, uint256 ts) external {
+        updatedAts[token] = ts;
     }
 
     function referencePrice(address token) external view override returns (uint256) {
         return prices[token];
+    }
+
+    function priceUpdatedAt(address token) external view override returns (uint256) {
+        return updatedAts[token];
     }
 }
 
@@ -62,6 +73,25 @@ contract MockRouter {
 
     function swap(address tokenIn, uint256 amountIn) external returns (uint256 out) {
         IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+        out = (amountIn * outPerInE18) / 1e18;
+        asset.transfer(msg.sender, out);
+    }
+}
+
+/// @dev 只拉一半款的聚合器替身（第 63 轮修复批）：复刻「路由未用完授权」的
+///      情形——付款按全额 amountIn 费率付回（到手仍过熔断），但 transferFrom
+///      只拉一半；修复前库对它的授权会残留一半，修复后必须清零。
+contract MockRouterSkim {
+    IWrappedNative public immutable asset;
+    uint256 public outPerInE18;
+
+    constructor(IWrappedNative _asset, uint256 _outPerInE18) {
+        asset = _asset;
+        outPerInE18 = _outPerInE18;
+    }
+
+    function swap(address tokenIn, uint256 amountIn) external returns (uint256 out) {
+        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn / 2);
         out = (amountIn * outPerInE18) / 1e18;
         asset.transfer(msg.sender, out);
     }
@@ -124,6 +154,7 @@ contract GasVaultTest is Test {
         priceSource.setPrice(address(feeToken), 2 ether);
         vault.setConversionLimits(100 ether, 60, 0.5 ether);
         vault.setRouter(address(router), true);
+        vault.setRouterSelector(address(router), MockRouter.swap.selector, true);
         feeToken.mint(address(vault), 10 ether);
     }
 
@@ -375,5 +406,79 @@ contract GasVaultTest is Test {
             abi.encodeWithSignature("transferOut(address,uint256)", address(wn), 1 ether)
         );
         assertFalse(ok2);
+    }
+
+    // ================================================================
+    // 组 7：第 63 轮审查修复批——调用面收紧（授权清零 / 选择器白名单 / 价格时效）
+    // ================================================================
+
+    function test_Group7_AllowanceClearedAfterConversion() public {
+        _conversionSetup();
+        // 只拉一半款的路由：修复前授权残留 0.5 FEE，修复后必须为 0
+        MockRouterSkim skim = new MockRouterSkim(wn, 2e18);
+        wn.deposit{value: 100 ether}();
+        wn.transfer(address(skim), 100 ether);
+        vault.setRouter(address(skim), true);
+        vault.setRouterSelector(address(skim), MockRouterSkim.swap.selector, true);
+        bytes memory data = abi.encodeWithSelector(MockRouterSkim.swap.selector, address(feeToken), 1 ether);
+        vault.triggerConversion(address(feeToken), 1 ether, address(skim), data, 0);
+        assertEq(feeToken.balanceOf(address(skim)), 0.5 ether); // 只拉走一半
+        assertEq(feeToken.allowance(address(vault), address(skim)), 0); // 残额授权已清零
+    }
+
+    function test_Group7_UnlistedSelectorReverts() public {
+        _conversionSetup();
+        router.setRate(2e18);
+        // 路由在白名单、但 calldata 选择器不在 (router, selector) 允许表
+        bytes memory rogueData = abi.encodeWithSelector(bytes4(0xdeadbeef), address(feeToken), 1 ether);
+        vm.expectRevert("GasVault: selector not allowed");
+        vault.triggerConversion(address(feeToken), 1 ether, address(router), rogueData, 0);
+        // calldata 短于 4 字节同样回滚
+        vm.expectRevert("GasVault: calldata too short");
+        vault.triggerConversion(address(feeToken), 1 ether, address(router), hex"0102", 0);
+        // 库存不动
+        assertEq(feeToken.balanceOf(address(vault)), 10 ether);
+    }
+
+    function test_Group7_RouterWithoutAnySelectorReverts() public {
+        _conversionSetup();
+        // 第二个路由只进了路由白名单、未列任何选择器 → 连它自己的 swap 也调不了
+        MockRouter router2 = new MockRouter(wn, 2e18);
+        wn.deposit{value: 100 ether}();
+        wn.transfer(address(router2), 100 ether);
+        vault.setRouter(address(router2), true);
+        bytes memory data = abi.encodeWithSelector(MockRouter.swap.selector, address(feeToken), 1 ether);
+        vm.expectRevert("GasVault: selector not allowed");
+        vault.triggerConversion(address(feeToken), 1 ether, address(router2), data, 0);
+        // owner 补列选择器后放行（允许表是逐项列明，不是整路由放行）
+        vault.setRouterSelector(address(router2), MockRouter.swap.selector, true);
+        vault.triggerConversion(address(feeToken), 1 ether, address(router2), data, 0);
+        assertEq(feeToken.balanceOf(address(vault)), 9 ether);
+    }
+
+    function test_Group7_StalePriceRevertsFreshPricePasses() public {
+        _conversionSetup();
+        router.setRate(2e18);
+        // 价格更新时间拨到 maxPriceAge（出厂 3600 秒）之外 → 回滚
+        priceSource.setUpdatedAt(address(feeToken), block.timestamp);
+        vm.warp(block.timestamp + 3601);
+        vm.expectRevert("GasVault: stale reference price");
+        vault.triggerConversion(address(feeToken), 1 ether, address(router), _swapCalldata(1 ether), 0);
+        // 价格刷新到当前时刻 → 放行（时效门只挡旧价，不挡新价）
+        priceSource.setUpdatedAt(address(feeToken), block.timestamp);
+        vault.triggerConversion(address(feeToken), 1 ether, address(router), _swapCalldata(1 ether), 0);
+        assertEq(feeToken.balanceOf(address(vault)), 9 ether);
+    }
+
+    function test_Group7_MaxPriceAgeDefaultAndOwnerOnly() public {
+        assertEq(vault.maxPriceAge(), 3600); // 出厂 1 小时
+        vm.prank(anyone);
+        vm.expectRevert();
+        vault.setMaxPriceAge(60);
+        vm.prank(anyone);
+        vm.expectRevert();
+        vault.setRouterSelector(address(router), MockRouter.swap.selector, true);
+        vault.setMaxPriceAge(60);
+        assertEq(vault.maxPriceAge(), 60);
     }
 }

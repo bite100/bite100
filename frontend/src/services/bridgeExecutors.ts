@@ -412,12 +412,22 @@ export async function checkTxReceipt(
   }
 }
 
-/** 节点是否还认识这笔交易（已广播未打包时为 true；被丢弃/从未广播为 false） */
-export async function txKnownToNode(provider: Provider, hash: string): Promise<boolean> {
+/**
+ * 节点对一笔交易的认识状态（第 63 轮审查修复批 P1-1 收紧）：
+ * - 'known'：节点明确返回该交易（已广播，可能尚未打包）；
+ * - 'not-found'：一次**健康**查询明确查无此交易——只有这种结论才可喂给
+ *   对账的「超时判 missing」规则；
+ * - 'error'：RPC 报错/超时，结论不可用——调用方必须走 unknown 路径，
+ *   绝不把查询失败当成 not-found（旧实现 catch 后返回 false，正是把 RPC
+ *   故障误喂 missing 规则的口子，本批堵死）。
+ */
+export type TxKnownResult = 'known' | 'not-found' | 'error'
+
+export async function txKnownToNode(provider: Provider, hash: string): Promise<TxKnownResult> {
   try {
-    return (await provider.getTransaction(hash)) != null
+    return (await provider.getTransaction(hash)) != null ? 'known' : 'not-found'
   } catch {
-    return false
+    return 'error'
   }
 }
 

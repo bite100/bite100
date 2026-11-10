@@ -13,8 +13,11 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @notice 参考价源（gas库 设计 §4.5：只许接「已准入的价格面」——部署纪律约束，
 ///         合约层只认接口）。返回 1e18 单位 token 的资产计价（资产 wei，1e18 定点）。
+/// @dev 第 63 轮修复批新增 priceUpdatedAt：时效面——价格再「准入」，停更的旧价
+///      也不许拿来换汇（GasVault.maxPriceAge 把关）。
 interface IGasPriceSource {
     function referencePrice(address token) external view returns (uint256 priceE18);
+    function priceUpdatedAt(address token) external view returns (uint256 updatedAt);
 }
 
 /// @notice 包装原生币接口（WETH9 形态）：gas库 的资产即所在链的包装原生币。
@@ -44,9 +47,10 @@ interface IWrappedNative is IERC20 {
 ///   owner 也搬不走池内一分钱；吸收支付只认计量人签名，换汇只认公式熔断）；
 /// - triggerConversion：无许可（任何人可触发，约束全在合约公式里）；
 /// - absorbShortfall：无管理员，验签驱动（法③）；
-/// - 参数设置（目标水位/警戒线比例/路由白名单/价源/换汇限额）：onlyOwner，
-///   过渡期管理面（法②的反面清单）——主网部署后移交多签+时锁，最终随
-///   owner 一并 renounce（法④）；价源只许指向已准入价格面（部署纪律）；
+/// - 参数设置（目标水位/警戒线比例/路由+选择器白名单/价源/换汇限额/价格
+///   时效上限）：onlyOwner，过渡期管理面（法②的反面清单）——主网部署后
+///   移交多签+时锁，最终随 owner 一并 renounce（法④）；价源只许指向已
+///   准入价格面（部署纪律）；
 /// - pause：只停存入（deposit/mint），永不挡提款与吸收/换汇（存款人退出权
 ///   与系统补油箱都不受管理员情绪影响）。
 contract GasVault is ERC4626, Ownable, Pausable, ReentrancyGuard, EIP712 {
@@ -83,9 +87,18 @@ contract GasVault is ERC4626, Ownable, Pausable, ReentrancyGuard, EIP712 {
     uint256 public dustThreshold;
     /// @notice 上次成功换汇时间
     uint256 public lastConversionAt;
+    /// @notice 参考价最大年龄（秒）：triggerConversion 用到参考价时，
+    ///         priceUpdatedAt 早于 now − maxPriceAge 即回滚（第 63 轮修复批）。
+    ///         出厂 3600 秒，owner 可调（过渡期管理面，同其他参数）。
+    uint256 public maxPriceAge;
 
     /// @notice 聚合器路由白名单
     mapping(address => bool) public routers;
+    /// @notice 路由调用选择器白名单（第 63 轮修复批）：(router, selector)
+    ///         允许表——triggerConversion 的 calldata 前 4 字节不在表内即
+    ///         回滚。白名单路由 + 任意 calldata 等于把调用面整个交出去，
+    ///         本表把面收窄到 owner 逐个列明的聚合器入口。
+    mapping(address => mapping(bytes4 => bool)) public routerSelectors;
     /// @notice 计量人注册表（metricType => measurer => enabled），骑第 61 轮同构
     mapping(uint8 => mapping(address => bool)) public measurers;
     /// @notice 已消费的证明（防重放）
@@ -99,6 +112,8 @@ contract GasVault is ERC4626, Ownable, Pausable, ReentrancyGuard, EIP712 {
     event PriceSourceSet(address indexed oldSource, address indexed newSource);
     event ConversionLimitsSet(uint256 cap, uint256 minInterval, uint256 dustThreshold);
     event RouterSet(address indexed router, bool allowed);
+    event RouterSelectorSet(address indexed router, bytes4 indexed selector, bool allowed);
+    event MaxPriceAgeSet(uint256 oldAge, uint256 newAge);
     event FloatFunded(address indexed from, uint256 amount);
     event ShortfallAbsorbed(bytes32 indexed claimId, address indexed beneficiary, uint256 amount, address indexed measurer);
     event ConversionTriggered(
@@ -116,6 +131,7 @@ contract GasVault is ERC4626, Ownable, Pausable, ReentrancyGuard, EIP712 {
         require(address(_asset) != address(0), "GasVault: zero asset");
         settlement = _settlement;
         lowWatermarkBps = 4000; // 定版：警戒线 = 目标水位 40%
+        maxPriceAge = 3600; // 出厂：参考价超过 1 小时未更新即不许换汇
     }
 
     // ------------------------------------------------------------------
@@ -218,8 +234,10 @@ contract GasVault is ERC4626, Ownable, Pausable, ReentrancyGuard, EIP712 {
 
     /// @notice 公开触发库存换汇：把库内 tokenIn 库存经白名单聚合器换回包装
     ///         原生币，并立即解包补进原生币浮存。放行条件全是合约公式（与
-    ///         调用者无关）：水位低于警戒线 / 路由在白名单 / 距上次换汇够久 /
-    ///         估值过粉尘门槛且不超单次上限 / 到手 ≥ max(调用者 minOut, 估值×97%)。
+    ///         调用者无关）：水位低于警戒线 / 路由在白名单 / 调用选择器在
+    ///         (router, selector) 允许表 / 参考价未超 maxPriceAge / 距上次
+    ///         换汇够久 / 估值过粉尘门槛且不超单次上限 / 到手 ≥ max(调用者
+    ///         minOut, 估值×97%)；执行后对路由的授权清零。
     /// @param swapCalldata 对路由的完整调用数据（聚合器报价单）：输出资产必须
     ///        回到本合约——到手按本合约资产余额增量实测，少于熔断线整笔回滚。
     function triggerConversion(
@@ -240,12 +258,22 @@ contract GasVault is ERC4626, Ownable, Pausable, ReentrancyGuard, EIP712 {
         require(address(priceSource) != address(0), "GasVault: price source unset");
         uint256 refPrice = priceSource.referencePrice(tokenIn);
         require(refPrice > 0, "GasVault: no reference price");
+        // 第 63 轮修复批：参考价时效门——价格面停更后旧价不得再驱动换汇
+        //（吸收路径不消费参考价，无此时效面，见 absorbShortfall）。
+        uint256 priceUpdatedAt = priceSource.priceUpdatedAt(tokenIn);
+        require(block.timestamp <= priceUpdatedAt + maxPriceAge, "GasVault: stale reference price");
         uint256 expectedOut = (amountIn * refPrice) / 1e18;
         require(expectedOut >= dustThreshold, "GasVault: below dust threshold");
         require(expectedOut <= conversionCap, "GasVault: exceeds per-call cap");
 
         uint256 fuseOut = (expectedOut * FUSE_MIN_BPS) / 10000;
         uint256 minOut = callerMinOut > fuseOut ? callerMinOut : fuseOut;
+
+        // 第 63 轮修复批：调用面收窄到 (router, selector) 允许表——calldata
+        // 前 4 字节不在表内整笔回滚，不给白名单路由留任意调用面。
+        require(swapCalldata.length >= 4, "GasVault: calldata too short");
+        bytes4 selector = bytes4(swapCalldata[0:4]);
+        require(routerSelectors[router][selector], "GasVault: selector not allowed");
 
         uint256 balBefore = IERC20(asset()).balanceOf(address(this));
         IERC20(tokenIn).forceApprove(router, amountIn);
@@ -256,6 +284,9 @@ contract GasVault is ERC4626, Ownable, Pausable, ReentrancyGuard, EIP712 {
                 revert(add(ret, 32), mload(ret))
             }
         }
+        // 第 63 轮修复批：路由执行后授权清零——路由只许在本次调用内拉款，
+        // 不留残额授权给它事后自行拉取（未用完的额度同理收回）。
+        IERC20(tokenIn).forceApprove(router, 0);
         uint256 received = IERC20(asset()).balanceOf(address(this)) - balBefore;
         require(received >= minOut, "GasVault: received below fuse");
 
@@ -320,6 +351,22 @@ contract GasVault is ERC4626, Ownable, Pausable, ReentrancyGuard, EIP712 {
         require(router != address(0), "GasVault: zero router");
         routers[router] = allowed;
         emit RouterSet(router, allowed);
+    }
+
+    /// @notice 路由选择器白名单（第 63 轮修复批）：与 setRouter 配套——路由
+    ///         进白名单只许它「在场」，本表逐个列明它可被调用的入口选择器。
+    function setRouterSelector(address router, bytes4 selector, bool allowed) external onlyOwner {
+        require(router != address(0), "GasVault: zero router");
+        routerSelectors[router][selector] = allowed;
+        emit RouterSelectorSet(router, selector, allowed);
+    }
+
+    /// @notice 参考价最大年龄（秒）：0 = 价格必须与当前区块同刻（实际上等于
+    ///         禁用换汇），出厂 3600。属于过渡期管理面，随 owner 一并退役。
+    function setMaxPriceAge(uint256 newAge) external onlyOwner {
+        uint256 old = maxPriceAge;
+        maxPriceAge = newAge;
+        emit MaxPriceAgeSet(old, newAge);
     }
 
     /// @notice 暂停：只停存入（见 deposit/mint 的 whenNotPaused），提款与

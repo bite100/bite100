@@ -26,6 +26,7 @@ import {
   txKnownToNode,
   withdrawFromVault,
 } from '../bridgeExecutors'
+import type { TxKnownResult } from '../bridgeExecutors'
 import type { ChainConfig } from '../../config/chains'
 import { getDisclosure, isTestnetChain } from './disclosures'
 import {
@@ -248,16 +249,19 @@ export interface ReconcileDeps {
   provider?: Provider | null
   now?: number
   checkReceiptFn?: (provider: Provider, hash: string) => Promise<'success' | 'reverted' | 'pending'>
-  txKnownFn?: (provider: Provider, hash: string) => Promise<boolean>
+  /** 第 63 轮修复批（P1-1）：三态——只有 'not-found' 可参与 missing 判定，
+   * 'error'（RPC 故障）必须走 unknown，绝不喂给超时规则 */
+  txKnownFn?: (provider: Provider, hash: string) => Promise<TxKnownResult>
   fetchGuidFn?: (provider: Provider, chain: ChainConfig, txHash: string) => Promise<string | null>
   /** 第 63 轮桥-3：对账结论同步汇报中继登记（best-effort） */
   registry?: DeliveryRegistry
 }
 
 /**
- * 发送交易「节点不认识 + 发起已超过此时长」才可由对账判定 missing（第 63 轮桥-2）。
+ * 发送交易「健康查询明确 not-found + 发起已超过此时长」才可由对账判定 missing
+ * （第 63 轮桥-2；第 63 轮修复批 P1-1 收紧 not-found 的来源：RPC 报错不算）。
  * 取 1 小时：远大于常规打包时间，又远小于交付超时口径；判定错了（交易其实还在
- * 别的节点内存池）会导致双投递风险，故同时要求节点不认识该 hash 才成立。
+ * 别的节点内存池）会导致双投递风险，故同时要求节点明确查无该 hash 才成立。
  */
 const RECONCILE_MISSING_AFTER_MS = 60 * 60 * 1000
 
@@ -443,16 +447,26 @@ export async function executeDelivery(
       record = { ...record, initiatedTxPending: false, lastReconcile: 'missing', lastReconcileAt: Date.now() }
     }
     persist(account, record)
-    // 桥-3 记账：汇报本次尝试异常终局，释放中继占位（best-effort）。注意
-    // sendBroadcast 的情形桥发送可能已上链——汇报 anomaly 只释放「认领」，
-    // 不改变桥-2 的对账口径：本地恢复仍以链上回执为准，found 时会再汇报
-    // initiated 覆盖（中继状态机允许 anomaly ← initiated 的修正汇报）。
+    // 桥-3 记账：汇报本次尝试异常终局（best-effort）。第 63 轮修复批（P1-2）
+    // 起，中继 anomaly 行的释放要看随汇报落行的证据/结论，不再无条件释放：
+    // - 未广播：发送未上链是第一方事实 → 结论 missing 一并报备，中继行凭
+    //   此结论才可被再 claim；
+    // - 已广播：发送可能已上链 → 必须带广播证据（发送 hash / 预取追踪 ID /
+    //   显式标记），中继行进入不可释放态；本地恢复仍以链上对账为准，found
+    //   时再汇报 initiated 修正（状态机允许 anomaly ← initiated）。
     await reportBestEffort(registry, {
       deliveryId: record.id,
       account,
       attemptId,
       state: 'anomaly',
       note: record.anomalyNote,
+      ...(sendBroadcast
+        ? {
+            sendTxHash: record.sendTxHash,
+            trackingId: record.prefetchTrackingId,
+            broadcastEvidence: true,
+          }
+        : { reconcile: 'missing' as const }),
     })
     return record
   }
@@ -463,13 +477,15 @@ export async function executeDelivery(
  * anomaly 记录，按既有链上事实面判定上一笔发起的真实结果：
  * - 发送回执 success → found：重建追踪信息（LZ 解析 guid / CCIP 用预取 messageId /
  *   Wormhole 用 txHash），记录恢复为 in-flight，**不重发**；
- * - 发送回执 reverted，或提款已终局而桥发送从未广播，或发送交易节点不认识且发起
- *   已超 RECONCILE_MISSING_AFTER_MS → missing：initiating 转发起失败，pending 清除，
- *   此后才允许重试；
- * - 其余 → unknown：只盖章，不动状态，重试继续被状态机拒绝。
+ * - 发送回执 reverted，或提款已终局而桥发送从未广播，或发送交易经健康查询明确
+ *   not-found（节点查无此交易）且发起已超 RECONCILE_MISSING_AFTER_MS → missing：
+ *   initiating 转发起失败，pending 清除，此后才允许重试；
+ * - 其余 → unknown：只盖章，不动状态，重试继续被状态机拒绝。RPC 查询报错
+ *   （txKnown 返回 'error'）一律走这里，绝不喂给超时判 missing 的规则。
  * 无 provider 时只能盖 unknown 章。第 62 轮前的老 anomaly 记录（无 attemptId、
- * 无任何 hash）：旧流程是全程等待回执后才落异常，其失败是本会话内已观察的事实，
- * 直接记 missing 放行重试；老 initiating 记录无 hash 可查，保持 unknown 待人工处理。
+ * 无任何 hash）：第 63 轮修复批（P1-1）起一律记 unknown 待人工处理，永不判
+ * missing——旧口径曾凭「本会话内已观察的事实」直接放行，但记录跨会话存活、
+ * 观察事实无从复核，放行即冒双投递风险，本批收回。
  */
 export async function reconcileDelivery(
   account: string,
@@ -482,7 +498,8 @@ export async function reconcileDelivery(
   const active =
     record.status === 'initiating' || (record.status === 'anomaly' && record.initiatedTxPending === true)
   if (!active) {
-    // 第 63 轮前老记录的兼容判定（见函数头注）
+    // 第 63 轮前老记录的兼容判定（见函数头注）：第 63 轮修复批（P1-1）起，
+    // 遗留 anomaly 一律 unknown 待人工处理，永不判 missing。
     if (
       record.status === 'anomaly' &&
       record.anomalyKind === 'initiation-failed' &&
@@ -491,7 +508,7 @@ export async function reconcileDelivery(
       !record.withdrawTxHash &&
       record.lastReconcile === undefined
     ) {
-      record = { ...record, lastReconcile: 'missing', lastReconcileAt: now, updatedAt: now }
+      record = { ...record, lastReconcile: 'unknown', lastReconcileAt: now, updatedAt: now }
       persist(account, record)
     }
     return record
@@ -510,12 +527,16 @@ export async function reconcileDelivery(
     const r = await checkReceiptFn(provider, record.sendTxHash)
     if (r === 'success') verdict = 'found'
     else if (r === 'reverted') verdict = 'missing'
-    else if (!(await txKnownFn(provider, record.sendTxHash)) && age > RECONCILE_MISSING_AFTER_MS) verdict = 'missing'
+    // P1-1：只有健康查询明确 not-found 才许超时判 missing；'error'（RPC 故障）
+    // 与 'known'（还在节点内存池）都保持 unknown
+    else if ((await txKnownFn(provider, record.sendTxHash)) === 'not-found' && age > RECONCILE_MISSING_AFTER_MS)
+      verdict = 'missing'
   } else if (record.withdrawTxHash) {
     const r = await checkReceiptFn(provider, record.withdrawTxHash)
     // 提款已终局（成功=钱在钱包 / 失败=钱在 Vault）而桥发送从未广播 → 桥发起确定 missing
     if (r === 'success' || r === 'reverted') verdict = 'missing'
-    else if (!(await txKnownFn(provider, record.withdrawTxHash)) && age > RECONCILE_MISSING_AFTER_MS) verdict = 'missing'
+    else if ((await txKnownFn(provider, record.withdrawTxHash)) === 'not-found' && age > RECONCILE_MISSING_AFTER_MS)
+      verdict = 'missing'
     // 提款成功落地 = 资金已在钱包：按链上事实治愈 fundsLocation，使后续重试
     // 直达桥腿、不重复提款（提款回滚时资金仍在 Vault，不治愈）
     if (r === 'success') record = { ...record, fundsLocation: 'wallet' }
@@ -570,9 +591,21 @@ export async function reconcileDelivery(
         attemptId: record.attemptId,
         state: 'anomaly',
         note: 'reconcile: missing',
+        reconcile: 'missing',
       })
     }
     return record
+  } else if (verdict === 'missing' && record.status === 'anomaly' && record.attemptId) {
+    // 第 63 轮修复批（P1-2）：本地 anomaly 的 missing 结论同步落中继行——
+    // 该行此前是带广播证据的不可释放态，凭此结论才重新可被 claim。
+    await reportBestEffort(registry, {
+      deliveryId: record.id,
+      account,
+      attemptId: record.attemptId,
+      state: 'anomaly',
+      note: 'reconcile: missing',
+      reconcile: 'missing',
+    })
   }
   persist(account, record)
   return record

@@ -71,7 +71,12 @@ contract ContributorReward is EIP712 {
     bool public useReputationWeighting = false;
     /// 信誉阈值（最小信誉分数，低于此值的节点无法领取奖励）；0 表示不启用信誉检查
     uint256 public reputationThreshold = 0;
-    /// account => 信誉分数（基于转发量、违规次数等计算，范围 0-10000）
+    /// account => 信誉分数。历史上唯一的写入入口（owner 手填分入口）已在
+    /// 第 63 轮审查修复批删除（零调用核实：4 个已部署实例全生命周期
+    /// ReputationScoreSet 事件 0 条——见 round63 文档 §14），故本映射在本
+    /// 版本恒为 0：仅保留存储与 getter 供既有部署的接口兼容；双周计量的
+    /// 正道是计量人签名证明（submitAttestation），信誉若将来启用须走同一
+    /// 签名门，不得再开手填入口。
     mapping(address => uint256) public reputationScore;
 
     /// periodId => 该周期结束时间（Unix 秒，UTC 周期结束日 23:59:59）；领取截止 = 该时间 + CLAIM_DEADLINE_SECONDS。
@@ -528,38 +533,12 @@ contract ContributorReward is EIP712 {
         emit ReputationThresholdSet(old, threshold);
     }
     
-    /// @notice Owner 更新节点信誉分数时，同步更新已提交贡献证明的周期的总加权贡献分
-    /// @param account 节点地址
-    /// @param newScore 新的信誉分数
-    /// @param periods 需要更新的周期列表
-    function updateReputationAndRecalculateWeightedScore(
-        address account,
-        uint256 newScore,
-        string[] calldata periods
-    ) external onlyOwner {
-        uint256 oldScore = reputationScore[account];
-        reputationScore[account] = newScore;
-        emit ReputationScoreSet(account, newScore);
-        
-        // 如果启用信誉加权，更新相关周期的总加权贡献分
-        if (useReputationWeighting) {
-            for (uint256 i = 0; i < periods.length; i++) {
-                bytes32 pid = _periodId(periods[i]);
-                // 第 61 轮：冻结周期的加权总数已锚定，禁止再重算
-                require(!periodFrozen[pid], "ContributorReward: period frozen");
-                uint256 contribution = contributionScore[pid][account];
-                if (contribution > 0) {
-                    uint256 oldWeighted = (contribution * oldScore) / 10000;
-                    uint256 newWeighted = (contribution * newScore) / 10000;
-                    if (newWeighted > oldWeighted) {
-                        periodTotalWeightedScore[pid] += (newWeighted - oldWeighted);
-                    } else {
-                        periodTotalWeightedScore[pid] -= (oldWeighted - newWeighted);
-                    }
-                }
-            }
-        }
-    }
+    // 注（第 63 轮审查修复批删除）：原外部入口
+    // updateReputationAndRecalculateWeightedScore（owner 手填信誉分并同步重算
+    // 各周期加权总数）已整函数删除——它是绕过计量人签名的管理面旁路，且无
+    // 任何内部调用方（重算逻辑内联于该函数本身，随之删除）。删除前零调用
+    // 核实：全仓 grep 无调用方；双链 4 个已部署实例全生命周期
+    // ReputationScoreSet 事件 0 条（证据见 round63 文档 §14）。
 
     /// @notice 查询某周期某账户的贡献分
     function getContributionScore(string calldata period, address account) external view returns (uint256) {

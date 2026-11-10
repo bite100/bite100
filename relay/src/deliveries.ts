@@ -8,15 +8,27 @@
  *
  * 口径与既有模块一致：account 自报（中继无鉴权，与 pairs.creator 同口径，不
  * 构成身份背书）；防线是状态机本身，不是身份。delivered 是终局占位（已交付
- * 的同一笔永不许再认领）；anomaly/closed 释放占位，允许新尝试重新 claim。
+ * 的同一笔永不许再认领）；closed 释放占位；anomaly 的释放条件已由第 63 轮
+ * 修复批收紧为「须带对账 missing 结论」（见下方 P1-2 注记）。
  *
  * 认领接管（takeover）：claim 方崩溃且从未 report 时占位会悬空——claim 可带
  * supersede=true 申请接管，但服务端只对「占位已陈旧（updated_at 超过
  * TAKEOVER_AFTER_SEC）」的 claimed/initiated 行放行，且用 attempt_id 做
  * 条件 UPDATE 防竞态；新鲜占位一律 409，宁可让用户等，也不冒双投递风险。
+ *
+ * 占位释放收紧（第 63 轮审查修复批，P1-2；列由迁移 0004 引入）：
+ * - anomaly 行不再无条件可再 claim：只有前端 report 上来的对账结论
+ *   last_reconcile = 'missing'（链上对账已确认上一笔未上链）才放行；
+ *   无结论或 found/unknown 的 anomaly 行保持占用——「已广播但结果未知」
+ *   的行正是双发窗口，绝不在这里开口子。closed 行是显式终局释放，不变。
+ * - supersede 接管 claimed/initiated 行新增「零广播证据」要求：send_tx_hash
+ *   / tracking_id 任一非空，或 broadcast_evidence 已置位 → 永不接管（哪怕
+ *   占位再陈旧）；只有从未广播过任何东西的悬空 claim 才可被接管。
  */
 
 export type DeliveryState = 'claimed' | 'initiated' | 'delivered' | 'anomaly' | 'closed'
+
+export type ReconcileVerdict = 'found' | 'missing' | 'unknown'
 
 export interface DeliveryRow {
   deliveryId: string
@@ -27,6 +39,10 @@ export interface DeliveryRow {
   sendTxHash: string | null
   trackingId: string | null
   note: string | null
+  /** 第 63 轮修复批：前端 report 落行的最近一次对账结论（迁移 0004） */
+  lastReconcile: ReconcileVerdict | null
+  /** 第 63 轮修复批：该行是否已有广播证据（任一证据回填即置位，只增不减） */
+  broadcastEvidence: boolean
   createdAt: number
   updatedAt: number
 }
@@ -40,6 +56,8 @@ interface DeliveryDbRow {
   send_tx_hash: string | null
   tracking_id: string | null
   note: string | null
+  last_reconcile: ReconcileVerdict | null
+  broadcast_evidence: number
   created_at: number
   updated_at: number
 }
@@ -83,9 +101,16 @@ function rowFromDb(r: DeliveryDbRow): DeliveryRow {
     sendTxHash: r.send_tx_hash,
     trackingId: r.tracking_id,
     note: r.note,
+    lastReconcile: r.last_reconcile ?? null,
+    broadcastEvidence: (r.broadcast_evidence ?? 0) !== 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }
+}
+
+/** 行内是否已有广播证据（发送 hash / 追踪含预取 ID / 显式标记任一非空） */
+function hasBroadcastEvidence(row: DeliveryRow): boolean {
+  return row.broadcastEvidence || row.sendTxHash !== null || row.trackingId !== null
 }
 
 async function readRow(db: D1Database, deliveryId: string): Promise<DeliveryRow | null> {
@@ -170,13 +195,20 @@ export async function claimDelivery(
   if (existing.attemptId === attemptId && BLOCKING_STATES.includes(existing.state)) {
     return { row: existing, duplicate: true, takeover: false, reclaimed: false }
   }
+  if (existing.state === 'anomaly' && existing.lastReconcile !== 'missing') {
+    // 第 63 轮修复批（P1-2）：anomaly 行只有在前端对账结论 missing 落行后才
+    // 释放——无结论 / found / unknown 一律保持占用，堵第二台设备的双发窗口。
+    throw new DeliveryRequestError('delivery already in flight', 409, existing)
+  }
   if (existing.state === 'anomaly' || existing.state === 'closed') {
-    // 旧行已释放：条件 UPDATE 重新占位（以读到的 attempt_id 为竞态护栏）
+    // 旧行已释放（anomaly 须带 missing 结论，见上）：条件 UPDATE 重新占位
+    //（以读到的 attempt_id 为竞态护栏），并清掉上一尝试的结论与广播证据
     const upd = await db
       .prepare(
         `UPDATE deliveries
             SET state = 'claimed', attempt_id = ?, account = ?, channel = ?,
-                send_tx_hash = NULL, tracking_id = NULL, note = NULL, updated_at = ?
+                send_tx_hash = NULL, tracking_id = NULL, note = NULL,
+                last_reconcile = NULL, broadcast_evidence = 0, updated_at = ?
           WHERE delivery_id = ? AND attempt_id IS ? AND state IN ('anomaly', 'closed')`,
       )
       .bind(attemptId, account, channel, now, deliveryId, existing.attemptId)
@@ -189,14 +221,19 @@ export async function claimDelivery(
     throw new DeliveryRequestError('delivery already in flight', 409, again ?? existing)
   }
   if (BLOCKING_STATES.includes(existing.state) && existing.state !== 'delivered') {
-    if (supersede && now - existing.updatedAt >= TAKEOVER_AFTER_SEC) {
+    // 第 63 轮修复批（P1-2）：接管新增零广播证据要求——行内已有发送 hash /
+    // 追踪 ID / 广播标记任一非空，说明上一尝试可能已把交易广播上链，
+    // 无论多陈旧都永不接管；接管条件同时进 UPDATE 的 WHERE 防竞态。
+    if (supersede && now - existing.updatedAt >= TAKEOVER_AFTER_SEC && !hasBroadcastEvidence(existing)) {
       const upd = await db
         .prepare(
           `UPDATE deliveries
               SET state = 'claimed', attempt_id = ?, account = ?, channel = ?,
                   send_tx_hash = NULL, tracking_id = NULL,
+                  last_reconcile = NULL, broadcast_evidence = 0,
                   note = 'takeover: superseded stale claim', updated_at = ?
-            WHERE delivery_id = ? AND attempt_id IS ? AND state IN ('claimed', 'initiated')`,
+            WHERE delivery_id = ? AND attempt_id IS ? AND state IN ('claimed', 'initiated')
+              AND send_tx_hash IS NULL AND tracking_id IS NULL AND broadcast_evidence = 0`,
         )
         .bind(attemptId, account, channel, now, deliveryId, existing.attemptId)
         .run()
@@ -221,7 +258,13 @@ export interface ReportInput {
   sendTxHash?: unknown
   trackingId?: unknown
   note?: unknown
+  /** 第 63 轮修复批（P1-2）：前端链上对账结论，随汇报落行 last_reconcile */
+  reconcile?: unknown
+  /** 第 63 轮修复批（P1-2）：显式广播证据标记（如预取追踪 ID 单独构成证据时） */
+  broadcastEvidence?: unknown
 }
+
+const RECONCILE_VERDICTS = new Set<string>(['found', 'missing', 'unknown'])
 
 export async function reportDelivery(
   db: D1Database,
@@ -237,6 +280,12 @@ export async function reportDelivery(
   const fromStates = REPORT_TRANSITIONS[to]
   const optStr = (v: unknown): string | null =>
     typeof v === 'string' && v.length > 0 && v.length <= 500 ? v : null
+  const reconcile =
+    typeof input.reconcile === 'string' && RECONCILE_VERDICTS.has(input.reconcile)
+      ? input.reconcile
+      : null
+  // 广播证据只增不减：本次汇报带了发送 hash / 追踪 ID / 显式标记任一即置位
+  const evidence = optStr(input.sendTxHash) || optStr(input.trackingId) || input.broadcastEvidence === true ? 1 : 0
 
   const upd = await db
     .prepare(
@@ -245,6 +294,8 @@ export async function reportDelivery(
               send_tx_hash = COALESCE(?, send_tx_hash),
               tracking_id = COALESCE(?, tracking_id),
               note = COALESCE(?, note),
+              last_reconcile = COALESCE(?, last_reconcile),
+              broadcast_evidence = CASE WHEN ? = 1 THEN 1 ELSE broadcast_evidence END,
               updated_at = ?
         WHERE delivery_id = ? AND attempt_id = ?
           AND state IN (${fromStates.map(() => '?').join(', ')})`,
@@ -254,6 +305,8 @@ export async function reportDelivery(
       optStr(input.sendTxHash),
       optStr(input.trackingId),
       optStr(input.note),
+      reconcile,
+      evidence,
       now,
       deliveryId,
       attemptId,

@@ -14,6 +14,8 @@ const ROW = {
   sendTxHash: null,
   trackingId: null,
   note: null,
+  lastReconcile: null,
+  broadcastEvidence: false,
   createdAt: 1,
   updatedAt: 1,
 }
@@ -62,5 +64,31 @@ describe('交付登记 HTTP 客户端（第 63 轮桥-3）', () => {
     await expect(
       registry.report({ deliveryId: 't1:0xabc', account: '0xabc', attemptId: 'a#1', state: 'initiated' })
     ).rejects.toThrow('HTTP 409')
+  })
+
+  it('report 载荷透传对账结论与广播证据（第 63 轮修复批 P1-2）', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const registry = createHttpRegistry('https://relay.example', async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return jsonResponse(200, { ok: true, delivery: ROW })
+    })
+    await registry.report({
+      deliveryId: 't1:0xabc',
+      account: '0xabc',
+      attemptId: 'a#1',
+      state: 'anomaly',
+      reconcile: 'missing',
+    })
+    expect(bodies[0]?.reconcile).toBe('missing')
+    await registry.report({
+      deliveryId: 't1:0xabc',
+      account: '0xabc',
+      attemptId: 'a#1',
+      state: 'anomaly',
+      sendTxHash: '0xsend',
+      broadcastEvidence: true,
+    })
+    expect(bodies[1]?.sendTxHash).toBe('0xsend')
+    expect(bodies[1]?.broadcastEvidence).toBe(true)
   })
 })
