@@ -13,6 +13,11 @@
  * 假中继的 digest 用与生产同一份前端摘要代码（buildSignedOrderData +
  * computeOrderDigest）从投递 body 重建——与真中继的服务端重建同值，
  * 对账比对走的是生产比对逻辑本身，不是测试自备的假摘要。
+ *
+ * 微修复批：对账已从 listOrders 列表扫描换成 getOrderByDigest 精确查。
+ * 假中继的 GET 按真中继两种语义分别应答（digest 精确匹配不受 limit
+ * 影响；列表走过滤+倒序+截断），并有一条 250 张同对订单的回归用例
+ * 钉住「对账不再依赖列表位置」——旧扫描实现下该用例必然误判未入库。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { _resetSignerCache, _setKeyTextProvider } from '../src/signers'
@@ -59,7 +64,10 @@ type PostMode = 'ok' | 'store-drop' | 'reject400' | 'drop'
  * 有状态假中继：
  * - 'ok'：入库并回 200；'store-drop'：入库后抛错（响应丢失）；
  * - 'reject400'：明确拒单不入库；'drop'：抛错且不入库（不可达）。
- * GET /orders 返回已入库行（对账面）；getFails 时 GET 也抛错。
+ * GET /orders 按真中继语义应答（对账面）：带 digest 参数走精确匹配
+ * （不受 limit/排序影响）；否则列表语义——pair/userAddress 过滤、
+ * createdAt 倒序、limit 截断（缺省 50、上限 200，与真中继同口径）。
+ * getFails 时 GET 也抛错。
  */
 class AmbiguousRelay {
   stored: Record<string, unknown>[] = []
@@ -67,7 +75,7 @@ class AmbiguousRelay {
   getFails = false
   posts = 0
 
-  fetchFn: FetchFn = async (_url, init) => {
+  fetchFn: FetchFn = async (url, init) => {
     if (init?.method === 'POST') {
       this.posts++
       if (this.postMode === 'reject400') {
@@ -86,7 +94,23 @@ class AmbiguousRelay {
       return jsonResponse({ ok: true, digest })
     }
     if (this.getFails) throw new Error('relay read path down')
-    return jsonResponse(this.stored)
+    const u = new URL(String(url))
+    const digestParam = u.searchParams.get('digest')
+    if (digestParam) {
+      const want = digestParam.toLowerCase()
+      return jsonResponse(
+        this.stored.filter((o) => String(o.digest).toLowerCase() === want),
+      )
+    }
+    const pair = u.searchParams.get('pair')
+    const user = (u.searchParams.get('userAddress') ?? '').toLowerCase()
+    const limit = Math.min(Number(u.searchParams.get('limit') ?? 50) || 50, 200)
+    const rows = [...this.stored]
+      .filter((o) => !pair || o.pair === pair)
+      .filter((o) => !user || String(o.trader).toLowerCase() === user)
+      .sort((a, b) => Number(b.createdAt) - Number(a.createdAt))
+      .slice(0, limit)
+    return jsonResponse(rows)
   }
 }
 
@@ -171,6 +195,35 @@ describe('place_order 投递对账（修复批 P1）', () => {
 
     relay.postMode = 'ok'
     await expect(place.handler(ctx, PLACE_ARGS)).resolves.toMatchObject({ relayStatus: 200 })
+  })
+
+  it('同对已有 250 张更新的单时对账仍精确命中（微修复批：不再依赖列表位置）', async () => {
+    const relay = new AmbiguousRelay()
+    const nowSec = Math.floor(Date.now() / 1000)
+    // 250 张同对、同一交易者的存量单，createdAt 全部比本单新：
+    // 列表按 createdAt 倒序 + limit 200 截断时本单排在 250 名开外，
+    // 旧列表扫描对账必然漏检误判「未入库」并错误 release。
+    for (let i = 0; i < 250; i++) {
+      relay.stored.push({
+        orderId: `filler-${i}`,
+        trader: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266',
+        pair: 'TKA/TKB',
+        side: 'sell',
+        chainId: 11155111,
+        digest: '0x' + (i + 1).toString(16).padStart(64, '0'),
+        createdAt: nowSec + 10_000 + i,
+      })
+    }
+    relay.postMode = 'store-drop'
+    const ctx = setup(relay)
+    const place = tool(writeTools, 'place_order')
+
+    const out = (await place.handler(ctx, PLACE_ARGS)) as {
+      deliveryReconciled?: boolean
+      digest: string
+    }
+    expect(out.deliveryReconciled).toBe(true)
+    expect(relay.stored.map((o) => o.digest)).toContain(out.digest)
   })
 
   it('已入库但对账查询也失败 → delivery_ambiguous 且预留保留（fail-closed）', async () => {

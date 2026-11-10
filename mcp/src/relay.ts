@@ -78,6 +78,21 @@ export class RelayClient {
     return Array.isArray(data) ? data : (data.orders ?? [])
   }
 
+  /**
+   * 按摘要精确查一单（第 59 轮微修复批）：骑中继 GET /orders 的 digest
+   * 精确匹配参数。投递对账专用——命中与否只取决于订单在不在库，不受
+   * 列表 limit/排序影响（旧对账走 listOrders 扫描，同对订单超 200 时
+   * 目标单可能被截断在列表外、对账误判未入库）。返回行内仍逐字比对
+   * 摘要（防御中继实现漂移），无命中返回 null。
+   */
+  async getOrderByDigest(params: { chainId: number; digest: string }): Promise<RelayOrder | null> {
+    const q = new URLSearchParams({ chain: String(params.chainId), digest: params.digest })
+    const data = await this.getJson<{ orders?: RelayOrder[] } | RelayOrder[]>(`/orders?${q}`)
+    const rows = Array.isArray(data) ? data : (data.orders ?? [])
+    const want = params.digest.toLowerCase()
+    return rows.find((o) => o.digest.toLowerCase() === want) ?? null
+  }
+
   orderbook(params: { chainId: number; pair: string }): Promise<RelayBook> {
     const q = new URLSearchParams({ chain: String(params.chainId), pair: params.pair })
     return this.getJson<RelayBook>(`/orderbook?${q}`)
