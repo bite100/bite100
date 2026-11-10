@@ -91,3 +91,28 @@
 | 合约 | `git diff` contracts/ | **零改动** |
 
 提交链：`837c67d`（块 1）→ `5921443`（块 2）→ `6d58d12` + `4800311`（块 3）→ `e860efa` + `223095a`（块 4）→ `87cd316`（块 5）→ 本文档提交。
+
+## 9. 审查修复批（2026-11-10，ChatGPT 复审本轮推送 有条件通过 后）
+
+> 复审范围 e6267a8..4d98027（对话与裁定见 `docs/full-review-remediation-plan-2026-11-10.md` 末节）：1×P1 + 1×P2 + 1×P2/P3 必修，另 1 条审计残余接受并记录。基线 main `4d98027`（本轮已合并推送、两 Worker 已部署生产之后）；分支 `round59-review-fixes`，**本地提交，未部署、未合并、未推送**——部署与紧凑复审留待后续部署轮。合约零改动、前端零改动。
+
+- **P1 投递结果不确定先对账（mcp，`f9f02d6`）**：place_order / match_order 的 `postOrder` 网络抛错是「结果不确定」——中继可能已入库、只是响应丢失，旧实现一律 release 每日预留，簿上活单零成本。共用新函数 `deliverOrder`（`mcp/src/tools/orderBuild.ts`，place/match 同口径）按确定性分三路：构建/签名抛错（中继未被接触）维持原 release；明确 HTTP 非 200 → release 后抛 `relay_rejected`；网络抛错 → 先按 digest 骑既有读面 `RelayClient.listOrders`（按本人地址查、摘要逐字比对）向中继对账——在簿则**不退预留**、按已接受返回并标 `deliveryReconciled: true`；确认未入库才 release 并抛原错误；对账本身失败 → fail-closed 不退预留，抛新错误码 `delivery_ambiguous`（预留保留、提示先查 list_orders）。`skill.md` 错误码表同轮补 `delivery_ambiguous` 说明。
+- **P2 Nostr 镜像归一化（relay，`7943413`）**：镜像 content 旧实现是请求原文 `rawJson`，可夹带伪造 status/filled 污染镜像消费者（D1 正式行已在块 4 净化、镜像漏了）。新增纯函数 `buildMirrorRecord`（`relay/src/nostr.ts`）：字段集与存储行 / GET 返回一致（全部签名原字段 + 签名 + digest + chainId），status/filled 恒服务端生成 `'open'`/`'0'`、body 自报值直接丢弃；事件 content 改为该记录的固定键序 JSON 序列化。NIP-40 `expiration` 与自有 `exp` 标签行为不变；请求原文仍只存 D1 `raw_json` 列供可移植重发。
+- **P2/P3 register 来源桶不信任 XFF（mcp，`b06c00b`）**：`clientIp()` 旧实现在缺 `cf-connecting-ip` 时回退 `x-forwarded-for`——XFF 请求方任意可写，用它分 per-IP 注册限额桶等于换头即绕开。改为缺失时一律归入共享 `unknown` 桶；CF 头存在时行为不变（生产恒经 CF 边缘，此分支只影响异常直达流量）。
+- **审计残余（接受并记录，本批不修）**：审计 flush 连续两次失败返回 500 时，该次审计行随请求丢失——是显性失败而非静默成功；额度记账在预留时同步落库、不受影响；订单本身在中继留痕、可按 digest 对账。持久化重放（outbox）列为主网门槛加固候选，测试网不为此引入新基础设施。
+
+骑乘清单（修复批）：对账骑 `RelayClient.listOrders` 既有读面 + 前端生产摘要口径（假中继测试以同一份 `buildSignedOrderData`/`computeOrderDigest` 重建 digest）；镜像记录骑中继既有存储行字段集（与 `rowToOrder` 同形状）；XFF 加固零新件（删回退分支）。
+
+验证证据（修复批终测，2026-11-10）：
+
+| 门 | 结果（第 59 轮基线 → 修复批） |
+|---|---|
+| mcp 测试 `npm test` | 79/79 → **86/86**（+6 投递对账故障注入 +1 XFF 桶） |
+| mcp 类型 `npm run typecheck` | 干净 |
+| mcp 打包 `npm run build:worker` | 通过，gzip 377,694 B（基线 377,281，同量级） |
+| 中继单测 `npm run test:unit` | 49/49 → **51/51**（+2 镜像归一化） |
+| 中继集成 `npm run test:workers` | 24/24（不变） |
+| 中继类型 `npm run typecheck` | 干净 |
+| 前端 / 合约 | 零改动（`git diff` 为空，未跑前端门禁——无前端变更） |
+
+诚实标注：镜像 content 在 workers 集成环境不可直接观测（发布走 waitUntil 且测试中继不可达），归一化性质以 `buildMirrorRecord` + `buildOrderEvent` 的纯函数单测组合钉住；生产镜像内容待部署轮部署后抽查一条真实事件复核。故障注入的「对账」走生产 `listOrders` 代码路径与生产摘要比对逻辑，非测试专用旁路。
