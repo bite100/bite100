@@ -72,8 +72,18 @@ chains:
     contracts:
       - name: Settlement
         address: "0xa38c087778d76DA30654F30CB87D1ddD83f7b263"
+      # 第 63 轮部署步绑定：GasVault Sepolia（CREATE 块 12103463，
+      # tx 0x6998aa1f51759c9a888eb15735e40e82beb3aa984b39059fa14ce99aeb1f1370）
+      - name: GasVault
+        address: "0xd9B905bb00C9fB7926a256663BDacc8F8fD2659c"
+        start_block: 12103463
   - id: 84532
     start_block: 56845937
     contracts:
       - name: Settlement
         address: "0x4969b9ACBe7Dbf57E150FcF413B622c2912e2e97"
+      # 第 63 轮部署步绑定：GasVault Base Sepolia（CREATE 块 56889577，
+      # tx 0x0e8f701da3bc2790b99e60c52bf3d2b2c0e8cf662cc06cecafb6ae24dcfa00b8）
+      - name: GasVault
+        address: "0x4625A93D930B4Aa1BEe607AA71fE87d034Ec77DD"
+        start_block: 56889577
