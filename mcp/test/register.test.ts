@@ -127,6 +127,33 @@ describe('POST /register', () => {
     expect(other.res.status).toBe(201)
   })
 
+  it('缺 cf-connecting-ip 时不信任 XFF：各不相同的 XFF 共用一个 unknown 桶（修复批 P2/P3）', async () => {
+    const db = new FakeD1()
+    const post = (xff: string) =>
+      entry.fetch(
+        req('/register', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-forwarded-for': xff },
+          body: JSON.stringify({ name: 'xff-probe' }),
+        }),
+        makeEnv(db),
+        execCtx,
+      )
+    // 10 个各不相同的 XFF：若实现回退信任 XFF，它们会被算成 10 个
+    // 不同来源、全部放行且第 11 个也放行；正确行为是全归 unknown 桶
+    for (let i = 0; i < 10; i++) {
+      const res = await post(`10.0.0.${i}`)
+      expect(res.status).toBe(201)
+    }
+    const over = await post('10.9.9.9')
+    expect(over.status).toBe(429)
+    const overJson = (await over.json()) as Record<string, any>
+    expect(overJson.error.code).toBe('registration_rate_limited')
+    // 全部尝试（含被拒的第 11 次）都记在共享桶名下
+    expect(db.registrationEvents.length).toBe(11)
+    expect(db.registrationEvents.every((e) => e.ip === 'unknown')).toBe(true)
+  })
+
   it('全局第 101 次/小时 → 429 registration_busy', async () => {
     const db = new FakeD1()
     const now = Date.now()
