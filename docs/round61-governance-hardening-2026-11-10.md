@@ -259,3 +259,25 @@ ContributorReward 双链**（Governance 不动），再走紧凑单点复审。
   不变行为的正路径锚）。既有奖励测试 11 个在注池后统一加冻结步，断言不变。
 - **门禁**：forge 全量 **217/217**（基线 211 + 本批新增 6）；改动范围核对 =
   `contracts/` + `docs/` 之外零 diff。
+
+## 9. 修复批重部署附记（2026-11-10，§8 修复批合并推送后执行）
+
+§8 修复批合并（main 49a59d6）后按 §7 末条口径执行：**只重部署
+ContributorReward 双链，Governance 不动**；§1.1 的 CR 实例自此退为回滚
+备份（原样保留，未做任何写操作）。
+
+| 项 | Sepolia | Base Sepolia |
+|---|---|---|
+| 新 ContributorReward（修复版） | `0x42a1719A263eF0cd40192bCA76076720f20DBE19`（部署 tx `0xa188579809d1000d0e42b51fc7577c7c90412f099200fc993ad6bd1bd475890f`） | `0xe39A77A9A949cefAb0AD96bb46291DF5C1cf7d07`（部署 tx `0xd4986cb74655f46ef2dad16d1a565e0226dce84803743480664719a9b415e9bc`） |
+| CR.setGovernance(现行 Gov) | tx `0xd502ad2f42a34d2ae13845f5da68e3a5d424b52c4264b2816d8e44ad9a6d27f9` ✓ | tx `0xa3f4c11d9d6c9b1169cf1d9ec07d440bdc8e7f2e909e6a23486e1b8fe292316a` ✓ |
+
+- 部署后复核（双链逐项回读）：新 CR owner=部署者、governance=现行 Gov
+  （Sepolia `0x1A25…eCce` / Base `0xc3b0…1e32`）、reserveBps/freeFlowBps=
+  1500/1000、reputationThreshold=0、useReputationWeighting=false、四线
+  计量者注册表为空（抽查部署者四线均为 false，构造默认即空、未注册
+  任何计量者），与 §1.1 口径同构。
+- Settlement.governance() 双链回读仍为现行 Gov（CR 不在其接线路径上，
+  本步未触碰 Settlement 与 Governance）。
+- 前端 `frontend/src/config/chains.ts` 双链 contributorReward 地址已同步
+  切换为新 CR（与本附记同提交）；Governance 地址未变。
+- 回滚路径：前端地址改回 §1.1 的 CR 实例即可（旧实例配置同构、接线完好）。
