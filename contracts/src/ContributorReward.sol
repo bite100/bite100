@@ -11,7 +11,8 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///         （计量人按贡献线分权注册、密钥与被计量账户分离，签名绑定 chainId/周期/
 ///         账户/指标/证据根/nonce/截止时间，nonce 一次性消费防重放）；周期结束由
 ///         owner 冻结（冻结后禁再提交/改分，分配分母锚定冻结时刻总数，纠错只能
-///         走下一周期追加）。计量签名是「可审计贡献事实的认证」，不是事实本身。
+///         走下一周期追加；领取须在冻结后进行）。计量签名是「可审计贡献事实的
+///         认证」，不是事实本身。
 contract ContributorReward is EIP712 {
     address public owner;
     address public governance;
@@ -131,8 +132,8 @@ contract ContributorReward is EIP712 {
 
     /// @notice 冻结某周期（仅 owner）：冻结后该周期的证明提交与一切改分路径关闭，
     ///         分配分母锚定冻结时刻总数，最终分数根上链存证。纠错只能走下一周期
-    ///         追加记录，不得回改已冻结周期的份额。领取不受冻结影响（冻结正是
-    ///         让领取所依据的分数定版）。
+    ///         追加记录，不得回改已冻结周期的份额。领取以冻结为前置条件（审查
+    ///         修复批 P1-01）：未冻结周期不可领取——冻结正是让领取所依据的分数定版。
     /// @param scoresRoot 链下按最终分数表（账户→分数）折成的 Merkle 根，事后可重算核对
     function freezePeriod(string calldata period, bytes32 scoresRoot) external onlyOwner {
         bytes32 pid = _periodId(period);
@@ -260,6 +261,10 @@ contract ContributorReward is EIP712 {
         require(bytes(period).length > 0, "ContributorReward: empty period");
         require(account != address(0), "ContributorReward: zero address");
         require(uptime <= SCALE, "ContributorReward: uptime > 1e18");
+        // 审查修复批（P2-01）：gas 库存款线（nodeType==3）只接受 submitLiquidityProof
+        // 的 LiquidityAttestation（绑定存款金额）；通用入口对该线一律回滚，防止以
+        // MetricAttestation 的 uptime 占位口径绕过金额绑定取得存款线分数。
+        require(nodeType != 3, "ContributorReward: liquidity line only");
         bytes32 pid = _periodId(period);
         require(!periodFrozen[pid], "ContributorReward: period frozen");
         bytes32 digest = metricAttestationDigest(
@@ -289,6 +294,8 @@ contract ContributorReward is EIP712 {
         require(bytes(period).length > 0, "ContributorReward: empty period");
         require(account != address(0), "ContributorReward: zero address");
         require(uptime <= SCALE, "ContributorReward: uptime > 1e18");
+        // 审查修复批（P2-01）：同 submitProof——gas 库存款线只走 submitLiquidityProof。
+        require(nodeType != 3, "ContributorReward: liquidity line only");
         bytes32 pid = _periodId(period);
         require(!periodFrozen[pid], "ContributorReward: period frozen");
         bytes32 digest = metricAttestationDigest(
@@ -341,8 +348,9 @@ contract ContributorReward is EIP712 {
             return base * WEIGHT_POSTING;
         }
         if (nodeType == 3) {
-            // gas 库存款：权重 25（通过 submitLiquidityProof 调用，函数名沿用）
-            // 注意：存款贡献分通过单独的接口提交，这里仅占位
+            // gas 库存款：权重 25。审查修复批（P2-01）后通用入口已拦截 nodeType==3，
+            // 本分支自外部不可达（存款分只由 submitLiquidityProof 的
+            // _computeGasVaultScore 产生）；保留为防御性占位，不再是计分路径。
             return base * WEIGHT_GAS_VAULT;
         }
         // 中继 nodeType == 0：权重 20
@@ -377,7 +385,12 @@ contract ContributorReward is EIP712 {
     }
 
     /// @notice 内部：某账户在某周期某代币的待领总额（未封顶、未扣单次上限；过期或已回流返回 0）
+    /// @dev 审查修复批（P1-01）：领取以周期冻结为前置——未冻结周期一律返回 0，
+    ///      claimReward 据此回滚、claimable/claimableTotal 视图口径与之保持一致。
+    ///      原「未冻结时读实时总量」的三元回退自此在所有读取方均不可达，已删；
+    ///      分母只读冻结时刻锚定值，不随事后记账漂移。
     function _remainingEntitlement(bytes32 pid, address token, address account) internal view returns (uint256) {
+        if (!periodFrozen[pid]) return 0;
         if (_claimDeadlinePassed(pid) || unclaimedRolledOver[pid][token]) return 0;
 
         uint256 myScore = contributionScore[pid][account];
@@ -391,12 +404,13 @@ contract ContributorReward is EIP712 {
             uint256 myReputation = reputationScore[account];
             if (myReputation == 0) return 0;
             uint256 myWeightedScore = (myScore * myReputation) / 10000;
-            // 冻结后分母以冻结时刻锚定值为准，不随事后记账漂移
-            uint256 totalWeightedScore = periodFrozen[pid] ? periodFrozenTotalWeightedScore[pid] : periodTotalWeightedScore[pid];
+            // 分母 = 冻结时刻锚定的总加权分
+            uint256 totalWeightedScore = periodFrozenTotalWeightedScore[pid];
             if (totalWeightedScore == 0) return 0;
             return (distributable * myWeightedScore) / totalWeightedScore - claimed[pid][token][account];
         }
-        uint256 total = periodFrozen[pid] ? periodFrozenTotalScore[pid] : periodTotalScore[pid];
+        // 分母 = 冻结时刻锚定的总贡献分
+        uint256 total = periodFrozenTotalScore[pid];
         if (total == 0) return 0;
         return (distributable * myScore) / total - claimed[pid][token][account];
     }
@@ -404,9 +418,12 @@ contract ContributorReward is EIP712 {
     /// @notice 领取某周期某代币的应得奖励（方案 A）：周期结束后 90 天内可领，逾期禁止
     /// @notice 每次领取不超过该周期奖励池的 10%，可多次领取直到领完应得部分
     /// @notice 如果启用信誉加权分配（useReputationWeighting=true），奖励按（贡献分 * 信誉分数/10000）分配
+    /// @notice 审查修复批（P1-01）：领取须以该周期已冻结为前置——冻结前分数与总量
+    ///         仍可变，按未定版份额发放会造成超领/剩余应得下溢，故未冻结一律回滚。
     function claimReward(string calldata period, address token) external {
         bytes32 pid = _periodId(period);
 
+        require(periodFrozen[pid], "ContributorReward: period not frozen");
         require(!_claimDeadlinePassed(pid), "ContributorReward: claim deadline passed");
         require(!unclaimedRolledOver[pid][token], "ContributorReward: claim deadline passed");
 
