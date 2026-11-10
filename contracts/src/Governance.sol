@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "./MerkleProof.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /// @title Governance 治理合约
 /// @notice 按「最近 2 周内有贡献的地址」定义活跃集，同意超过 50% 即通过。任意链上可执行操作均可提案（手续费、上币、流通链等）。

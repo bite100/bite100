@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "./Vault.sol";
 import "./FeeDistributor.sol";
 import "./NodeRewards.sol";
-import "./MerkleProof.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "./OrderNonceManager.sol";
 
 /// @notice ChainConfig 中 Settlement 需要的只读接口（gas 换算参考价）
