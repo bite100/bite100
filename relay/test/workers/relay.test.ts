@@ -150,6 +150,35 @@ describe('GET /orders 查询', () => {
     const { data } = await getJson('/orders?pair=BTC/USDT&limit=200')
     expect((data as { orderId: string }[]).map((r) => r.orderId)).not.toContain('expired-row')
   })
+
+  it('digest 精确查：只返回摘要命中的那一单，可与 chain 组合，未知摘要返回空（微修复批）', async () => {
+    const a = await makeSignedOrder({ pair: 'BTC/USDT' })
+    const b = await makeSignedOrder({ pair: 'BTC/USDT' })
+    const ra = (await (await postOrder(a)).json()) as { digest: string }
+    await postOrder(b)
+
+    const { data } = await getJson(`/orders?digest=${ra.digest}`)
+    const rows = data as { orderId: string; digest: string }[]
+    expect(rows.map((r) => r.orderId)).toEqual([a.orderId])
+    expect(rows[0].digest).toBe(ra.digest)
+
+    // 与 chain 自由组合：链不对 → 空；链对 → 命中
+    expect(
+      (await getJson(`/orders?chain=84532&digest=${ra.digest}`)).data as unknown[],
+    ).toHaveLength(0)
+    expect(
+      (await getJson(`/orders?chain=11155111&digest=${ra.digest}`)).data as unknown[],
+    ).toHaveLength(1)
+
+    // 未知摘要 → 200 + 空数组（不是错误）
+    const none = await getJson(`/orders?digest=${'0x' + '00'.repeat(32)}`)
+    expect(none.status).toBe(200)
+    expect(none.data as unknown[]).toHaveLength(0)
+
+    // 大小写不敏感：服务端把参数归一到小写再比对
+    const upper = await getJson(`/orders?digest=${ra.digest.toUpperCase()}`)
+    expect((upper.data as unknown[]).length).toBe(1)
+  })
 })
 
 describe('GET /orderbook 聚合', () => {

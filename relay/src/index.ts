@@ -8,7 +8,7 @@
  *
  * 接口（与节点 REST 对齐，见 README 接口表）：
  *   POST /orders     同节点 POST /api/order 的请求体（另加可选 chainId）
- *   GET  /orders     ?chain=&pair=&userAddress=(或 trader=)&limit=
+ *   GET  /orders     ?chain=&pair=&userAddress=(或 trader=)&limit=&digest=（摘要精确查，微修复批）
  *   GET  /orderbook  ?pair=&chain=
  *   GET  /health
  *   POST /pairs      自助上架注册（第六十轮）：{chainId, baseToken, quoteToken, creator?}，
@@ -317,6 +317,11 @@ async function handleGetOrders(url: URL, env: Env): Promise<Response> {
     ''
   ).toLowerCase()
   const limit = parseLimit(url.searchParams.get('limit'), 50, 200)
+  // 摘要精确查（第 59 轮微修复批）：digest 是入库主键、服务端重建值恒
+  // 小写 hex；带此参数时按列精确匹配，与 chain/pair/user 自由组合。
+  // 投递对账走此路——命中与否只取决于订单在不在库，不受列表 limit
+  // 与排序位置影响（旧列表扫描对账在同对订单超 200 时有截断竞态）。
+  const digest = (url.searchParams.get('digest') ?? '').trim().toLowerCase()
   const now = Math.floor(Date.now() / 1000)
 
   let sql =
@@ -325,6 +330,10 @@ async function handleGetOrders(url: URL, env: Env): Promise<Response> {
   if (chainParam !== null) {
     sql += ' AND chain_id = ?'
     binds.push(chainParam)
+  }
+  if (digest !== '') {
+    sql += ' AND digest = ?'
+    binds.push(digest)
   }
   if (pair !== '') {
     sql += ' AND pair = ?'
