@@ -3,6 +3,7 @@ import { useConnection, useDisconnect } from 'wagmi'
 import { CHAIN_ID, GOVERNANCE_ADDRESS, SETTLEMENT_ADDRESS, getChainConfig } from './config'
 import { GovernanceSection } from './GovernanceSection'
 import { ContributionSection } from './ContributionSection'
+import { GasVaultSection } from './components/GasVaultSection'
 import { Dashboard } from './components/dashboard/Dashboard'
 import { OrderBookSection } from './OrderBookSection'
 import { CrossChainBridge } from './components/CrossChainBridge'
@@ -93,10 +94,12 @@ function App() {
     const valid: Tab[] = ['trade', 'markets', 'assets', 'other', 'bridge', 'govern', 'data', 'ai', 'list']
     return valid.includes(t as Tab) ? (t as Tab) : 'trade'
   })
-  const [governSub, setGovernSub] = useState<'governance' | 'contribution'>(() => {
+  const [governSub, setGovernSub] = useState<'governance' | 'contribution' | 'gasvault'>(() => {
     if (typeof window === 'undefined') return 'governance'
     const t = new URLSearchParams(window.location.search).get('tab')
-    return t === 'contribution' ? 'contribution' : 'governance'
+    if (t === 'contribution') return 'contribution'
+    if (t === 'gas') return 'gasvault'
+    return 'governance'
   })
   const [showFullOrderbook, setShowFullOrderbook] = useState(false)
   /** 数据内容页的目标锚点（从「其他」页数据组进入时定位到对应区块） */
@@ -253,7 +256,7 @@ function App() {
           {activeTab === 'govern' && (
             <>
               <SubBar title="治理与贡献" onBack={() => setActiveTab('other')} />
-              <PageHead title="治理与贡献" desc="参与协议治理投票，或查询并领取你的贡献奖励。投票期 7 天、通过后有 2 天时锁才执行，规则写在治理合约里。" />
+              <PageHead title="治理与贡献" desc="参与协议治理投票，查询并领取你的贡献奖励，或往 gas库 存款为全站结算垫付 gas。投票期 7 天、通过后有 2 天时锁才执行，规则写在治理合约里。" />
               <div className="text-tabs govern-tabs" role="tablist" aria-label="治理与贡献分区">
                 <button
                   type="button"
@@ -273,11 +276,22 @@ function App() {
                 >
                   贡献奖励
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={governSub === 'gasvault'}
+                  className={governSub === 'gasvault' ? 'on' : undefined}
+                  onClick={() => setGovernSub('gasvault')}
+                >
+                  gas库
+                </button>
               </div>
               {governSub === 'governance' ? (
                 <GovernanceErrorBoundary account={account}>
                   <GovernanceSection account={account} />
                 </GovernanceErrorBoundary>
+              ) : governSub === 'gasvault' ? (
+                <GasVaultSection account={account} />
               ) : (
                 <>
                   <ContributionSection account={account} />

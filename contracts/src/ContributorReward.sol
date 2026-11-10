@@ -507,24 +507,11 @@ contract ContributorReward is EIP712 {
         emit GovernanceSet(_governance);
     }
 
-    /// @notice Owner 设置节点的信誉分数（基于链下计算的信誉指标）
-    /// @param account 节点地址
-    /// @param score 信誉分数（建议范围：0-10000，10000 表示最高信誉）
-    function setReputationScore(address account, uint256 score) external onlyOwner {
-        require(account != address(0), "ContributorReward: zero address");
-        reputationScore[account] = score;
-        emit ReputationScoreSet(account, score);
-    }
-
-    /// @notice Owner 批量设置多个节点的信誉分数
-    function setReputationScores(address[] calldata accounts, uint256[] calldata scores) external onlyOwner {
-        require(accounts.length == scores.length, "ContributorReward: length mismatch");
-        for (uint256 i = 0; i < accounts.length; i++) {
-            require(accounts[i] != address(0), "ContributorReward: zero address");
-            reputationScore[accounts[i]] = scores[i];
-            emit ReputationScoreSet(accounts[i], scores[i]);
-        }
-    }
+    // 第 63 轮（gas-1 搭车，管理员趋零法③）：setReputationScore / setReputationScores
+    // 两个手工填信誉分入口已删除——信誉/贡献数据只许经计量人 EIP-712 证明进入，
+    // 不再有 owner 直接写分。删除前零调用核实（全仓引用 + 双链双 CR 实例全生命
+    // 周期事件扫描：ProofSubmitted / ReputationScoreSet / MeasurerSet 均为 0）
+    // 证据见 docs/round63-bridge-gasvault-2026-11-10.md。
 
     /// @notice Governance 设置是否启用按信誉分加权分配
     /// @param enabled true：按（贡献分 * 信誉分数/10000）分配；false：仅用信誉阈值作为门槛
@@ -590,14 +577,9 @@ contract ContributorReward is EIP712 {
         return reputationScore[account] >= reputationThreshold;
     }
 
-    /// @notice Owner 直接设置某地址在某周期的贡献分（用于上线奖励等特殊分配）
-    /// @dev 第 61 轮起：已冻结周期禁止调用（冻结后改分只能走下一周期）。
-    function setContributionScore(string calldata period, address account, uint256 score) external onlyOwner {
-        require(account != address(0), "ContributorReward: zero address");
-        bytes32 pid = _periodId(period);
-        require(!periodFrozen[pid], "ContributorReward: period frozen");
-        _applyScore(pid, account, score);
-    }
+    // 第 63 轮（gas-1 搭车，管理员趋零法③）：setContributionScore 手工填贡献分
+    // 入口已删除——贡献分只许经计量人 EIP-712 证明（下方各 submit*Proof）进入。
+    // 零调用核实证据同上（轮次文档）。
 
     /// @notice 提交 gas 库存款贡献证明（函数名沿用 submitLiquidityProof：该线
     ///         原为 AMM 流动性线，第 42 轮改记 gas 库存款）。

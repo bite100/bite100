@@ -41,6 +41,31 @@ contracts:
         field_selection:
           transaction_fields:
             - hash
+  # 第 63 轮 gas-2：gas库 GasVault（contracts/src/GasVault.sol，形态 A）。
+  # 部署属部署步：下方 chains 的绑定（地址 + 起始块）在双链部署后按当轮文档
+  # 填入，本轮先落合约定义 + schema 实体 + handler，部署步只补绑定三行。
+  - name: GasVault
+    events:
+      - event: "Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares)"
+        field_selection:
+          transaction_fields:
+            - hash
+      - event: "Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)"
+        field_selection:
+          transaction_fields:
+            - hash
+      - event: "ConversionTriggered(address indexed caller, address indexed tokenIn, uint256 amountIn, uint256 assetReceived, uint256 minOut)"
+        field_selection:
+          transaction_fields:
+            - hash
+      - event: "ShortfallAbsorbed(bytes32 indexed claimId, address indexed beneficiary, uint256 amount, address indexed measurer)"
+        field_selection:
+          transaction_fields:
+            - hash
+      - event: "FloatFunded(address indexed from, uint256 amount)"
+        field_selection:
+          transaction_fields:
+            - hash
 chains:
   - id: 11155111
     start_block: 12102776

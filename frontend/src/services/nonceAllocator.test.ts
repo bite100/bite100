@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest'
 import {
   allocateNonce,
   createMemoryNonceCursorStorage,
+  nonceLockName,
+  type LockManagerLike,
   type NonceWordReader,
 } from './nonceAllocator'
 
@@ -67,5 +69,69 @@ describe('位图 nonce 分配器（第 62 轮）', () => {
     await expect(
       allocateNonce(readerWith({ 0: 1n << 200n }), storage),
     ).resolves.toBe(0)
+  })
+})
+
+describe('第 63 轮骑乘-1：Web Locks 临界区协调', () => {
+  /** 注入假 LockManager：按名排队的真互斥（模拟 navigator.locks 语义），并记录临界区最大并发 */
+  function fakeLocks() {
+    const queues = new Map<string, Promise<unknown>>()
+    let inside = 0
+    let maxInside = 0
+    let requests = 0
+    const locks: LockManagerLike = {
+      request<T>(name: string, cb: () => Promise<T>): Promise<T> {
+        requests++
+        const prev = queues.get(name) ?? Promise.resolve()
+        const run = prev.then(async () => {
+          inside++
+          maxInside = Math.max(maxInside, inside)
+          try {
+            return await cb()
+          } finally {
+            inside--
+          }
+        })
+        queues.set(
+          name,
+          run.then(
+            () => undefined,
+            () => undefined,
+          ),
+        )
+        return run
+      },
+    }
+    return { locks, stats: () => ({ maxInside, requests }) }
+  }
+
+  const slowReader: NonceWordReader = {
+    async readWord() {
+      // 慢读词放大交错窗口：无锁时两路会同时读到同一游标状态
+      await new Promise((r) => setTimeout(r, 10))
+      return 0n
+    },
+  }
+
+  it('并发分配在锁内串行：两路同存储并发 → 不同 nonce 且临界区从不重叠', async () => {
+    const storage = createMemoryNonceCursorStorage()
+    const { locks, stats } = fakeLocks()
+    const name = nonceLockName(11155111, '0xAbC')
+    expect(name).toBe('bit100:nonce-alloc:11155111:0xabc') // 锁名含链与地址（小写）
+    const [a, b] = await Promise.all([
+      allocateNonce(slowReader, storage, { lockName: name, locks }),
+      allocateNonce(slowReader, storage, { lockName: name, locks }),
+    ])
+    expect(new Set([a, b])).toEqual(new Set([0, 1]))
+    expect(stats().maxInside).toBe(1)
+    expect(stats().requests).toBe(2)
+  })
+
+  it('无锁名时不调锁（直跑）；locks:null 明确禁用时同样可分配', async () => {
+    const storage = createMemoryNonceCursorStorage()
+    const { locks, stats } = fakeLocks()
+    await expect(allocateNonce(readerWith({}), storage, { locks })).resolves.toBe(0)
+    expect(stats().requests).toBe(0)
+    await expect(allocateNonce(readerWith({}), storage, { locks: null })).resolves.toBe(1)
   })
 })

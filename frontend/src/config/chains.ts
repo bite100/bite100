@@ -26,6 +26,10 @@ export interface ChainConfig {
     crossChainBridge: string
     // 第十九轮：WrappedTKA（TKA 的 1:1 包装代币，CCIP / Wormhole 桥的载体代币）
     wrappedToken?: string
+    // 第 63 轮：gas库 GasVault（形态 A，每链原生币主库）。第 63 轮只交付合约
+    // 与前端页，部署属部署步——未部署的链不填（undefined），前端按未开放展示，
+    // 部署后把地址填回此处并在轮次文档登记（部署步动作清单）。
+    gasVault?: string
     // 第 53 轮：做市金库 MakerVault 产品退役——地址配置随前端下线一并删除
     // （实例已暂停、合约代码保留在仓库；部署地址见 docs/round53-makervault-retirement-2026-11-09.md）。
   }

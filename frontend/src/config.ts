@@ -41,6 +41,20 @@ export const FEE_DISTRIBUTOR_ADDRESS = currentChainConfig.contracts.feeDistribut
 export const GOVERNANCE_ADDRESS = currentChainConfig.contracts.governance
 export const TOKEN_REGISTRY_ADDRESS = currentChainConfig.contracts.tokenRegistry
 export const CHAIN_CONFIG_ADDRESS = currentChainConfig.contracts.chainConfig
+// 第 63 轮：gas库地址（未部署的链为 undefined，前端按未开放展示）
+export const GAS_VAULT_ADDRESS = currentChainConfig.contracts.gasVault
+
+export const GAS_VAULT_ABI = [
+  'function asset() view returns (address)',
+  'function totalAssets() view returns (uint256)',
+  'function balanceOf(address account) view returns (uint256)',
+  'function convertToAssets(uint256 shares) view returns (uint256)',
+  'function targetFloat() view returns (uint256)',
+  'function lowWatermark() view returns (uint256)',
+  'function paused() view returns (bool)',
+  'function deposit(uint256 assets, address receiver) returns (uint256)',
+  'function withdraw(uint256 assets, address receiver, address owner) returns (uint256)',
+]
 
 // NodeRewards（上线奖励）合约地址：优先使用链配置中的扩展字段，其次使用环境变量
 const envNodeRewards = (import.meta.env.VITE_NODE_REWARDS_ADDRESS ?? '').trim()

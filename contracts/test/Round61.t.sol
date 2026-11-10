@@ -412,9 +412,8 @@ contract Round61RewardTest is Test {
         vm.expectRevert("ContributorReward: period frozen");
         _submitRelay(sig2, 2, deadline);
 
-        // 冻结后 owner 直接改分 → 回滚
-        vm.expectRevert("ContributorReward: period frozen");
-        reward.setContributionScore(PERIOD, alice, 999);
+        // （第 63 轮：setContributionScore 手工改分入口已删除——冻结后改分的
+        //  防线由上方的证明提交回滚 + 入口不存在共同构成，此处不再单测已删函数。）
 
         // 重复冻结 → 回滚
         vm.expectRevert("ContributorReward: already frozen");

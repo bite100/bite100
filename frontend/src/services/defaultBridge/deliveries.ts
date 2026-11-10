@@ -64,18 +64,21 @@ export type DeliveryEvent =
   | { type: 'channel-failure-confirmed'; at: number; note: string }
   | { type: 'resolve-settle-chain-only'; at: number }
   | { type: 'reconfirmed'; at: number }
+  | { type: 'disclosure-invalidated'; at: number }
   | { type: 'retry'; at: number }
   | { type: 'choose-temp-channel'; at: number; channel: NonNullable<DeliveryRecord['channel']> }
 
 const LEGAL: Record<DeliveryStatus, DeliveryEvent['type'][]> = {
   'not-needed': [],
-  'pending-decision': ['initiate', 'resolve-settle-chain-only'],
+  'pending-decision': ['initiate', 'resolve-settle-chain-only', 'disclosure-invalidated'],
   'suspended-disclosure': ['reconfirmed'],
   'ask-required': ['choose-temp-channel', 'resolve-settle-chain-only'],
   initiating: ['initiated', 'initiation-failed'],
   'in-flight': ['delivered', 'timeout', 'channel-failure-confirmed'],
   delivered: [],
-  anomaly: ['retry'],
+  // 'initiated' 仅供第 63 轮桥-2 对账恢复：对账判定 found（发送交易已上链成功）时，
+  // 卡在 anomaly 的记录凭链上事实直接恢复为在途，不经用户重试。
+  anomaly: ['retry', 'initiated'],
 }
 
 /** 纯状态机：非法迁移抛错（调用方不得吞掉后假装成功） */
@@ -86,6 +89,11 @@ export function transition(record: DeliveryRecord, event: DeliveryEvent): Delive
   // 重试只对「发起失败」开放（§7.3）：在途超时/通道失败的记录重试会造成双发风险
   if (event.type === 'retry' && record.anomalyKind !== 'initiation-failed') {
     throw new Error('只有发起失败的交付可以重试；在途异常请先走追踪与人工中继兜底')
+  }
+  // 第 63 轮桥-2（P1-①）：重试的唯一放行依据 = 对账结论 missing（确认上一笔发起
+  // 未上链）。无结论 / unknown / found 一律拒绝——宁可让用户等对账，也不冒双投递风险。
+  if (event.type === 'retry' && record.lastReconcile !== 'missing') {
+    throw new Error('上一笔发起结果未确认（对账未判定 missing），为避免重复投递暂不能重试')
   }
   const next: DeliveryRecord = { ...record, updatedAt: event.at }
   switch (event.type) {
@@ -127,6 +135,10 @@ export function transition(record: DeliveryRecord, event: DeliveryEvent): Delive
       break
     case 'reconfirmed':
       next.status = 'pending-decision'
+      break
+    case 'disclosure-invalidated':
+      // 披露升版后旧确认失效：待发起记录回挂起（与 reconfirmed 回路成对，第 63 轮桥-1）
+      next.status = 'suspended-disclosure'
       break
     case 'retry':
       next.status = 'pending-decision'

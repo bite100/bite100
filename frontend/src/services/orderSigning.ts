@@ -10,6 +10,7 @@ import {
   allocateNonce,
   createNonceCursorStorage,
   nonceCursorStorageKey,
+  nonceLockName,
 } from './nonceAllocator'
 
 export type { OrderData } from './orderSigningTypes'
@@ -50,6 +51,8 @@ export async function fetchOrderNonce(
         BigInt(await contract.nonceBitmap(userAddress, wordPos)),
     },
     createNonceCursorStorage(nonceCursorStorageKey(chainId, userAddress)),
+    // 第 63 轮骑乘-1：同浏览器多标签页以 Web Locks 串行化分配临界区
+    { lockName: nonceLockName(chainId, userAddress) },
   )
 }
 

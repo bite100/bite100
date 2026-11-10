@@ -14,6 +14,10 @@
  *   POST /pairs      自助上架注册（第六十轮）：{chainId, baseToken, quoteToken, creator?}，
  *                    元数据由中继链上复读、不信任提交方；幂等
  *   GET  /pairs      ?chain= 列某链的自助上架对（种子 8 对走内置配置、不在此列）
+ *   POST /deliveries/claim   跨链交付认领（第 63 轮桥-3）：发起桥存入前原子占位，
+ *                    同一笔交付已有未终局认领时 409——跨设备防重复投递的仲裁点
+ *   POST /deliveries/report  交付结果汇报：须带认领的 attemptId，旧尝试迟到汇报 409
+ *   GET  /deliveries ?deliveryId= 单查 / ?account= 列表（跨设备对账面）
  */
 import { DEFAULT_CHAIN_ID, resolveChains, type ChainRelayConfig } from './config'
 import {
@@ -35,6 +39,14 @@ import {
   type PairRow,
 } from './pairs'
 import {
+  DeliveryRequestError,
+  claimDelivery,
+  getDelivery,
+  listDeliveries,
+  reportDelivery,
+  type DeliveryRow,
+} from './deliveries'
+import {
   buildMirrorRecord,
   buildOrderEvent,
   parsePostmanSecret,
@@ -55,6 +67,8 @@ export interface Env {
   NOSTR_KIND?: string
   /** 可选：POST /orders 每 IP 每分钟限流覆盖（防滥用层，缺省 120） */
   ORDER_POST_RATE_LIMIT_PER_MIN?: string
+  /** 可选：POST /deliveries/* 每 IP 每分钟限流覆盖（缺省同 orders 的 120） */
+  DELIVERY_POST_RATE_LIMIT_PER_MIN?: string
 }
 
 /**
@@ -433,6 +447,143 @@ async function handleOrderbook(url: URL, env: Env): Promise<Response> {
   })
 }
 
+function deliveryRowJson(r: DeliveryRow) {
+  return {
+    deliveryId: r.deliveryId,
+    account: r.account,
+    state: r.state,
+    attemptId: r.attemptId,
+    channel: r.channel,
+    sendTxHash: r.sendTxHash,
+    trackingId: r.trackingId,
+    note: r.note,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  }
+}
+
+const deliveryPostLimiter = new FixedWindowRateLimiter()
+
+function deliveryPostLimit(env: Env): number {
+  const n = Number(env.DELIVERY_POST_RATE_LIMIT_PER_MIN)
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_ORDER_POST_LIMIT
+}
+
+function deliveryConflict(e: DeliveryRequestError): Response {
+  return json(
+    {
+      ok: false,
+      error: e.status === 409 ? 'delivery_in_flight' : 'delivery_error',
+      message: e.message,
+      ...(e.existing ? { existing: deliveryRowJson(e.existing) } : {}),
+    },
+    e.status,
+  )
+}
+
+/**
+ * 交付认领（第 63 轮桥-3）：执行者发起桥存入前先占位。201 = 新占位；
+ * 200 = 同 attempt 幂等重认领 / 释放后重占 / 陈旧接管；409 = 已有未终局
+ * 认领（跨设备防重复投递的仲裁点）。中继不可达时客户端 fail-closed。
+ */
+async function handleClaimDelivery(request: Request, env: Env): Promise<Response> {
+  const ip = request.headers.get('cf-connecting-ip') ?? 'unknown'
+  if (!deliveryPostLimiter.allow(`deliveries:${ip}`, deliveryPostLimit(env))) {
+    return textError('rate limited', 429)
+  }
+  let raw: unknown
+  try {
+    raw = await request.json()
+  } catch {
+    return textError('invalid json', 400)
+  }
+  if (typeof raw !== 'object' || raw === null) return textError('invalid json body', 400)
+  const b = raw as Record<string, unknown>
+  const now = Math.floor(Date.now() / 1000)
+  try {
+    const { row, duplicate, takeover, reclaimed } = await claimDelivery(
+      env.DB,
+      {
+        deliveryId: b.deliveryId,
+        account: b.account,
+        attemptId: b.attemptId,
+        channel: b.channel,
+        supersede: b.supersede,
+      },
+      now,
+    )
+    return json(
+      { ok: true, delivery: deliveryRowJson(row), duplicate, takeover, reclaimed },
+      duplicate || takeover || reclaimed ? 200 : 201,
+    )
+  } catch (e) {
+    if (e instanceof DeliveryRequestError) {
+      return e.status === 409 ? deliveryConflict(e) : textError(e.message, e.status)
+    }
+    console.error('[relay] claim delivery error', e)
+    return textError('internal server error', 500)
+  }
+}
+
+/** 交付汇报：必须带认领时的 attemptId；旧尝试的迟到汇报 409，不覆盖新尝试 */
+async function handleReportDelivery(request: Request, env: Env): Promise<Response> {
+  const ip = request.headers.get('cf-connecting-ip') ?? 'unknown'
+  if (!deliveryPostLimiter.allow(`deliveries:${ip}`, deliveryPostLimit(env))) {
+    return textError('rate limited', 429)
+  }
+  let raw: unknown
+  try {
+    raw = await request.json()
+  } catch {
+    return textError('invalid json', 400)
+  }
+  if (typeof raw !== 'object' || raw === null) return textError('invalid json body', 400)
+  const b = raw as Record<string, unknown>
+  const now = Math.floor(Date.now() / 1000)
+  try {
+    const row = await reportDelivery(
+      env.DB,
+      {
+        deliveryId: b.deliveryId,
+        account: b.account,
+        attemptId: b.attemptId,
+        state: b.state,
+        sendTxHash: b.sendTxHash,
+        trackingId: b.trackingId,
+        note: b.note,
+      },
+      now,
+    )
+    return json({ ok: true, delivery: deliveryRowJson(row) })
+  } catch (e) {
+    if (e instanceof DeliveryRequestError) {
+      return e.status === 409 ? deliveryConflict(e) : textError(e.message, e.status)
+    }
+    console.error('[relay] report delivery error', e)
+    return textError('internal server error', 500)
+  }
+}
+
+/** 交付登记查询：?deliveryId= 单查（404 如实）；?account= 列表（跨设备对账面） */
+async function handleGetDeliveries(url: URL, env: Env): Promise<Response> {
+  const deliveryId = url.searchParams.get('deliveryId')
+  try {
+    if (deliveryId) {
+      const row = await getDelivery(env.DB, deliveryId)
+      if (!row) return textError('delivery not found', 404)
+      return json(deliveryRowJson(row))
+    }
+    const account = url.searchParams.get('account') ?? ''
+    const limit = parseLimit(url.searchParams.get('limit'), 50, 200)
+    const rows = await listDeliveries(env.DB, account, limit)
+    return json(rows.map(deliveryRowJson))
+  } catch (e) {
+    if (e instanceof DeliveryRequestError) return textError(e.message, e.status)
+    console.error('[relay] get deliveries error', e)
+    return textError('internal server error', 500)
+  }
+}
+
 function pairRowJson(r: PairRow) {
   return {
     chainId: r.chainId,
@@ -535,6 +686,12 @@ export default {
           return await handleRegisterPair(request, env)
         case 'GET /pairs':
           return await handleListPairs(url, env)
+        case 'POST /deliveries/claim':
+          return await handleClaimDelivery(request, env)
+        case 'POST /deliveries/report':
+          return await handleReportDelivery(request, env)
+        case 'GET /deliveries':
+          return await handleGetDeliveries(url, env)
         case 'GET /health':
           return await handleHealth(env)
         default:
@@ -553,5 +710,15 @@ export default {
       .bind(cutoff)
       .run()
     console.log(`[relay] expired cleanup removed ${res.meta.changes ?? 0} rows`)
+    // 交付登记清理（第 63 轮桥-3）：只删终局（delivered/anomaly/closed）且
+    // 30 天未更新的行；未终局占位永不自动删——那是防重复投递的仲裁记录，
+    // 删错等于放行双投递。delivered 行保留 30 天供跨设备对账查询。
+    const dCutoff = Math.floor(Date.now() / 1000) - 30 * 24 * 3600
+    const dRes = await env.DB.prepare(
+      "DELETE FROM deliveries WHERE state IN ('delivered', 'anomaly', 'closed') AND updated_at < ?",
+    )
+      .bind(dCutoff)
+      .run()
+    console.log(`[relay] deliveries cleanup removed ${dRes.meta.changes ?? 0} rows`)
   },
 }
