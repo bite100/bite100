@@ -176,6 +176,41 @@ describe('注册表客户端', () => {
     expect(rows).toEqual([])
   })
 
+  it('分页（第 59 轮）：X-Pairs-Truncated=true 时顺 offset 翻页取全集', async () => {
+    const PAGINATED_CHAIN = 454545
+    const rowA = {
+      ...rowJson,
+      chainId: PAGINATED_CHAIN,
+      pairKey: buildPairKey(PAGINATED_CHAIN, BASE_ADDR, QUOTE_ADDR),
+    }
+    const rowB = {
+      ...rowJson,
+      chainId: PAGINATED_CHAIN,
+      pairKey: buildPairKey(PAGINATED_CHAIN, QUOTE_ADDR, BASE_ADDR),
+      baseToken: QUOTE_ADDR,
+      quoteToken: BASE_ADDR,
+    }
+    const seenUrls: string[] = []
+    const fetchFn = vi.fn(async (url: string) => {
+      seenUrls.push(url)
+      const truncated = !url.includes('offset=500')
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) =>
+            name === 'X-Pairs-Truncated' ? (truncated ? 'true' : 'false') : null,
+        },
+        json: async () => (truncated ? [rowA] : [rowB]),
+      }
+    })
+    const rows = await fetchListedPairs(PAGINATED_CHAIN, { fetchFn: fetchFn as never })
+    expect(rows).toHaveLength(2)
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    expect(seenUrls[0]).toContain('offset=0')
+    expect(seenUrls[1]).toContain('offset=500')
+  })
+
   it('注册成功 → 并入缓存 → resolvePair 可解析（地址型键）', async () => {
     const fetchFn = vi.fn(async () => ({
       ok: true,

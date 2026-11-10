@@ -43,6 +43,26 @@ export function isUsdStableSymbol(symbol: string): boolean {
   return (USD_STABLE_SYMBOLS as readonly string[]).includes(symbol.toUpperCase())
 }
 
+/**
+ * 「已知美元稳定币」判定（第 59 轮块 4 收紧，审计 P2-3）：地址必须与
+ * 链配置 tokens 表里登记的稳定币地址逐字相等（大小写不敏感）才算数。
+ * 旧口径只看符号——自助上架对里任何人都能注册一个自称 USDT 的代币，
+ * 让行情页把它的价格冠 $ 展示。现在双条件缺一不可：符号在稳定币
+ * 名单内 + 地址与链配置登记的正牌地址一致；地址缺省（未解析）一律否。
+ */
+export function isKnownUsdStableToken(
+  chainId: number,
+  address: string | undefined | null,
+): boolean {
+  if (!address) return false
+  const tokens = getChainConfig(chainId)?.tokens
+  if (!tokens) return false
+  return Object.entries(tokens).some(
+    ([symbol, addr]) =>
+      isUsdStableSymbol(symbol) && addr.toLowerCase() === address.toLowerCase(),
+  )
+}
+
 export type ReferencePriceSource = 'chainlink' | 'dexscreener' | 'lastTrade' | 'bookMid'
 
 export interface ReferencePrice {
