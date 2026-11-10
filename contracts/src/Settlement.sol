@@ -731,10 +731,12 @@ contract Settlement is ReentrancyGuard, OrderNonceManager {
         vault.consumeOrderLock(digest, order.tokenIn, addIn, addOut);
     }
 
-    /// @notice 内部：订单首次结算消耗 nonce（单调水位）；同一订单的部分成交续结（continuation）跳过；
-    /// 不同订单复用已被占用的 nonce 时，continuation 必为 false，在此拒绝
+    /// @notice 内部：订单首次结算消耗 nonce（第 62 轮起为无序位图位测试，Permit2 式）；
+    /// 同一订单的部分成交续结（continuation）跳过；不同订单复用已被占用的 nonce 时，
+    /// continuation 必为 false，在此拒绝。nonce 之间无顺序关系，低 nonce 不被高
+    /// nonce 的结算阻塞。
     function _consumeOrderNonce(Order calldata order, bool continuation) internal {
-        if (usedNonces[order.userAddress][order.nonce]) {
+        if (_isNonceUsed(order.userAddress, order.nonce)) {
             require(continuation, "Settlement: nonce already used by another order");
             return;
         }

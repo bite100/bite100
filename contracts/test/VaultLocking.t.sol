@@ -433,7 +433,7 @@ contract VaultLockingTest is Test {
         settlement.settleTrade(_fill(m, t, 100e18, 100e18));
         // 结算失败不吞任何状态：成交量未记账、nonce 未消耗、余额未动
         assertEq(settlement.orderFilledIn(settlement.orderDigest(m.order)), 0);
-        assertEq(settlement.getCurrentNonce(maker), 0);
+        assertEq(settlement.nonceBitmap(maker, 0), 0); // 第 62 轮位图口径：失败结算不置任何位
         assertEq(vault.balanceOf(address(tokenA), maker), 500e18);
 
         // 只锁一侧也不行（taker 侧缺锁）
