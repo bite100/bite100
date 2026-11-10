@@ -143,6 +143,65 @@ CR 删除后须重新部署接线——属部署步（§12），本轮只改代�
 5. **Envio 轮换**：随上述推送/部署按现行轮换纪律执行（新端点 _meta 双链 isReady 核对后再更新 CONNECTOR 记录）。
 6. **ChatGPT 复核**：按站规，合并推送后送审本轮并回交裁决结果。
 
+## 13. 部署记录（2026-11-10 部署步执行完毕）
+
+执行基线：主干 `794983b`（含审查修复批 `1625ecf` 与紧凑复核残余 P1 微修复；§12 清单按主聊天修订版执行，与原清单冲突处以修订版为准）。红线全程未破：Settlement / Vault 零状态改动、未上主网、资金只在测试钱包之间动、私钥只从 env 文件读。
+
+### 13.1 中继（最终部署提交 = `794983b`）
+
+- 远程 D1 备份（前任部署员急停前导出）：`~/workspace/bite100-relay-d1-backup-2026-11-10-r63deploy.json`（60 orders + 2 pairs）。
+- 迁移 **0004 已应用远程 D1**：两条 ALTER 均 success，`PRAGMA table_info(deliveries)` 回读确认 `last_reconcile TEXT`、`broadcast_evidence INTEGER` 两列在位。
+- Worker 先后从 `1625ecf` 与最终主干 **`794983b`** 各部署一次（cf upload-script，元数据不含任何密钥值；邮差私钥每次上传后经 secrets PUT 轮换）。**最终邮差 npub：`npub15q5xmy8dlup3q7xnt20z46px02t84jhae28ek4cvu5jkh7lcl0jshlgrqe`**（中间一代 `npub1yy89vqj…s0df7uy` 已被覆盖，不再使用）。调度 `*/15` 与 workers.dev 子域回读未变。
+- 冒烟（对生产 Worker 实测）：基础三件 claim 201 / report 200 / GET 正常；冲突 claim → **409** `delivery_in_flight`；新口径例一：anomaly 行无 missing 结论时他方 claim → **409**；report 带 `reconcile=missing` 后再 claim → 200（字段按口径清零）；新口径例二（794983b 追加）：行已回填 sendTxHash（有广播证据）时 report 转 closed → **409** `delivery close blocked: requires reconcile=missing and zero broadcast evidence`，行状态保持 initiated；anomaly 门在新代码回归一例仍 409。
+- 并发竞速（§10 登记闸门项）：同一 deliveryId 双端同时 claim，恰一方 201（胜出 attempt `race-x2`）、一方 409。
+
+### 13.2 GasVault 双链部署（1625ecf 收紧后字节码，形态 A）
+
+| 项 | Sepolia (11155111) | Base Sepolia (84532) |
+|---|---|---|
+| GasVault | `0xd9B905bb00C9fB7926a256663BDacc8F8fD2659c` | `0x4625A93D930B4Aa1BEe607AA71fE87d034Ec77DD` |
+| CREATE tx / 块 | `0x6998aa1f51759c9a888eb15735e40e82beb3aa984b39059fa14ce99aeb1f1370` / 12103463 | `0x0e8f701da3bc2790b99e60c52bf3d2b2c0e8cf662cc06cecafb6ae24dcfa00b8` / 56889577 |
+| TEST-ONLY 价源 | `0x81470fAd3DDD5A709b2a696CDd9978343D489C7F` | `0x97A3f1BB30eD982e2D9A84646134c78C45f639a7` |
+| TEST-ONLY 路由 | `0xBfd4BA12879175B5bC6cA6eC8ce23De1589075B1` | `0x2870340f29a2EfCf1a6810502415A43a4266082d` |
+| targetFloat | 3.6e15 wei | 2.34e14 wei |
+
+- **参数依据（冻结公式：日均结算笔数 × 单笔平均计量 gas 成本 × 7 天 × 1.5）**：Sepolia 日均 14 笔（2026-11-09 补测日实测全日结算数）、单笔均值 2.4551e13 wei（第 62 轮三笔 GasCostShared 实测 24552858347969 / 24550907856288 / 24548957364685 的均值）→ 14 × 2.4551e13 × 7 × 1.5 ≈ 3.61e15，取 3.6e15；Base 日均 8 笔（旧索引端点 Base GasShare 全量 8 行）、单笔均值 2.783e12 wei → 8 × 2.783e12 × 7 × 1.5 ≈ 2.34e14。换汇限额三件套双链同值：conversionCap 2e16、minConversionInterval 60 秒、dustThreshold 1e14。部署后逐项回读双链一致：asset = 当链 WETH ✓ / targetFloat ✓ / lowWatermarkBps = **4000** ✓（警戒线 Sepolia 1.44e15、Base 9.36e13）/ maxPriceAge = **3600** ✓（出厂值）/ owner = 部署者 ✓ / priceSource = 上表价源 ✓。
+- **测试网价源口径（诚实标注）**：测试网无已准入价格面（Chainlink 为美元计价、DexScreener 不索引测试网），部署的是 `contracts/script/TestOnlyGasDeps.sol` 的 `TestOnlyPriceSource`（合约名与注释明示 TEST-ONLY、人工设价、实现 `priceUpdatedAt` 时效面）。**主网口径**：必须换成已准入价格面（实现同一 `IGasPriceSource` 接口含时效面），TestOnly 实现禁止用于主网。路由白名单同理：测试网为同文件的 `TestOnlySwapRouter`（费率 3.3e14 wei/USDT，双链同率），其 `swap(address,uint256)` selector `0xd004f0f7` 已由 owner 经 `setRouterSelector` 逐个列入允许表；主网改为真实聚合器路由 + 其 swap selector。
+- 计量人接线：双链均已 `setMeasurer(4, vault-signer, true)`（短缺吸收线）。
+
+### 13.3 ContributorReward 双链重部署（1625ecf 字节码，旁路已删）
+
+| 项 | Sepolia | Base Sepolia |
+|---|---|---|
+| 新 CR | `0xCe12d8F44c086f324e444135eaFd6e1Bc461dFEA`（create tx `0xc445271a…abdcaf`） | `0x9E1b6AbfE153f0eBD5F006a16823f82FeA4610F8`（create tx `0x04e64333…610F8`） |
+| setGovernance tx | `0x3586c15e001d8f9965022def6498ad51802ef7d7d9eaa784aa0c76bfa718af44` | `0x950d6069bab9925dded99762931b8ce66b391bc56c14ce6f873b4a61bde3da08` |
+
+接线后逐项回读双链一致且与旧 CR 配置全等（无需治理面修正）：governance = 第 61 轮 Governance ✓ / reserveBps **1500** ✓ / freeFlowBps **1000** ✓ / reputationThreshold **0** ✓ / useReputationWeighting **false** ✓。旧 CR 双实例未动（回滚位）。
+
+### 13.4 §10 真链实测（修订版，逐项证据；桥三项取消见 13.6）
+
+**Sepolia GasVault 全流程**（maker 存入 / taker 触发与受益）：
+存入段：wrap `0xf110d8be692d7b7953fd7ac81d0deeb3b4899b5d47e1f474c60d0d7fe3aa3eea` → approve `0x8a5cad57d06ab72fcffd62f7e2c56435644e834aae65710b5f57a896f6795599` → deposit 0.008 ETH 等值 `0x4dbd6207dee999b89d2452a514e48ceaa106f87fb6947f68f0dbe229c48eb98f` → fundFloat 5e14 `0x70628b3539687cfced8880475a2cb0b427f4f675dc258dc010221aef44128c24` → 库存 30 USDT 转入 `0x84c459038fb47432d08e876554308a57684a8f6df94f059964c9ce913a98c15d`（此刻 totalAssets 8.5e15、原生浮存 5e14 < 警戒线 1.44e15，水位压低成立）。
+换汇段：未白名单 selector 先行 → tx `0x9bff3c28db4a5611f016b373f3dfa767b9610584257ab6e98ab92b6fa1741370` **status 0 回滚**；`setRouterSelector` 列入 `0x3d7b4604b3c2f4a62f598fdb7c4d3ede44d114d5da118f912f554e3359f93dea`；熔断例（callerMinOut 1.2e16 > 应得 9.9e15）→ tx `0x0cdccb7905221f711f5b3622fd9107e5c6a1e17859281b14124968152a107ad4` **status 0 整体回滚**；taker 公开触发正例 → tx `0x1f8dd24219c08ed6b26e30f6a81f3e0a18559c5b52f0763e8a51be7092ba7b4f` status 1，换汇后原生浮存 1.04e16、totalAssets 1.84e16、**GasVault 对路由的 USDT allowance 回读 = 0** ✓、路由收到 30 USDT ✓。
+吸收：`absorbShortfall` tx `0xd38bd5bb84827e6f9aefd86b4b6fc67151a1960794c0f8716f35e74293f64888`（claimId = keccak("r63-sepolia-absorb-1")、计量人 vault-signer 签名、受益人 taker 实收 1e15 WETH ✓）。
+退出：maker redeem 全部份额 tx `0x282eba7d2de838972631a9bb7be43f90144f6ba9da340ad0aae53066a7c48b6b`，份额归 0；池内残 totalAssets = **2 wei**（OZ ERC-4626 虚拟份额舍入尘，非漏损，如实记）。
+
+**Base Sepolia GasVault 全流程**（同口径）：
+存入段：wrap `0x872a1f8246081879617ea5b33032ad36a79eb75bf2a55ce96556e46997bbeb5c` → approve `0x00069b8b194367a2f2d70584615ba84de498a7ab33602f44cb2c8b789b96fa98` → deposit 0.002 `0xdb58902002a59bc4c76e03679fef54c2a1e247080ee0481db6d28908e10a09c6` → fundFloat 5e13 `0xad9139e7ce19e29a934b0fcd90302427d541caa096ce58bc0148bdf9c444346d` → 库存 10 USDT `0xce346e202fb8967b9163b9c98d206f2addc8a41502ca1552307fd956064a843f`（totalAssets 2.05e15、浮存 5e13 < 警戒线 9.36e13）。
+换汇段：未白名单 selector → `0xed0b2b8cb4aa0642d1db1a49ec19945b1c888aa8d5d05c5626cc9188c4bdac0a` **status 0**；列入 selector `0x33f337ef07b77fa9e758e6624c24ba7b43ed98c584db33d642891eeec8692269`；熔断例（minOut 4e15 > 应得 3.3e15）→ `0xeb1b3f040294606bf5abfc98b4fcd20a157c879d2693b7b319ecf20806595025` **status 0**；taker 正例 → `0x765f3c88f53c12bbdeeb46a2a0fd20fe75d6a822db3ae30d7a1cc038acac581c` status 1，浮存 3.35e15、**allowance 回读 = 0** ✓。
+吸收：tx `0x45cb7cfe90f467c21ff612ffcc36f39fcfb187a71155f33e8462647e8b49c8a9`（taker 实收 5e14 WETH ✓）。退出：redeem `0x1020096c3c678034a465ba932c03fe362e5d600fdb429cbe5afc6490bb90ef1d`，份额归 0、残 2 wei（同上舍入尘）。
+
+**登记闸门并发**：见 13.1（双端并发 claim 恰一方 409）。
+
+### 13.5 前端接线与 Envio 轮换
+
+- 前端：`frontend/src/config/chains.ts` 双链 contributorReward 换新址 + gasVault 填入（提交 `f810379`）；Pages 构建 run 42784398016 success。跟进提交 `bd29f57`：GasVaultSection「未部署链」测试在双链已部署后改用 mock 钉住未部署态口径，本地前端 **vitest 523/523 + tsc 过**（GitHub Frontend CI 的 vitest 启动失败为既有环境疵，与历次推送同款，tsc+vite build 步骤通过）。线上 bundle `assets/index-B3MEYnfP.js` 实测：含新 CR ×2、GasVault ×2 地址与唯一索引 URL（下行）。
+- Envio：现行端点 **https://indexer.dev.hyperindex.xyz/735e2cf/v1/graphql**（部署提交 `f810379`，推送自动生成——腾位用的从未投产部署 `4d7aca4` 已先行删除并验 404）；fallback = `e1f17df` / f60e420；旧 fallback `c32b430` / 210e3f4 切换验证后删除（404 确认），现存恰 2 个部署。新端点 _meta 双链 isReady、startBlock 与配置对齐；Trade = 3（与旧端点一致）；**GasVaultFlow = 10 行（双链 × deposit/withdraw/conversion/shortfall/float-funded 五类齐全，逐行 tx 与 13.4 实测对上）**。`VITE_INDEXER_URL` 已切 735e2cf（secret 更新 2026-11-10T08:46:19Z），Pages 重跑 run 42785162819 success。CONNECTOR.md 端点记录已同步。
+
+### 13.6 桥实测取消说明
+
+§12 原定的 LayerZero / CCIP / Wormhole 三项真链实测**全部取消、未投一笔**：Ren 2026-11-10 17:01 定版（17:03 标为暂定）桥子系统整体删除、跨链只走 LI.FI 快速兑换，三桥自此冻结；删除轮执行前仍须 Ren 最终确认。GasVault 与登记闸门不依赖桥，已照常完成（登记表与端点随桥删除轮一并处置）。
+
 ## 14. 审查裁决与修复批（2026-11-10）
 
 **审查**：ChatGPT 紧凑审查，对话 https://chatgpt.com/c/6af2ba78-22cc-83ee-9585-88c2b9d02f9a ，总评**有条件通过**。主聊天逐项裁决如下，修复批在分支 `round63-fix`（基线 main `9cfd024`）本地完成，未合并、未推送、未部署、未动链上。
