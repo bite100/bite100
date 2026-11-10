@@ -377,4 +377,21 @@ contract ContributorRewardTest is Test {
         _attestAndSubmit(period, poster, 1e18, 5e23, 0, 0, 1);
         assertEq(reward.getContributionScore(period, poster), 52.5e18, "posting score = 1.5 * 35 SCALE");
     }
+
+    /// @notice 第 63 轮审查修复批：owner 手填信誉分旁路入口已删除——以其原
+    ///         签名低层调用必须回滚（选择器不存在），信誉分恒为 0
+    function test_ReputationBypassEntryRemoved() public {
+        string[] memory periods = new string[](1);
+        periods[0] = "2026-11-16_2026-11-29";
+        (bool ok, ) = address(reward).call(
+            abi.encodeWithSignature(
+                "updateReputationAndRecalculateWeightedScore(address,uint256,string[])",
+                address(this),
+                uint256(10000),
+                periods
+            )
+        );
+        assertFalse(ok, "bypass selector must not exist");
+        assertEq(reward.reputationScore(address(this)), 0);
+    }
 }
