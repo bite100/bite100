@@ -7,9 +7,22 @@
  * 骑乘的既有件：第 9/16 轮 LayerZero CrossChainBridge 合约（bridgeToken/quoteBridgeFee）、
  * 第 19 轮 CCIP 官方 Router + WrappedTKA 胶水代币、Wormhole 官方 NTT Manager + 核心桥。
  * 极速到账（LI.FI）不在本文件：它在 services/fastLane.ts，且不进默认桥第一期。
+ *
+ * 第 63 轮桥-4 编码器迁移：CCIP extraArgs 骑 @chainlink/ccip-sdk 的
+ * encodeExtraArgs；Wormhole NTT 指令骑 @wormhole-foundation/sdk-definitions-ntt
+ * 的 Ntt.encodeTransceiverInstructions（两者产出与旧手拼常量逐字节一致）。
+ * LayerZero options 经硬门实测**不迁**（Options 构造器的 '0x0003' 在现行桥上
+ * 报价 revert，详见 LAYERZERO_OPTIONS_EMPTY 注记）。只换编码产生，报价/发送/
+ * 静态预取的 ethers 路径一律不动；迁移中另修复 CCIP Router ABI 的字段序
+ * 潜伏 bug（见 CCIP_ROUTER_ABI 内注记）。
  */
 import { Contract, ZeroAddress, AbiCoder, zeroPadValue } from 'ethers'
 import type { Provider, Signer } from 'ethers'
+// CCIP SDK 只引 EVM 子路径：包根入口会注册全部链族（含 Solana 编码器，其模块
+// 初始化在 jsdom 等跨 realm 环境会直接抛错），且对浏览器打包体积不友好；
+// EVM extra-args 子模块是 SDK 官方的 EVM 编码实现，无需注册链族即可用。
+import { encodeExtraArgs } from '@chainlink/ccip-sdk/dist/evm/extra-args.js'
+import { Ntt } from '@wormhole-foundation/sdk-definitions-ntt'
 import type { ChainConfig } from '../config/chains'
 import { ERC20_ABI, VAULT_ABI } from '../config'
 
@@ -53,8 +66,12 @@ export const CCIP_ROUTER_ABI = [
               { name: 'amount', type: 'uint256' },
             ],
           },
-          { name: 'extraArgs', type: 'bytes' },
+          // 字段序必须与官方 Client.EVM2AnyMessage 一致：feeToken 在 extraArgs 之前。
+          // 第 63 轮桥-4 硬门实测发现此处旧序（extraArgs 在前）是潜伏 bug：按旧序
+          // 编码的 getFee/ccipSend 在真实 Router 上一律 revert（2026-11-10 Sepolia
+          // 实测：旧序 revert、官方序返回费用 240827312650467 wei）。本轮随编码迁移一并修正。
           { name: 'feeToken', type: 'address' },
+          { name: 'extraArgs', type: 'bytes' },
         ],
       },
     ],
@@ -80,8 +97,8 @@ export const CCIP_ROUTER_ABI = [
               { name: 'amount', type: 'uint256' },
             ],
           },
-          { name: 'extraArgs', type: 'bytes' },
           { name: 'feeToken', type: 'address' },
+          { name: 'extraArgs', type: 'bytes' },
         ],
       },
     ],
@@ -89,16 +106,61 @@ export const CCIP_ROUTER_ABI = [
   },
 ] as const
 
-// CCIP ExtraArgs V3 基本编码：tag 0xa69dd4aa + gasLimit(uint32=0) + 最终性(bytes4=0，默认) + 7 字节保留
-export const CCIP_EXTRA_ARGS_V3_BASIC = '0xa69dd4aa' + '00'.repeat(15)
+/**
+ * CCIP extraArgs 编码（第 63 轮桥-4：手拼常量 → 官方 @chainlink/ccip-sdk 编码器）。
+ * Chainlink 官方文档明示 extraArgs 不要手拼/写死（版本与布局会演进）。参数口径
+ * 与迁移前完全一致：GenericExtraArgsV3 全默认（gasLimit 0、finalized、默认
+ * executor、无 CCV、无 token 附加参数）——SDK 编码结果与旧手拼常量逐字节一致，
+ * 由 bridgeExecutors.test.ts 钉住；实时对拍（getFee 前后一致 + staticCall 成功）
+ * 见第 63 轮轮次文档的硬门记录。只换编码产生：报价/发送/预取仍走 ethers 既有路径。
+ */
+export function buildCcipExtraArgs(): string {
+  return encodeExtraArgs({
+    gasLimit: 0n,
+    finality: 'finalized',
+    ccvs: [],
+    ccvArgs: [],
+    executor: '',
+    executorArgs: '0x',
+    tokenReceiver: '',
+    tokenArgs: '0x',
+  })
+}
+
+/**
+ * LayerZero options：空 options 字节（不指定任何执行器参数）。
+ *
+ * 第 63 轮桥-4 原计划迁官方 @layerzerolabs/lz-v2-utilities 的 Options 构造器，
+ * 但硬门实测否决了这一步（2026-11-10，Sepolia 实读）：构造器的零 options 产出
+ * 是 type-3 容器 '0x0003'，拿它调现行 CrossChainBridge.quoteBridgeFee 直接
+ * revert（unknown custom error）；裸 '0x' 正常返回（nativeFee 104027936596558）。
+ * 即现行桥/Endpoint 配置下 '0x0003' 不是 '0x' 的等价替换——迁移会打断在用的
+ * LZ 报价/发送路径。故本轮**不换字节**：只把三处散写字面量收敛为本常量；
+ * Options 构造器的采用留待将来真正引入执行器选项（如 lzReceive gas 参数，
+ * 属行为变更）时连同实测一并做。证据与口径详见第 63 轮轮次文档桥-4 节。
+ */
+export const LAYERZERO_OPTIONS_EMPTY = '0x'
 
 // Wormhole 官方 NTT Manager 与核心桥
 export const NTT_MANAGER_ABI = [
   'function transfer(uint256 amount, uint16 recipientChain, bytes32 recipient, bytes32 refundAddress, bool shouldQueue, bytes encodedInstructions) payable returns (uint64 msgId)',
 ] as const
 export const WORMHOLE_CORE_ABI = ['function messageFee() view returns (uint256)'] as const
-// NTT 单个 Wormhole Transceiver 的标准空指令编码（计数 1 + index 0 + 长度 0）
-export const NTT_SINGLE_TRANSCEIVER_INSTRUCTIONS = '0x010000'
+
+/**
+ * NTT 单 Transceiver 指令编码（第 63 轮桥-4：手写常量 → 官方 Wormhole SDK 的
+ * layout 编码器 Ntt.encodeTransceiverInstructions）。语义与迁移前一致：一条
+ * index=0、空 payload 的指令（计数 1 + index 0 + 长度 0 = 0x010000），编码
+ * 结果与旧常量逐字节一致，由单元测试钉住。用的是 SDK 家族的定义子包
+ * @wormhole-foundation/sdk-definitions-ntt（元包 @wormhole-foundation/sdk 的
+ * 同源依赖），避免为一个编码函数引入全链元包。
+ */
+export function buildNttSingleTransceiverInstructions(): string {
+  const bytes = Ntt.encodeTransceiverInstructions([{ index: 0, payload: new Uint8Array(0) }])
+  // 手动转 hex：SDK 返回的 Uint8Array 可能来自 Node realm，ethers hexlify 在
+  // 浏览器/jsdom 跨 realm 时会拒收，逐字节拼接无此问题。
+  return '0x' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
 
 // LayerZero EID（Endpoint ID）映射
 export const LAYERZERO_EIDS: Record<number, number> = {
@@ -144,7 +206,7 @@ export function buildCcipMessage(sourceChain: ChainConfig, account: string, amou
     receiver: AbiCoder.defaultAbiCoder().encode(['address'], [account]),
     data: '0x',
     tokenAmounts: [{ token: sourceChain.contracts.wrappedToken!, amount: amountWei }],
-    extraArgs: CCIP_EXTRA_ARGS_V3_BASIC,
+    extraArgs: buildCcipExtraArgs(),
     feeToken: ZeroAddress,
   }
 }
@@ -164,7 +226,7 @@ export async function quoteMessageBridgeFee(
   const { sourceChain, targetChain, account } = ctx
   if (channel === 'layerzero') {
     const bridge = new Contract(resolveBridgeAddress(sourceChain, ctx.bridgeAddress), CROSS_CHAIN_BRIDGE_ABI, provider)
-    const [nativeFee] = await bridge.quoteBridgeFee(tokenAddress, amountWei, LAYERZERO_EIDS[targetChain.chainId], account, '0x')
+    const [nativeFee] = await bridge.quoteBridgeFee(tokenAddress, amountWei, LAYERZERO_EIDS[targetChain.chainId], account, LAYERZERO_OPTIONS_EMPTY)
     return nativeFee as bigint
   }
   if (channel === 'ccip') {
@@ -248,8 +310,8 @@ export async function executeMessageBridge(
     const bridge = new Contract(bridgeAddress, CROSS_CHAIN_BRIDGE_ABI, signer)
     const dstEid = LAYERZERO_EIDS[targetChain.chainId]
     if (!dstEid) throw new Error(`目标链 ${targetChain.chainId} 暂不支持跨链（无 LayerZero EID 配置）`)
-    const [nativeFee] = await bridge.quoteBridgeFee(tokenAddress, amountWei, dstEid, account, '0x')
-    const tx = await bridge.bridgeToken(tokenAddress, amountWei, dstEid, '0x', { value: nativeFee })
+    const [nativeFee] = await bridge.quoteBridgeFee(tokenAddress, amountWei, dstEid, account, LAYERZERO_OPTIONS_EMPTY)
+    const tx = await bridge.bridgeToken(tokenAddress, amountWei, dstEid, LAYERZERO_OPTIONS_EMPTY, { value: nativeFee })
     await hooks?.onSendTxHash?.(tx.hash)
     const receipt = await tx.wait()
     if (!receipt || receipt.status !== 1) throw new Error('跨链交易未成功')
@@ -310,7 +372,7 @@ export async function executeMessageBridge(
     recipient,
     recipient,
     false,
-    NTT_SINGLE_TRANSCEIVER_INSTRUCTIONS,
+    buildNttSingleTransceiverInstructions(),
     { value: fee }
   )
   await hooks?.onSendTxHash?.(tx.hash)
