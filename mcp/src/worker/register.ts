@@ -55,11 +55,12 @@ function jsonError(status: number, code: string, message: string): Response {
 }
 
 function clientIp(request: Request): string {
-  const cf = request.headers.get('cf-connecting-ip')
-  if (cf) return cf
-  const xff = request.headers.get('x-forwarded-for')
-  if (xff) return xff.split(',')[0].trim()
-  return 'unknown'
+  // 只信 Cloudflare 边缘写的 cf-connecting-ip（第 59 轮审查修复批
+  // P2/P3）：缺失时（如未经 CF 边缘的请求）一律归入共享 'unknown'
+  // 桶——绝不回退 x-forwarded-for：XFF 是请求方任意可写的头，拿它
+  // 分桶等于每次换一个 XFF 就绕开 per-IP 注册限额。生产流量恒经
+  // CF 边缘、恒有 cf-connecting-ip，此分支只影响异常直达流量。
+  return request.headers.get('cf-connecting-ip') ?? 'unknown'
 }
 
 interface RegisterBody {
@@ -286,7 +287,11 @@ cancel. Failed attempts are not free; do not spam retries.
 Common guard errors: \`over_per_order_cap\`, \`over_daily_cap\`, \`rate_limited\`,
 \`kill_switch_on\` (global stop — writes are paused for everyone, reads still
 work), \`agent_disabled\`, \`guard_unavailable\` (storage down — the call did not
-execute; do not assume it went through), \`relay_rejected\`.
+execute; do not assume it went through), \`relay_rejected\`,
+\`delivery_ambiguous\` (the order's delivery response was lost and the
+follow-up reconciliation check also failed — the order may already be in the
+book and your daily quota reservation was NOT refunded; check \`list_orders\`
+for the digest before deciding whether to place the order again).
 
 ## 5. Trading notes
 

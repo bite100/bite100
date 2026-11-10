@@ -100,3 +100,59 @@ export async function buildAndSign(
   }
   return { data, signature, digest, body, notionalQuote: Number(price) * Number(amount) }
 }
+
+/**
+ * 投递 + 结果不确定时先对账（第 59 轮审查修复批 P1；place/match 共用）。
+ *
+ * 中继 postOrder 只在 fetch 本身抛错（网络断/超时/响应丢失）时抛错——
+ * 这是「结果不确定」：请求可能已被中继处理入库、只是响应没回来。
+ * 旧实现把抛错一律当投递失败并 release 每日预留，于是簿上活单零成本
+ * （预留被退、订单照样能成交）。修法按结果确定性分三路：
+ *  (a) 明确 HTTP 非 200：中继明确未接受 → release 后抛 relay_rejected；
+ *  (b) 抛错：先按 digest 向中继对账（骑既有读面 listOrders 按本人
+ *      地址查、摘要逐字比对——digest 在签名后即已知）：
+ *      - 查到 = 已入库：不 release（预留转为正式记账），返回
+ *        { reconciled: true }，调用方按已接受继续；
+ *      - 确认未入库：release 后原样抛投递错误；
+ *  (c) 对账本身失败：fail-closed——不 release（宁可占住预留也不放行
+ *      零成本活单），抛 delivery_ambiguous 让调用方明确知道本单状态
+ *      未定、预留未退，应先查 list_orders 再决定是否重下。
+ * 构造/签名阶段的失败不经本函数（中继从未被接触），由调用方直接
+ * release，口径不变。
+ */
+export async function deliverOrder(
+  ctx: ToolContext,
+  built: BuiltOrder,
+  release: () => void | Promise<void>,
+): Promise<{ reconciled: boolean }> {
+  let res: { status: number; text: string }
+  try {
+    res = await ctx.relay.postOrder(built.body)
+  } catch (postErr) {
+    let found: boolean
+    try {
+      const mine = await ctx.relay.listOrders({
+        chainId: Number(built.body.chainId),
+        pair: String(built.body.pair),
+        userAddress: String(built.body.trader),
+        limit: 200,
+      })
+      found = mine.some((o) => o.digest.toLowerCase() === built.digest.toLowerCase())
+    } catch {
+      throw new ToolError(
+        'delivery_ambiguous',
+        `订单投递结果不确定且向中继对账失败（摘要 ${built.digest}）：中继可能已入库本单，每日额度预留未退还。请先用 list_orders 核对该摘要是否在簿，确认不在簿前不要重下同单。`,
+      )
+    }
+    if (!found) {
+      await release()
+      throw postErr
+    }
+    return { reconciled: true }
+  }
+  if (res.status !== 200) {
+    await release()
+    throw new ToolError('relay_rejected', `中继拒单 HTTP ${res.status}: ${res.text}`)
+  }
+  return { reconciled: false }
+}
