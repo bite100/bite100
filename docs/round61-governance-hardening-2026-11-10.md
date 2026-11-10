@@ -4,8 +4,8 @@
 > 采纳项（治理 A/B/C 分层、ContributorReward 加固六项）+ 逐模块对照报告模块 9 与
 > F2 验收细化。三条规矩照旧：不重复造轮子、只做集成、先查一手资料。
 >
-> 本轮状态：**分支 `round61-governance-hardening` 本地完成，未合并、未推送、未部署**
-> （基线 main 673e349）。部署另行一步，须 Ren 拍板（理由见 §1）。
+> 本轮状态：**已合并推送（main 58accb6）；新 Governance/ContributorReward 已双链
+> 部署并完成接线切换，见 §1.1 部署附记**（代码基线 main 673e349）。
 
 ## 1. 部署状态核查（开工前链上实测，2026-11-10）
 
@@ -28,6 +28,36 @@
   权限、CR 未注资）。重新部署/换址接线是独立一步——须与前端同轮切换（前端 ABI
   已按新合约改，**不得把新前端单独部署到旧 Governance 上**），等 Ren 拍板后另行
   执行并做部署后复核。本轮分支不含任何部署动作。
+
+### 1.1 部署附记（2026-11-10，合并推送后执行，Ren 全权放行口径内）
+
+新代码（main 58accb6）已双链部署并完成接线切换，旧实例原样保留作回滚。
+
+**接线安全前置核查**：Settlement 对 `governance` 是纯地址存储——结算热路径
+不调用 governance，该地址仅作 `onlyOwnerOrGovernance` 的管理权限身份
+（setFeeBps/setFeeDistributor 等），`setGovernance` 为 onlyOwner；新
+Governance 的快照注册表模型只收紧不放宽该权限的取得路径，故换址不改变
+结算行为。ContributorReward 同理：`governance` 仅作 `onlyGovernance`
+身份校验（setReserveBps/setFreeFlowBps/setReputation*），不回调。
+
+| 项 | Sepolia | Base Sepolia |
+|---|---|---|
+| 新 Governance | `0x1A25a086053703b41fec1Fa170A9BE3975afeCce`（部署 tx `0xe2964b18ee29a0dd8b0298460c02997280088b9fa5b0cebaecf0b5a623edee86`） | `0xc3b0ca3128ABAD6721d6C7F07D3129367d521e32`（部署 tx `0xe3b801c237cf3f299c685efd47e5eaeec6090297f475758d5e819664cada2a44`） |
+| 新 ContributorReward | `0x10226fD9C696CBef3255E11d22edcA2d8ca03967`（部署 tx `0x0bf45a14e49a052943fd94efc07a45f5c271a7a54907ba02cfed1dfdfee5a425`） | `0x154C9e023597aE973b35568FCEFf0AEbd3532358`（部署 tx `0x38b271dbd3c86885b06e34ae13527c819933e33b59d7a615ad9bb5734083d78d`） |
+| CR.setGovernance(新 Gov) | tx `0xa4a4b70ac60429e144c4ca6a3bded2ceb936a5561aaa77525e1b925eee1213af` ✓ | tx `0xae78c7586e4c68b3b908e4fb2da0abebf0a5736888dbac456849d6f3a769fe2a` ✓ |
+| Settlement.setGovernance(新 Gov) | tx `0x33049bffed17e20d099af0e1dca568a3236645645b47fdd59b36bfea73988edf` ✓ | tx `0x6f3853c13fd17bc3b8615ca6122048fa57d2cdee873a4f37dc3178457f62613c` ✓ |
+
+- 配置同构：旧实例链上实测全部为代码默认值（owner=部署者、timelockDelay
+  172800、reserveBps 1500、freeFlowBps 1000、reputationThreshold 0、
+  信誉加权关），两合约构造器均无参，新实例部署即同构，无需迁移设置。
+- 部署后复核（双链逐项回读）：新 Gov owner=部署者、snapshotCount=0、
+  timelockDelay=172800；新 CR owner=部署者、governance=新 Gov、
+  reserveBps/freeFlowBps=1500/1000；Settlement.governance()=新 Gov；
+  `publishSnapshot` 以 owner 身份 eth_call 模拟（哑根+人数 1）返回编号 0
+  且未落链（snapshotCount 仍 0）——函数存在且校验路径可达；未真发布任何
+  快照（快照内容属后续管理员决定）。旧 Gov/CR 未做任何写操作。
+- 前端 `frontend/src/config/chains.ts` 双链 governance/contributorReward
+  地址已同步切换（与本附记同提交）。
 
 ## 2. 设计
 
